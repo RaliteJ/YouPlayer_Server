@@ -1,5 +1,4 @@
 # YouPlayer_Server
-first commit
 
 ## Installation
 
