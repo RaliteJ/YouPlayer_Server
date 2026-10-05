@@ -203,6 +203,8 @@ de l'image frontend ; aucune installation n'est proposee par defaut.
 
 ### Exploitation et mises a jour
 
+Les releases officielles sont publiees sur
+[RaliteJ/YouPlayer_Server](https://github.com/RaliteJ/YouPlayer_Server/releases).
 Voir [PRODUCTION.md](PRODUCTION.md) et [UPDATES.md](UPDATES.md). Ne jamais partager
 `.env`, `.updates/`, les sauvegardes, journaux, medias ou donnees des utilisateurs.
 La copie publique doit conserver seulement des exemples descriptifs sans valeurs personnelles.

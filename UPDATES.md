@@ -7,6 +7,8 @@ Ed25519 et SHA-256, sauvegarde les donnees et remplace backend/frontend. Il gard
 les volumes et tente un retour arriere si la verification de sante echoue.
 L'installation est explicite et interrompt temporairement la lecture.
 
+Le depot officiel des releases est [RaliteJ/YouPlayer_Server](https://github.com/RaliteJ/YouPlayer_Server/releases).
+
 ## Preparation volontaire
 
 Utiliser le compte Podman de l'installation, sans sudo. Node >=22.12, Podman
@@ -14,14 +16,15 @@ Compose et flock sont requis. Le backend ne recoit pas de socket Podman.
 
 ```bash
 node scripts/update-service.mjs init
-node scripts/prepare-update.mjs keygen
-node scripts/update-service.mjs configure --repository https://github.com/example/server \
+node scripts/update-service.mjs configure --repository https://github.com/RaliteJ/YouPlayer_Server \
   --public-key .updates/publisher/public-key.pem
 ```
 
-Remplacer l'URL d'exemple par le depot voulu et utiliser la cle publique du
-signataire des releases. Pour GitLab ajouter `--gitlab`. Ne pas regenerer une cle
-existante. `.updates/` contient les cles, configuration, archives et transactions
+Installer la cle publique Ed25519 fournie par le signataire des releases dans
+`.updates/publisher/public-key.pem`, puis executer la commande de configuration.
+Ne pas generer une nouvelle paire sur chaque installation : une cle differente
+ne pourra pas verifier les releases officielles. Pour un autre depot GitLab,
+modifier l'URL et ajouter `--gitlab`. `.updates/` contient les cles, configuration, archives et transactions
 privees : ne jamais publier ce dossier. `--from-git` selectionne explicitement
 l'origine du nouveau depot ; il ne conserve pas l'origine d'un autre projet.
 
@@ -37,6 +40,12 @@ fourni. Une configuration locale seule ne publie pas de release et ne prouve pas
 le fonctionnement d'une mise a jour distante.
 
 ## Publication volontaire d'une release
+
+Pour le mainteneur uniquement : generer une paire Ed25519 avec
+`node scripts/prepare-update.mjs keygen` si aucune cle de signature n'existe encore.
+Conserver cette meme cle pour les releases suivantes ; partager uniquement la
+cle publique avec les installations. La cle privee sert au secret Actions
+`YOUPLAYER_RELEASE_SIGNING_KEY` du depot `RaliteJ/YouPlayer_Server`.
 
 ```bash
 node scripts/build-update-release.mjs v1.0.0 .updates/publisher/private-key.pem
