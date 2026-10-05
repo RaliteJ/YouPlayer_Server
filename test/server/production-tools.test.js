@@ -18,7 +18,11 @@ test('source releases exclude updater signing keys and private configuration eve
 		await execute('git', ['add', '.'], { cwd: root });
 		await execute('git', ['-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.test', '-c', 'core.hooksPath=/dev/null',
 			'-c', 'commit.gpgsign=false', 'commit', '-qm', 'Synthetic'], { cwd: root });
-		const result = await createRelease({ root, label: 'synthetic' });
+		for (const label of ['../escape', '.', '..', 'v1/escape', 'v1\\escape']) {
+			await assert.rejects(createRelease({ root, label }), /Nom de release invalide/);
+		}
+		const result = await createRelease({ root, label: 'v1.0.2' });
+		assert.equal(path.basename(result.directory), 'v1.0.2');
 		const manifest = JSON.parse(await readFile(path.join(result.directory, 'manifest.json'), 'utf8'));
 		assert.ok(manifest.files['app.js']);
 		assert.equal(Object.keys(manifest.files).some(file => file.startsWith('.updates/')), false);

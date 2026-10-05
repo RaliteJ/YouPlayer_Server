@@ -217,7 +217,7 @@ export async function monitor({ root = ROOT, project = 'youplayer-server', maxBa
 }
 
 export async function createRelease({ root = ROOT, label = stamp() } = {}) {
-	safeName(label);
+	if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(label)) throw new Error('Nom de release invalide');
 	const output = path.join(root, 'releases', label);
 	await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
 	await fs.mkdir(output, { mode: 0o700 });
