@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#181818">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="YouPlayer">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <title>YouPlayer - Lecteur Audio</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="style.css?v=20261005-admin-tabs">
+</head>
+<body class="auth-required">
+<div id="auth-screen" class="auth-screen">
+  <form id="login-form" class="auth-panel">
+    <h1>YouPlayer</h1>
+    <p>Connectez-vous pour acceder a vos playlists.</p>
+    <label>
+      Pseudo
+      <input type="text" id="login-pseudo" autocomplete="username" required>
+    </label>
+    <label>
+      Mot de passe
+      <input type="password" id="login-password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="btn-primary">Connexion</button>
+    <p id="login-error" class="error-msg" style="display:none"></p>
+  </form>
+</div>
+<div id="app-notice" class="app-notice" role="status" aria-live="polite" hidden></div>
+<div class="sidebar">
+    <div class="logo">YouPlayer</div>
+    <div class="session-box">
+      <span id="session-user">Non connecte</span>
+      <button type="button" id="logout-button" class="btn-small">Sortir</button>
+    </div>
+
+    <nav class="menu">
+      <a href="#" data-view="accueil" class="nav-link active">Accueil</a>
+      <a href="#" data-view="playlist" class="nav-link">Playlist</a>
+      <a href="#" data-view="parametres" class="nav-link">Paramètres</a>
+      <a href="#" data-view="admin" class="nav-link nav-admin" hidden>Admin</a>
+      </nav>
+
+    <div class="actions-add">
+      <a href="#" data-view="add_youtube" class="nav-link btn-add" aria-label="Ajouter une musique YouTube">+ YouTube</a>
+      <a href="#" data-view="add_spotify" class="nav-link btn-add" aria-label="Ajouter une musique Spotify">+ Spotify</a>
+      <a href="#" data-view="add_local" class="nav-link btn-add" aria-label="Ajouter une musique locale">+ Local</a>
+    </div>
+  </div>
+
+  <main class="main">
+    <div class="views-container">
+      <section id="view-accueil" class="view active">
+        <h1>Mes Playlists</h1>
+        <div class="library-toolbar">
+          <label>Rechercher une playlist<input id="library-search" type="search" placeholder="Nom de playlist…" autocomplete="off"></label>
+          <label>Trier<select id="library-sort"><option value="name">Nom</option><option value="recent">Dernières sélections</option><option value="count">Nombre de titres</option></select></label>
+          <button id="library-rediscover" type="button" class="btn-small">Surprends-moi</button>
+        </div>
+        <p class="muted library-hint">Épingle tes playlists pour les retrouver en tête. « Surprends-moi » pioche dans ta bibliothèque.</p>
+        <section id="library-recent-section" class="library-recent" aria-label="Dernières sélections" hidden>
+          <div class="library-section-heading"><h2>Dernières sélections</h2><button id="library-clear-recent" type="button" class="btn-small">Effacer l’historique</button></div>
+          <div id="library-recent-list" class="library-recent-list"></div>
+        </section>
+        <div class="playlist-browser">
+          <form id="playlist-selection-form">
+            <label class="playlist-shuffle-choice">
+              <input type="checkbox" id="shuffle-mode">
+              <span>
+                <strong>Lecture aléatoire</strong>
+                <small>Mélanger les titres des playlists choisies</small>
+              </span>
+            </label>
+            <div id="playlists-container">Chargement...</div>
+            <div class="playlist-submit-row">
+              <button type="submit" class="btn-primary">Définir comme playlist active</button>
+              <p id="selection-message" class="success-msg" style="display:none">Playlist mise à jour !</p>
+            </div>
+          </form>
+          <aside class="playlist-preview-panel" aria-live="polite">
+            <div class="playlist-preview-header">
+              <h2 id="playlist-preview-title">Aperçu</h2>
+              <span id="playlist-preview-count">Aucune playlist ouverte</span>
+            </div>
+            <ul id="playlist-preview-list" class="playlist-preview-list">
+              <li class="playlist-preview-empty">Aucune musique à afficher</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-playlist" class="view">
+        <h1>Lecteur Audio</h1>
+        <div class="playlist-view-layout">
+          <div class="playlist-column">
+            <div class="search-filter-container">
+              <input type="text" id="playlist-search" placeholder="Rechercher dans cette playlist...">
+            </div>
+            <ul id="playlist-list"></ul>
+          </div>
+          <aside class="queue-panel" aria-label="Prochaines musiques">
+            <div class="queue-panel-header">
+              <h2>À suivre</h2>
+              <span id="upcoming-count">0 titre</span>
+            </div>
+            <ol id="upcoming-list" class="upcoming-list">
+              <li class="queue-empty">Aucune musique à suivre</li>
+            </ol>
+          </aside>
+        </div>
+      </section>
+
+      <section id="view-add_spotify" class="view">
+        <h1>Spotify</h1>
+        <div id="spotify-explorer" class="spotify-explorer">
+          <div class="spotify-topbar">
+            <form class="spotify-search-form" data-spotify-search-form>
+              <input data-spotify-search-input type="search" placeholder="Artiste, titre, album ou playlist" autocomplete="off">
+              <button type="submit" class="btn-primary">Rechercher</button>
+            </form>
+            <button type="button" class="btn-primary" data-spotify-import-current disabled>Importer</button>
+          </div>
+
+          <div class="spotify-layout">
+            <aside class="spotify-sidebar-panel">
+              <form class="spotify-quick-form" data-spotify-playlist-open-form>
+                <label for="spotify-playlist-url">Playlist</label>
+                <input id="spotify-playlist-url" data-spotify-playlist-url type="text" placeholder="Lien ou ID Spotify">
+                <button type="submit" class="btn-small">Ouvrir</button>
+              </form>
+              <div class="spotify-import-target">
+                <label for="spotify-target-playlist">Importer vers</label>
+                <select id="spotify-target-playlist" data-spotify-target-playlist>
+                  <option value="">Nouvelle playlist</option>
+                </select>
+              </div>
+              <button type="button" class="btn-small" data-spotify-me hidden>Mes playlists Spotify</button>
+              <button type="button" class="btn-small" data-spotify-library>Bibliothèque locale</button>
+            </aside>
+
+            <section class="spotify-content-panel">
+              <div class="spotify-status" data-spotify-status>Recherche une musique, un album, un artiste ou une playlist Spotify.</div>
+              <div class="spotify-results" data-spotify-results></div>
+            </section>
+
+            <aside class="spotify-detail-panel" data-spotify-detail>
+              <div class="spotify-detail-empty">Aucune sélection</div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-add_youtube" class="view">
+        <h2>Recherche YouTube</h2>
+        <div class="search-box">
+          <input type="text" id="query_yt" placeholder="Artiste, titre...">
+          <button id="btn-search-yt">Rechercher</button>
+        </div>
+        <div id="results-yt" class="results-grid"></div>
+      </section>
+
+      <section id="view-add_local" class="view">
+        <h2>Ajouter une Musique Locale</h2>
+        <p>Sélectionnez un fichier audio depuis votre appareil.</p>
+
+        <div class="search-box">
+          <input type="file" id="fileInput" class="file-input" accept="audio/*,.m4a,.mp3,.wav,.ogg,.oga,.flac,.aac,.webm">
+        </div>
+      </section>
+
+      <section id="view-parametres" class="view">
+        <h1>Paramètres</h1>
+        <div class="settings-list">
+          <div class="setting-row" id="crossfade-setting">
+            <label for="crossfade-duration">Fondu enchaîné</label>
+            <input type="range" id="crossfade-duration" min="0" max="10" step="1" value="3">
+            <output id="crossfade-duration-value" for="crossfade-duration">3 s</output>
+          </div>
+          <label class="setting-row">
+            <input type="checkbox" id="rich-playlist-display">
+            <span>Afficher les pochettes, artistes et albums</span>
+          </label>
+          <label class="setting-row">
+            <input type="checkbox" id="controlled-playback" aria-describedby="controlled-playback-help">
+            <span>lecture controlé</span>
+          </label>
+          <p class="muted" id="controlled-playback-help">En choisissant un titre, continuer dans l'ordre de sa playlist puis revenir aux titres précédents, sans remettre le morceau en cours dans la file.</p>
+          <form id="password-change-form" class="settings-panel">
+            <h2>Mot de passe</h2>
+            <label>
+              Mot de passe actuel
+              <input type="password" name="currentPassword" autocomplete="current-password" required>
+            </label>
+            <label>
+              Nouveau mot de passe
+              <input type="password" name="newPassword" autocomplete="new-password" minlength="8" required>
+            </label>
+            <label>
+              Confirmer le nouveau mot de passe
+              <input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required>
+            </label>
+            <button type="submit" class="btn-primary">Modifier le mot de passe</button>
+            <p id="password-change-message" class="settings-message" hidden></p>
+          </form>
+          <section class="settings-panel spotify-connect-panel" id="spotify-settings-panel" data-spotify-browser-panel>
+            <div class="spotify-connect-main">
+              <span class="spotify-connect-kicker">Compte Spotify personnel</span>
+              <h2 data-spotify-browser-title>Verification de l'extension</h2>
+              <p data-spotify-browser-copy>La connexion passe par le WebPlayer. Le bearer Spotify reste dans l'extension et n'est pas envoye au serveur.</p>
+              <p class="muted">Installe une extension compatible avec le pont YouPlayer, reste sur cette page puis utilise « Associer cet onglet YouPlayer » dans son popup. Seul cet hote sera autorise.</p>
+            </div>
+            <div class="spotify-connect-state">
+              <span data-spotify-browser-status class="spotify-connect-status">Verification...</span>
+              <span class="muted">Extension facultative à installer séparément.</span>
+              <button type="button" data-spotify-browser-open class="btn-primary">Ouvrir Spotify</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="view-admin" class="view">
+        <h1>Admin</h1>
+        <div class="admin-tabs" role="tablist" aria-label="Gestion du serveur">
+          <button id="admin-tab-integrations" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-integrations" aria-selected="true" tabindex="0">Intégrations</button>
+          <button id="admin-tab-accounts" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-accounts" aria-selected="false" tabindex="-1">Comptes</button>
+          <button id="admin-tab-history" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-history" aria-selected="false" tabindex="-1">Historique</button>
+          <button id="admin-tab-updates" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-updates" aria-selected="false" tabindex="-1">Mises à jour</button>
+        </div>
+        <div id="admin-pane-integrations" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-integrations" tabindex="0">
+          <section class="admin-panel" aria-labelledby="admin-integrations-title">
+            <h2 id="admin-integrations-title">Connexions aux services</h2>
+            <div class="integration-row"><span>API YouTube</span><strong id="admin-youtube-status" class="integration-status">Chargement…</strong></div>
+            <div class="integration-row"><span>Catalogue public Spotify</span><strong id="admin-spotify-status" class="integration-status">Chargement…</strong></div>
+            <div class="integration-row"><span>OAuth Spotify</span><strong id="admin-spotify-oauth-status" class="integration-status">Chargement…</strong></div>
+            <p id="admin-integrations-last-check" class="muted" aria-live="polite">Aucune vérification effectuée.</p>
+            <button id="admin-integrations-check" type="button" class="btn-small">Vérifier les connexions</button>
+            <p class="muted">Les contrôles sont lancés uniquement avec ce bouton et utilisent un peu de quota YouTube. OAuth vérifie les identifiants de l’application, pas une connexion personnelle.</p>
+          </section>
+        </div>
+        <div id="admin-pane-accounts" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-accounts" tabindex="0" hidden>
+          <form id="admin-create-user" class="admin-panel">
+            <h2>Utilisateur</h2>
+            <input type="text" name="pseudo" placeholder="pseudo" autocomplete="username" required>
+            <input type="password" name="password" placeholder="mot de passe" minlength="8" required>
+            <select name="role">
+              <option value="user">user</option>
+              <option value="admin">admin</option>
+            </select>
+            <button type="submit" class="btn-primary">Créer</button>
+          </form>
+          <div class="admin-panel">
+            <h2>Comptes</h2>
+            <div id="admin-users">Chargement...</div>
+          </div>
+        </div>
+        <div id="admin-pane-history" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-history" tabindex="0" hidden>
+          <div class="admin-panel">
+            <h2>Connexions</h2>
+            <div id="admin-login-events">Chargement...</div>
+          </div>
+          <div class="admin-panel">
+            <h2>Actions</h2>
+            <div id="admin-audit-logs">Chargement...</div>
+          </div>
+        </div>
+        <div id="admin-pane-updates" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-updates" tabindex="0" hidden>
+          <section class="admin-panel" aria-labelledby="admin-update-title">
+            <h2 id="admin-update-title">Mises à jour</h2>
+            <p id="admin-update-versions" class="muted"></p>
+            <p id="admin-update-status" role="status" aria-live="polite">Vérification du service…</p>
+            <p class="muted">L’installation sauvegarde les données et redémarre l’application. La lecture sera interrompue, puis cette page se rechargera.</p>
+            <div class="admin-update-actions">
+              <button id="admin-update-check" type="button" class="btn-small" disabled>Vérifier les mises à jour</button>
+              <button id="admin-update-install" type="button" class="btn-primary" disabled>Installer et redémarrer</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <footer class="player-controls" aria-label="Lecture en cours">
+      <div id="miniPlayerProgress" class="mini-player-progress" role="progressbar" aria-label="Progression du morceau" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <span></span>
+      </div>
+      <button id="miniPlayerOpen" class="current-track" type="button" aria-label="Ouvrir le lecteur">
+        <div id="player-artwork" class="player-artwork player-artwork-placeholder" aria-hidden="true">
+          <span>♫</span>
+        </div>
+        <span class="player-track-copy">
+          <strong id="actual_song">Aucun titre en lecture</strong>
+          <span id="actual_artist">Artiste inconnu</span>
+        </span>
+      </button>
+      <button id="miniPlayPause" class="mini-play-pause" type="button" aria-label="Lecture">
+        <span aria-hidden="true">▶</span>
+      </button>
+      <audio id="lecteur" class="audio-engine" preload="auto"></audio>
+    </footer>
+
+    <section id="now-playing-overlay" class="now-playing-overlay" aria-label="Lecteur en cours" aria-hidden="true" hidden>
+      <div class="now-playing-shell">
+        <header class="now-playing-header">
+          <button id="nowPlayingClose" class="player-icon-button player-close-button" type="button" aria-label="Réduire le lecteur">
+            <span aria-hidden="true">⌄</span>
+          </button>
+          <div>
+            <span>Lecture en cours</span>
+            <strong id="overlay-context">YouPlayer</strong>
+          </div>
+          <span class="now-playing-header-spacer" aria-hidden="true"></span>
+        </header>
+
+        <div id="overlay-artwork" class="now-playing-artwork player-artwork-placeholder" aria-hidden="true">
+          <span>♫</span>
+        </div>
+
+        <div class="now-playing-copy">
+          <strong id="overlay-title">Aucun titre en lecture</strong>
+          <span id="overlay-artist">Artiste inconnu</span>
+        </div>
+
+        <div class="player-progress">
+          <input id="playerSeek" type="range" min="0" max="100" value="0" step="0.1" aria-label="Position de lecture">
+          <div class="player-times" aria-hidden="true">
+            <span id="playerCurrentTime">0:00</span>
+            <span id="playerDuration">0:00</span>
+          </div>
+        </div>
+
+        <div class="now-playing-controls">
+          <button id="prev" class="player-icon-button player-skip-button" type="button" aria-label="Morceau précédent ou retour au début" title="Avant 4 secondes : morceau précédent. Sinon : retour au début.">
+            <span aria-hidden="true">⏮</span>
+          </button>
+          <button id="overlayPlayPause" class="player-main-button" type="button" aria-label="Lecture">
+            <span aria-hidden="true">▶</span>
+          </button>
+          <button id="next" class="player-icon-button player-skip-button" type="button" aria-label="Titre suivant">
+            <span aria-hidden="true">⏭</span>
+          </button>
+        </div>
+
+        <div class="now-playing-actions">
+          <button id="overlayLike" class="player-action-button song-like" type="button" data-like-key="" aria-label="Aimer ce morceau" aria-pressed="false" disabled>♡</button>
+          <button id="overlayShuffle" class="player-action-button" type="button" aria-pressed="false" title="Activer la lecture aléatoire">
+            <span aria-hidden="true">⤨</span>
+            <span>Aléatoire</span>
+          </button>
+          <button id="reloadBtn" class="player-action-button" type="button" aria-pressed="false" title="Activer la répétition du morceau">
+            <span aria-hidden="true">↻</span>
+            <span>Relire</span>
+          </button>
+          <button id="queueToggleBtn" class="player-action-button" type="button" aria-controls="queue-drawer" aria-expanded="false" title="Voir les prochaines musiques">
+            <span aria-hidden="true">☷</span>
+            <span>À suivre</span>
+          </button>
+        </div>
+
+        <div id="sleep-timer-controls" class="sleep-timer-controls">
+          <label for="sleep-timer">Minuterie d’arrêt</label>
+          <select id="sleep-timer"><option value="0">Désactivée</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="90">90 minutes</option></select>
+          <span id="sleep-timer-status" role="status"></span>
+        </div>
+      </div>
+    </section>
+
+    <div id="queue-drawer-overlay" class="queue-drawer-overlay" hidden></div>
+    <aside id="queue-drawer" class="queue-drawer" aria-label="File d'attente" aria-hidden="true" hidden>
+      <div class="queue-drawer-header">
+        <div>
+          <h2>À suivre</h2>
+          <span id="queue-drawer-count">0 titre</span>
+        </div>
+        <button id="queueCloseBtn" class="queue-close" type="button" aria-label="Fermer la file">&times;</button>
+      </div>
+      <ol id="queue-drawer-list" class="upcoming-list">
+        <li class="queue-empty">Aucune musique à suivre</li>
+      </ol>
+    </aside>
+
+    <div id="playlist-modal" class="modal-overlay" style="display: none;">
+    <div class="modal-content">
+      <h3>Enregistrer la musique</h3>
+      <div id="modal-local-metadata" class="modal-section modal-local-metadata" hidden>
+        <label for="modal-local-title">Titre</label>
+        <input id="modal-local-title" type="text" maxlength="200" autocomplete="off">
+        <label for="modal-local-artist">Artiste</label>
+        <input id="modal-local-artist" type="text" maxlength="120" autocomplete="off">
+        <label for="modal-local-artwork">Pochette (PNG, JPEG ou WebP)</label>
+        <input id="modal-local-artwork" type="file" accept="image/png,image/jpeg,image/webp">
+      </div>
+
+      <div class="modal-section">
+        <label>Playlist existante :</label>
+        <select id="modal-playlist-select">
+          <option value="">Chargement...</option>
+        </select>
+        <button id="btn-modal-add-existing" class="btn-add">Ajouter à celle-ci</button>
+      </div>
+
+      <hr style="margin: 15px 0; border: 1px solid #333;">
+
+      <div class="modal-section">
+        <label>Ou créer une nouvelle :</label>
+        <input type="text" id="modal-new-playlist" placeholder="Nom de la playlist...">
+        <button id="btn-modal-create-add" class="btn-add">Créer & Ajouter</button>
+      </div>
+
+      <button id="btn-modal-close" style="margin-top: 20px; background: none; color: white; border: 1px solid #666; padding: 10px; border-radius: 5px; cursor: pointer;">Annuler</button>
+    </div>
+  </div>
+  </main>
+
+  <script src="app.js?v=20261005-admin-tabs" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+FROM docker.io/library/node:24.21.0-alpine@sha256:83f1c388c31fb2e51f7cbd4dea949b96260798c98f206e8e4696bc93bd964e3a
+
+RUN apk add --no-cache \
+    ca-certificates \
+    chromium \
+    ffmpeg \
+    freetype \
+    harfbuzz \
+    nss \
+    ttf-freefont \
+    yt-dlp
+
+RUN if [ ! -x /usr/bin/chromium-browser ] && [ -x /usr/bin/chromium ]; then \
+    ln -s /usr/bin/chromium /usr/bin/chromium-browser; \
+    fi
+
+WORKDIR /var/www/html
+
+ENV NODE_ENV=production
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
+
+COPY server/ ./server/
+COPY client-utils.js ./client-utils.js
+# Playlists are mounted at runtime and must not be embedded in release images.
+
+RUN mkdir -p musiq local_song playlists /var/lib/youplayer \
+    && chown -R node:node /var/www/html /var/lib/youplayer
+
+USER node
+
+EXPOSE 3000
+
+CMD ["npm", "start"]

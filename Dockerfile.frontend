@@ -1,0 +1,25 @@
+FROM docker.io/library/nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
+
+RUN apk add --no-cache openssl \
+    && mkdir -p /etc/nginx/certs \
+    && openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        -keyout /etc/nginx/certs/youplayer.key \
+        -out /etc/nginx/certs/youplayer.crt \
+        -subj "/CN=localhost" \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+
+WORKDIR /usr/share/nginx/html
+
+COPY src/index.html src/app.js src/audio-crossfade.js src/audio-diagnostics.js src/track-gestures.js src/library-view.js src/playlist-view.js src/discovery-view.js src/player-controller.js src/player-view.js src/account-view.js src/client-utils.js src/android-player.js src/spotify-browser-bridge.js src/spotify-explorer.js src/style.css ./
+COPY src/manifest.webmanifest ./manifest.webmanifest
+COPY src/library-tools.js ./library-tools.js
+COPY src/icons/ ./icons/
+RUN mkdir -p downloads
+COPY src/downloads/ ./downloads/
+RUN mkdir -p spotify_login_sandbox
+COPY src/spotify_login_sandbox/ ./spotify_login_sandbox/
+
+EXPOSE 443

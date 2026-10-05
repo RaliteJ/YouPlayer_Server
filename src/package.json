@@ -1,0 +1,26 @@
+{
+  "name": "youplayer-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "extension:build": "node ../scripts/build-spotify-extension.mjs",
+    "extension:check": "node ../scripts/build-spotify-extension.mjs --check",
+    "test": "node --test ../test/*.test.js ../test/server/*.test.js"
+  },
+  "dependencies": {
+    "connect-redis": "^9.0.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "express-session": "^1.18.2",
+    "multer": "^2.4.0",
+    "pg": "^8.22.0",
+    "puppeteer": "^25.12.0",
+    "redis": "^5.10.0",
+    "ytmusic-api": "^5.3.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

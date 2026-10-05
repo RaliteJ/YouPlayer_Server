@@ -1,0 +1,68 @@
+name: Release YouPlayer
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag Git existant a publier
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: youplayer-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verifier le mecanisme de mise a jour
+        run: node --test --test-isolation=none test/server/update-control.test.js test/server/update-channel.test.js test/server/update-service.test.js test/server/production-tools.test.js test/account-view.test.js test/spotify-explorer.test.js
+      - name: Preparer Podman
+        shell: bash
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+      - name: Construire et signer les images
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_SIGNING_KEY: ${{ secrets.YOUPLAYER_RELEASE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SIGNING_KEY"
+          command -v podman
+          keyfile=$(mktemp)
+          chmod 600 "$keyfile"
+          trap 'rm -f "$keyfile"' EXIT
+          printf '%s' "$RELEASE_SIGNING_KEY" > "$keyfile"
+          node scripts/build-update-release.mjs "$RELEASE_TAG" "$keyfile"
+      - name: Attacher les images a la release GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="releases/$RELEASE_TAG/update-assets/youplayer-images.tar"
+          manifest="releases/$RELEASE_TAG/update-assets/youplayer-update.json"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$archive" "$manifest" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$archive" "$manifest" --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi
