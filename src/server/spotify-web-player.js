@@ -6,6 +6,15 @@ import { logger } from './logger.js';
 
 const SPOTIFY_SANDBOX_PROFILE_DIR = process.env.YOUPLAYER_SPOTIFY_SANDBOX_PROFILE_DIR || "/tmp/youplayer-spotify-web-profile";
 let spotifyWebLoginDisabledUntil = 0;
+const BROWSER_DISABLED_MESSAGE = "Les diagnostics Spotify par navigateur sont desactives sur cette installation.";
+
+function spotifyBrowserEnabled() {
+	return process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED !== 'false';
+}
+
+function requireSpotifyBrowser() {
+	if (!spotifyBrowserEnabled()) throw new Error(BROWSER_DISABLED_MESSAGE);
+}
 
 function spotifyWebCredentials({ force = false } = {}) {
 	if (!force && Date.now() < spotifyWebLoginDisabledUntil) {
@@ -108,6 +117,8 @@ async function loginSpotifyWebPlayer(page, options = {}) {
 
 export function spotifyLoginSandboxStatus() {
 	return {
+		browserEnabled: spotifyBrowserEnabled(),
+		disabledReason: spotifyBrowserEnabled() ? "" : BROWSER_DISABLED_MESSAGE,
 		credentialsConfigured: Boolean(spotifyWebCredentials({ force: true })),
 		headlessLoginPaused: Date.now() < spotifyWebLoginDisabledUntil,
 		displayAvailable: Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
@@ -137,6 +148,7 @@ export async function runSpotifyLoginSandboxProbe({
 	let browser = null;
 
 	try {
+		requireSpotifyBrowser();
 		browser = await puppeteer.launch(browserLaunchOptions({
 			headless: manualVisible ? false : true,
 			persistentProfile
@@ -205,6 +217,7 @@ export async function runSpotifyLoginSandboxProbe({
 }
 
 export async function captureSpotifyPathfinderJson(source, dataKey, timeoutMs = 12000) {
+	requireSpotifyBrowser();
 	const startedAt = Date.now();
 	logger.debug("Capture Spotify Pathfinder demarree", { dataKey, timeoutMs });
 	const browser = await puppeteer.launch(browserLaunchOptions());
