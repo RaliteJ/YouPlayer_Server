@@ -208,3 +208,16 @@ Les releases officielles sont publiees sur
 Voir [PRODUCTION.md](PRODUCTION.md) et [UPDATES.md](UPDATES.md). Ne jamais partager
 `.env`, `.updates/`, les sauvegardes, journaux, medias ou donnees des utilisateurs.
 La copie publique doit conserver seulement des exemples descriptifs sans valeurs personnelles.
+
+## Author & Disclaimer
+
+YouPlayer Server was created and is maintained by [RaliteJ](https://github.com/RaliteJ).
+
+Copyright © 2026 RaliteJ. All rights reserved.
+
+This project is provided “as is”, without warranties of any kind.
+It is not affiliated with, endorsed by, or sponsored by Spotify, YouTube, or Google.
+
+Users are responsible for complying with applicable laws, copyright requirements,
+and the terms of service of any third-party platforms they access.
+This project does not grant permission to download, copy, or distribute copyrighted content.
