@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouPlayer - Sandbox Spotify</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg-main: #121212;
+      --bg-panel: #1b1b1b;
+      --bg-soft: #242424;
+      --text-main: #f2f2f2;
+      --text-muted: #a7a7a7;
+      --accent: #1ed760;
+      --danger: #ff8d8d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: var(--bg-main);
+      color: var(--text-main);
+    }
+    main {
+      width: min(1100px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0;
+      display: grid;
+      gap: 18px;
+    }
+    header, section {
+      background: var(--bg-panel);
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 16px;
+    }
+    h1, h2, p { margin: 0; }
+    header { display: grid; gap: 8px; }
+    p { color: var(--text-muted); line-height: 1.45; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+    }
+    .probe {
+      display: grid;
+      gap: 10px;
+      background: var(--bg-soft);
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 14px;
+    }
+    button {
+      min-height: 40px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #07120a;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.55; cursor: wait; }
+    input {
+      min-height: 40px;
+      border-radius: 8px;
+      border: 1px solid #444;
+      background: #151515;
+      color: var(--text-main);
+      padding: 0 10px;
+    }
+    .status {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 8px;
+    }
+    .pill {
+      background: var(--bg-soft);
+      border-radius: 8px;
+      padding: 10px;
+      color: var(--text-muted);
+    }
+    .pill strong { display: block; color: var(--text-main); margin-top: 4px; }
+    pre {
+      min-height: 180px;
+      overflow: auto;
+      margin: 0;
+      padding: 14px;
+      border-radius: 8px;
+      background: #0b0b0b;
+      border: 1px solid #333;
+      color: #d7fbe1;
+      white-space: pre-wrap;
+    }
+    .error { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Sandbox Spotify WebPlayer</h1>
+      <p>Tests de connexion sans API Spotify Developer. Les tokens ne sont jamais affiches en clair.</p>
+    </header>
+
+    <section>
+      <h2>Etat</h2>
+      <div id="status" class="status"></div>
+    </section>
+
+    <section>
+      <h2>Probes</h2>
+      <p>Source Spotify a ouvrir</p>
+      <input id="source" value="search/daft%20punk" autocomplete="off">
+      <div class="grid">
+        <div class="probe">
+          <h3>Anonyme</h3>
+          <p>Capture un token WebPlayer sans connexion.</p>
+          <button data-mode="anonymous">Tester</button>
+        </div>
+        <div class="probe">
+          <h3>Identifiants headless</h3>
+          <p>Utilise YOUPLAYER_SPOTIFY_WEB_USERNAME/PASSWORD dans Chromium headless.</p>
+          <button data-mode="credentials-headless">Tester</button>
+        </div>
+        <div class="probe">
+          <h3>Profil persistant</h3>
+          <p>Reutilise un profil Chromium dedie si une session Spotify existe deja.</p>
+          <button data-mode="persistent-headless">Tester</button>
+        </div>
+        <div class="probe">
+          <h3>Manuel visible</h3>
+          <p>Tente d'ouvrir Chromium visible pour connexion manuelle. Fonctionne seulement si l'affichage graphique est disponible.</p>
+          <button data-mode="manual-visible">Tester</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Resultat</h2>
+      <pre id="output">Pret.</pre>
+    </section>
+  </main>
+
+  <script>
+    const output = document.getElementById("output");
+    const statusRoot = document.getElementById("status");
+    const sourceInput = document.getElementById("source");
+
+    function print(value) {
+      output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+      output.classList.toggle("error", value && value.ok === false);
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(`/spotify_login_sandbox_api${path}`, {
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        ...options
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw data;
+      return data;
+    }
+
+    function renderStatus(data) {
+      statusRoot.innerHTML = Object.entries(data).map(([key, value]) => `
+        <div class="pill">${key}<strong>${String(value)}</strong></div>
+      `).join("");
+    }
+
+    async function refreshStatus() {
+      try {
+        renderStatus(await api("/status"));
+      } catch (err) {
+        print(err);
+      }
+    }
+
+    document.querySelectorAll("[data-mode]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const mode = button.dataset.mode;
+        document.querySelectorAll("button").forEach((el) => el.disabled = true);
+        print(`Test ${mode} en cours...`);
+        try {
+          print(await api("/probe", {
+            method: "POST",
+            body: JSON.stringify({
+              mode,
+              source: sourceInput.value,
+              timeoutMs: mode === "manual-visible" ? 180000 : 50000
+            })
+          }));
+          await refreshStatus();
+        } catch (err) {
+          print(err);
+        } finally {
+          document.querySelectorAll("button").forEach((el) => el.disabled = false);
+        }
+      });
+    });
+
+    refreshStatus();
+  </script>
+</body>
+</html>

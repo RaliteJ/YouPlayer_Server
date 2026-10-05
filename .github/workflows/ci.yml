@@ -1,0 +1,75 @@
+name: Tests YouPlayer
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youplayer-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests Node et Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      NODE_ENV: test
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    defaults:
+      run:
+        working-directory: src
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+      - name: Configurer le cache temporaire du navigateur
+        run: printf 'PUPPETEER_CACHE_DIR=%s/youplayer-puppeteer\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Installer les dependances Node
+        run: npm ci
+      - name: Installer Chrome et ses dependances systeme
+        run: |
+          sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" ./node_modules/.bin/puppeteer browsers install chrome --install-deps
+          browser_path=$(node --input-type=module -e "import puppeteer from 'puppeteer'; console.log(await puppeteer.executablePath());")
+          test -x "$browser_path"
+          printf 'PUPPETEER_EXECUTABLE_PATH=%s\n' "$browser_path" >> "$GITHUB_ENV"
+      - name: Executer les tests serveur, frontend et navigateur
+        run: npm test
+
+  docker:
+    name: Stack Docker HTTPS
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Generer une configuration temporaire
+        run: node scripts/ci-stack.mjs init "$RUNNER_TEMP/youplayer-ci.env"
+      - name: Construire et demarrer backend, frontend et Redis
+        run: docker compose --env-file "$RUNNER_TEMP/youplayer-ci.env" -p youplayer-ci -f .github/compose.test.yml up --build --wait --wait-timeout 180
+      - name: Verifier HTTPS, connexion admin et session Redis
+        run: node scripts/ci-stack.mjs check "$RUNNER_TEMP/youplayer-ci.env"
+      - name: Nettoyer la stack et ses donnees temporaires
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/youplayer-ci.env" ]; then
+            docker compose --env-file "$RUNNER_TEMP/youplayer-ci.env" -p youplayer-ci -f .github/compose.test.yml down --volumes --remove-orphans
+            rm -f "$RUNNER_TEMP/youplayer-ci.env"
+          fi

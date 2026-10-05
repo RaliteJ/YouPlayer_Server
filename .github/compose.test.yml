@@ -1,0 +1,68 @@
+services:
+  redis:
+    image: docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    networks: [sessions]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  backend:
+    image: localhost/youplayer-ci-backend:latest
+    build:
+      context: ../src
+      dockerfile: ../Dockerfile.backend
+    init: true
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      YOUPLAYER_AUTH_ENABLED: 'true'
+      YOUPLAYER_SEED_TEST_USERS: 'false'
+      YOUPLAYER_STORE: file
+      YOUPLAYER_DATA_FILE: /var/lib/youplayer/store.json
+      YOUPLAYER_REDIS_URL: redis://redis:6379
+      YOUPLAYER_COOKIE_SECURE: 'true'
+      YOUPLAYER_TRUST_PROXY: 'true'
+      YOUPLAYER_REQUIRE_ORIGIN: 'true'
+      YOUPLAYER_ADMIN_PSEUDO: ${YOUPLAYER_ADMIN_PSEUDO:?Compte de test requis}
+      YOUPLAYER_ADMIN_PASSWORD: ${YOUPLAYER_ADMIN_PASSWORD:?Mot de passe temporaire requis}
+      YOUPLAYER_SESSION_SECRET: ${YOUPLAYER_SESSION_SECRET:?Secret temporaire requis}
+      YOUPLAYER_SPOTIFY_TOKEN_SECRET: ${YOUPLAYER_SPOTIFY_TOKEN_SECRET:?Secret temporaire requis}
+      YOUPLAYER_YOUTUBE_API_KEY: ''
+      YOUPLAYER_SPOTIFY_CLIENT_ID: ''
+      YOUPLAYER_SPOTIFY_CLIENT_SECRET: ''
+      YOUPLAYER_SPOTIFY_REDIRECT_URI: ''
+      YOUPLAYER_LOG_LEVEL: error
+    volumes:
+      - test_data:/var/lib/youplayer
+    networks: [private, sessions]
+    healthcheck:
+      test: [CMD, node, server/healthcheck.js]
+      interval: 3s
+      timeout: 5s
+      start_period: 10s
+      retries: 30
+  frontend:
+    image: localhost/youplayer-ci-frontend:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile.frontend
+    ports: ['127.0.0.1:18443:443']
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks: [private]
+    healthcheck:
+      test: [CMD, wget, --no-check-certificate, -q, -O, /dev/null, 'https://127.0.0.1/health/ready']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+networks:
+  private: {}
+  sessions:
+    internal: true
+volumes:
+  test_data: {}

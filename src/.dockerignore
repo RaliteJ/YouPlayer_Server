@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+.local
+node
+node-v*
+node_modules
+musiq
+local_song
+playlists/*
+!playlists/.gitkeep
+spotify/spotify-downloader
+**/.DS_Store
+npm-debug.log

@@ -1,0 +1,110 @@
+x-podman:
+  in_pod: false
+
+services:
+  backend:
+    image: localhost/youplayer-server-backend:latest
+    build:
+      context: ./src
+      dockerfile: ../Dockerfile.backend
+    init: true
+    userns_mode: keep-id:uid=1000,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium-browser
+      YOUPLAYER_AUTH_ENABLED: "true"
+      YOUPLAYER_SEED_TEST_USERS: "false"
+      YOUPLAYER_STORE: file
+      YOUPLAYER_DATA_FILE: /var/lib/youplayer/store.json
+      YOUPLAYER_UPDATE_REQUESTS_DIR: /var/lib/youplayer-updates/requests
+      YOUPLAYER_UPDATE_STATUS_DIR: /var/lib/youplayer-updates/status
+      YOUPLAYER_LOG_LEVEL: ${YOUPLAYER_LOG_LEVEL}
+      DATABASE_URL: ""
+      YOUPLAYER_SESSION_SECRET: ${YOUPLAYER_SESSION_SECRET}
+      YOUPLAYER_SESSION_MAX_AGE_MS:
+      YOUPLAYER_REDIS_URL: redis://redis:6379
+      YOUPLAYER_COOKIE_SECURE: "true"
+      YOUPLAYER_TRUST_PROXY: "true"
+      YOUPLAYER_REQUIRE_ORIGIN: "true"
+      YOUPLAYER_UPLOAD_MAX_BYTES: "52428800"
+      FIRST_TRACK_SPECIAL_STREAM:
+      FIRST_TRACK_SPECIAL_STREAM_NEXT:
+      YOUPLAYER_YOUTUBE_API_KEY: ${YOUPLAYER_YOUTUBE_API_KEY}
+      YOUPLAYER_SPOTIFY_WEB_USERNAME: ${YOUPLAYER_SPOTIFY_WEB_USERNAME}
+      YOUPLAYER_SPOTIFY_WEB_PASSWORD: ${YOUPLAYER_SPOTIFY_WEB_PASSWORD}
+      YOUPLAYER_SPOTIFY_CLIENT_ID: ${YOUPLAYER_SPOTIFY_CLIENT_ID}
+      YOUPLAYER_SPOTIFY_CLIENT_SECRET: ${YOUPLAYER_SPOTIFY_CLIENT_SECRET}
+      YOUPLAYER_SPOTIFY_REDIRECT_URI: ${YOUPLAYER_SPOTIFY_REDIRECT_URI}
+      YOUPLAYER_SPOTIFY_SCOPES: ${YOUPLAYER_SPOTIFY_SCOPES}
+      YOUPLAYER_SPOTIFY_TOKEN_SECRET: ${YOUPLAYER_SPOTIFY_TOKEN_SECRET}
+      YOUPLAYER_SPOTIFY_CONNECTIONS_FILE: /var/lib/youplayer/spotify-connections.json
+      YOUPLAYER_ADMIN_PSEUDO: ${YOUPLAYER_ADMIN_PSEUDO}
+      YOUPLAYER_ADMIN_PASSWORD: ${YOUPLAYER_ADMIN_PASSWORD}
+      YOUPLAYER_MIGRATE_PLAYLISTS_TO_PSEUDO: ""
+    volumes:
+      - ./src/playlists:/var/www/html/playlists:Z
+      - ./src/local_song:/var/www/html/local_song:Z
+      - youplayer_data:/var/lib/youplayer:Z,U
+      - ./.updates/requests:/var/lib/youplayer-updates/requests:Z
+      - ./.updates/status:/var/lib/youplayer-updates/status:ro,Z
+    networks:
+      - private
+      - sessions
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "server/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  redis:
+    image: docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--save", "60", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - redis_data:/data:Z
+    networks:
+      - sessions
+    restart: unless-stopped
+
+  frontend:
+    image: localhost/youplayer-server-frontend:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8443:443"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - private
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://127.0.0.1/health/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+networks:
+  private:
+    driver: bridge
+  sessions:
+    driver: bridge
+    internal: true
+
+volumes:
+  youplayer_data:
+  redis_data:
