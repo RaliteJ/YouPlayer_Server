@@ -22,7 +22,6 @@ jobs:
       CI: 'true'
       NODE_ENV: test
       PUPPETEER_SKIP_DOWNLOAD: 'true'
-      PUPPETEER_CACHE_DIR: ${{ runner.temp }}/youplayer-puppeteer
     defaults:
       run:
         working-directory: src
@@ -36,6 +35,8 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: src/package-lock.json
+      - name: Configurer le cache temporaire du navigateur
+        run: printf 'PUPPETEER_CACHE_DIR=%s/youplayer-puppeteer\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Installer les dependances Node
         run: npm ci
       - name: Installer Chrome et ses dependances systeme
