@@ -42,7 +42,7 @@ jobs:
       - name: Installer Chrome et ses dependances systeme
         run: |
           sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" ./node_modules/.bin/puppeteer browsers install chrome --install-deps
-          browser_path=$(node --input-type=module -e "import puppeteer from 'puppeteer'; console.log(puppeteer.executablePath());")
+          browser_path=$(node --input-type=module -e "import puppeteer from 'puppeteer'; console.log(await puppeteer.executablePath());")
           test -x "$browser_path"
           printf 'PUPPETEER_EXECUTABLE_PATH=%s\n' "$browser_path" >> "$GITHUB_ENV"
       - name: Executer les tests serveur, frontend et navigateur
