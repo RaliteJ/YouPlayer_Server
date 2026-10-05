@@ -56,3 +56,17 @@ du projet `youplayer-server` et des images compatibles de retour arriere taguees
 Le controle ephemere `scripts/verify-production-stack.mjs --public-media`
 contacte Spotify/YouTube avec un fixture public. Ne l'executer que pour un essai
 reseau volontaire ; les tests unitaires utilisent des donnees simulees.
+
+
+## Image sans Chromium
+
+L'image backend de release conserve FFmpeg et yt-dlp mais n'embarque plus Chromium.
+Les fonctions Spotify courantes utilisent HTTP ou le pont du navigateur utilisateur.
+`YOUPLAYER_SPOTIFY_BROWSER_ENABLED=false` desactive explicitement les diagnostics
+sandbox et la capture Pathfinder par navigateur dans cette image ; le statut
+sandbox l'indique et les sondes retournent un message explicite sans lancer de navigateur.
+
+Puppeteer reste installe pour conserver l'outillage existant. Les tests navigateur
+et les diagnostics sur une installation de developpement necessitent leur propre
+Chromium et, si besoin, `PUPPETEER_EXECUTABLE_PATH`. Activer le flag seul n'installe
+aucun navigateur. Aucun navigateur n'est telecharge pendant la construction.

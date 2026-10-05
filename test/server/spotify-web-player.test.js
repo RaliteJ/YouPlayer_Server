@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import {
 	getSpotifyAnonymousToken, clearSpotifyAnonymousToken,
-	captureSpotifyPathfinderJson, runSpotifyLoginSandboxProbe, browserLaunchOptions
+	captureSpotifyPathfinderJson, runSpotifyLoginSandboxProbe, browserLaunchOptions, spotifyLoginSandboxStatus
 } from '../../src/server/spotify.js';
 import { cachedSpotifyAnonymousToken } from '../../src/server/spotify-web-player.js';
 
@@ -21,6 +21,8 @@ after(() => {
 });
 
 async function fakeBrowser(visit, check) {
+	const previous = process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED;
+	process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED = 'true';
 	const launches = [], visits = [];
 	let closed = 0;
 	const page = new EventEmitter();
@@ -34,7 +36,11 @@ async function fakeBrowser(visit, check) {
 	});
 	clearSpotifyAnonymousToken();
 	try { await check({ launches, visits, closed: () => closed }); }
-	finally { launch.mock.restore(); clearSpotifyAnonymousToken(); }
+	finally {
+		launch.mock.restore(); clearSpotifyAnonymousToken();
+		if (previous === undefined) delete process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED;
+		else process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED = previous;
+	}
 }
 
 const emitToken = page => page.emit('request', {
@@ -118,4 +124,26 @@ test('sandbox probe reports a token summary and preserves visible persistent bro
 		assert.equal(launches[0].args, undefined);
 		assert.equal(closed(), 1);
 	});
+});
+
+test('release disables all browser diagnostics before any launch', async () => {
+	const previous = process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED;
+	process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED = 'false';
+	const launch = mock.method(puppeteer, 'launch', () => { throw new Error('Unexpected browser launch'); });
+	try {
+		const status = spotifyLoginSandboxStatus();
+		assert.equal(status.browserEnabled, false);
+		assert.match(status.disabledReason, /diagnostics Spotify.*desactives/);
+		for (const mode of ['anonymous', 'credentials-headless', 'persistent-headless', 'manual-visible']) {
+			const result = await runSpotifyLoginSandboxProbe({ mode });
+			assert.equal(result.ok, false);
+			assert.equal(result.error, status.disabledReason);
+		}
+		await assert.rejects(captureSpotifyPathfinderJson('search', 'playlistV2'), { message: status.disabledReason });
+		assert.equal(launch.mock.callCount(), 0);
+	} finally {
+		launch.mock.restore();
+		if (previous === undefined) delete process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED;
+		else process.env.YOUPLAYER_SPOTIFY_BROWSER_ENABLED = previous;
+	}
 });

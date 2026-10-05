@@ -2,23 +2,14 @@ FROM docker.io/library/node:24.21.0-alpine@sha256:83f1c388c31fb2e51f7cbd4dea949b
 
 RUN apk add --no-cache \
     ca-certificates \
-    chromium \
     ffmpeg \
-    freetype \
-    harfbuzz \
-    nss \
-    ttf-freefont \
     yt-dlp
-
-RUN if [ ! -x /usr/bin/chromium-browser ] && [ -x /usr/bin/chromium ]; then \
-    ln -s /usr/bin/chromium /usr/bin/chromium-browser; \
-    fi
 
 WORKDIR /var/www/html
 
 ENV NODE_ENV=production
 ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV YOUPLAYER_SPOTIFY_BROWSER_ENABLED=false
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
