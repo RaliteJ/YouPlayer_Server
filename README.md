@@ -1,4 +1,4 @@
-\<div align="center"\>
+<div align="center">
 
 # 🎵 YouPlayer
 
@@ -9,7 +9,7 @@ Un lecteur musical personnel pour réunir YouTube, Spotify et vos fichiers audio
 **Auto-hébergé · Interface web · Node.js**
 
 Découvrir (\#a-propos) · Fonctionnalités (\#fonctionnalites) · Prise en main (\#prise-en-main) · Contribuer (\#contribuer)
-\</div\>
+</div>
 
 ***
 
@@ -18,10 +18,13 @@ Découvrir (\#a-propos) · Fonctionnalités (\#fonctionnalites) · Prise en main
 - 👀 À propos (\#a-propos)
 - ✨ Fonctionnalités (\#fonctionnalites)
 - 🚀 Prise en main (\#prise-en-main)
+- 📦 Installation (\#installation)
+- 🔑 Configuration (\#configuration)
+- 🚀 Lancement (\#lancement)
 - 🧩 Organisation du projet (\#organisation)
 - 👷 Contribuer (\#contribuer)
 
-\<a id="a-propos"\>\</a\>
+<a id="a-propos"></a>
 
 ## 👀 À propos
 
@@ -35,7 +38,7 @@ Un morceau trouvé sur YouTube, une référence Spotify, un fichier audio conser
 
 YouPlayer permet de les réunir dans des playlists et de les écouter depuis un même lecteur.
 
-\<a id="fonctionnalites"\>\</a\>
+<a id="fonctionnalites"></a>
 
 ## ✨ Fonctionnalités
 
@@ -49,7 +52,7 @@ YouPlayer permet de les réunir dans des playlists et de les écouter depuis un 
 | 🔀 | **Lecture aléatoire** | Mélange de la sélection pour varier l'ordre des morceaux. |
 | 🌐 | **Interface web** | Navigation entre bibliothèque, lecteur et paramètres depuis le navigateur. |
 
-\<a id="prise-en-main"\>\</a\>
+<a id="prise-en-main"></a>
 
 ## 🚀 Prise en main
 
@@ -62,7 +65,76 @@ Une fois votre instance configurée et démarrée :
 
 Le projet associe un serveur Node.js et une interface HTML, CSS et JavaScript. La configuration du serveur, des chemins de fichiers et de l'adresse API doit correspondre à votre environnement avant le lancement.
 
-\<a id="organisation"\>\</a\>
+
+
+
+<a id="installation"></a>
+
+## 📦 Installation
+
+### ⚙️ Prérequis
+
+- Podman et Podman Compose.
+- OpenSSL pour générer les secrets.
+- Node.js ≥ 22.12 pour exécuter les outils Node hors conteneurs.
+
+Les commandes suivantes s’exécutent à la racine du projet, dans le dossier contenant `docker-compose.yml`.
+
+<a id="configuration"></a>
+
+### 🔑 Configuration
+
+Pour une première installation, créez votre configuration locale sans écraser un fichier existant :
+
+```bash
+test -f .env || cp .env.example .env
+chmod 600 .env
+```
+
+Dans `.env`, configurez au minimum :
+
+```env
+YOUPLAYER_ADMIN_PSEUDO=votre_pseudo
+YOUPLAYER_ADMIN_PASSWORD=votre_mot_de_passe
+YOUPLAYER_SESSION_SECRET=votre_secret_aleatoire
+```
+
+Choisissez un mot de passe administrateur d’au moins **12 caractères**. Générez le secret de session avec :
+
+```bash
+openssl rand -base64 32
+```
+
+Copiez le résultat dans `YOUPLAYER_SESSION_SECRET`. Conservez `.env` hors Git.
+
+<a id="lancement"></a>
+
+### 🚀 Lancement
+
+Construisez et démarrez les services :
+
+```bash
+podman-compose -f docker-compose.yml up -d --build
+```
+
+Ouvrez ensuite :
+
+```text
+https://localhost:8443
+```
+
+Le certificat local peut déclencher un avertissement du navigateur.
+
+### 👤 Première connexion
+
+Connectez-vous avec le compte administrateur défini dans `.env`.
+
+Les comptes **admin** servent à la gestion. Créez un compte **user** depuis Admin pour accéder au lecteur et aux playlists.
+
+Les comptes et playlists sont conservés dans le volume `youplayer_data`, et les sessions dans `redis_data`. Sauvegardez ces volumes avant une mise à jour et évitez les commandes qui les suppriment.
+
+
+<a id="organisation"></a>
 
 ## 🧩 Organisation du projet
 
@@ -75,7 +147,8 @@ Le projet associe un serveur Node.js et une interface HTML, CSS et JavaScript. L
 | `spotify/` | Ressources liées à l'intégration Spotify. |
 | `package.json` | Dépendances Node.js du projet. |
 
-\<a id="contribuer"\>\</a\>
+<a id="contribuer"></a>
+
 
 ## 👷 Contribuer
 
@@ -90,9 +163,6 @@ Pour une modification, décrivez :
 Utilisez des exemples fictifs : les comptes, clés, playlists personnelles et fichiers audio privés doivent rester hors des contributions.
 
 ***
-\<div align="center"\>
+<div align="center">
 
 **YouPlayer — un seul lecteur pour votre musique.**
-
-\<sub\>Présentation inspirée du README de \<a href="https://github.com/AntwortEinesLebens/MALINA"\>MALINA\</a\>.\</sub\>
-\</div\>
