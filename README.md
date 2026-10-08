@@ -15,14 +15,18 @@ Découvrir (\#a-propos) · Fonctionnalités (\#fonctionnalites) · Prise en main
 
 ## 📋 Sommaire
 
-- 👀 À propos (\#a-propos)
-- ✨ Fonctionnalités (\#fonctionnalites)
-- 🚀 Prise en main (\#prise-en-main)
-- 📦 Installation (\#installation)
-- 🔑 Configuration (\#configuration)
-- 🚀 Lancement (\#lancement)
-- 🧩 Organisation du projet (\#organisation)
-- 👷 Contribuer (\#contribuer)
+
+
+- [👀 À propos](#a-propos)
+  - [❓ Pourquoi](#pourquoi)
+- [✨ Fonctionnalités](fonctionnalités)
+- [🚀 Prise en main](#prise-en-main)
+- [📦 Installation](#installation)
+- [🔑 Configuration](#configuration)
+- [🚀 Lancement](#lancement)
+- [🧩 Organisation du projet](#organisation)
+- [👷 Contribuer](#contribuer)
+- [⚠️ Disclaimer](#disclamer)
 
 <a id="a-propos"></a>
 
@@ -31,6 +35,8 @@ Découvrir (\#a-propos) · Fonctionnalités (\#fonctionnalites) · Prise en main
 YouPlayer rassemble la recherche musicale, les playlists et la lecture audio dans une interface pensée pour un usage personnel.
 
 Le serveur gère les sources musicales et la file de lecture. Le navigateur permet de parcourir votre bibliothèque et de piloter le lecteur.
+
+<a id="pourquoi"></a>
 
 ### ❓ Pourquoi YouPlayer ?
 
@@ -166,3 +172,16 @@ Utilisez des exemples fictifs : les comptes, clés, playlists personnelles et fi
 <div align="center">
 
 **YouPlayer — un seul lecteur pour votre musique.**
+
+<a id="disclaimer"></a>
+
+
+## ⚠️ Disclaimer
+
+YouPlayer Server was created and is maintained by RaliteJ.
+
+Copyright © 2026 RaliteJ. All rights reserved.
+
+This project is provided “as is”, without warranties of any kind. It is not affiliated with, endorsed by, or sponsored by Spotify, YouTube, or Google.
+
+Users are responsible for complying with applicable laws, copyright requirements, and the terms of service of any third-party platforms they access. This project does not grant permission to download, copy, or distribute copyrighted content.
