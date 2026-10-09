@@ -24,16 +24,17 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
+          package-manager-cache: false
       - name: Verifier le mecanisme de mise a jour
         run: node --test --test-isolation=none test/server/update-control.test.js test/server/update-channel.test.js test/server/update-service.test.js test/server/production-tools.test.js test/account-view.test.js test/spotify-explorer.test.js
       - name: Preparer Podman
