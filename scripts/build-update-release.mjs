@@ -16,7 +16,7 @@ async function podman(args) {
 
 export async function buildUpdateRelease(version, privateKeyFile) {
 	if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(version)) throw new Error('Tag Git invalide');
-	const release = await createRelease({ label: version });
+	const release = await createRelease({ label: version }).catch(() => { throw new Error('Preparation des sources echouee : verifier le tag, Git et le dossier releases'); });
 	const images = {}, references = [];
 	for (const service of ['backend', 'frontend']) {
 		const reference = `localhost/youplayer-server-${service}:update-build`;
@@ -38,5 +38,11 @@ export async function buildUpdateRelease(version, privateKeyFile) {
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
 	if (process.argv.length !== 4) { console.error('Commande : node scripts/build-update-release.mjs TAG_GIT CLE_PRIVEE'); process.exitCode = 1; }
 	else buildUpdateRelease(process.argv[2], path.resolve(process.argv[3])).then(result => console.log(JSON.stringify(result)))
-		.catch(() => { console.error('Preparation de release echouee ; sortie privee masquee'); process.exitCode = 1; });
+		.catch(error => {
+			const messages = new Set(['Tag Git invalide', 'Nom de release invalide', 'Image construite invalide',
+				'Construction de release echouee ; sortie privee masquee',
+				'Preparation des sources echouee : verifier le tag, Git et le dossier releases']);
+			console.error(messages.has(error.message) ? error.message : 'Preparation de release echouee ; sortie privee masquee');
+			process.exitCode = 1;
+		});
 }
