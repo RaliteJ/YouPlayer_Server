@@ -83,6 +83,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    volumes:
+      - frontend_certs:/etc/nginx/certs:Z
     ports:
       - "8443:443"
     depends_on:
@@ -108,3 +110,4 @@ networks:
 volumes:
   youplayer_data:
   redis_data:
+  frontend_certs:

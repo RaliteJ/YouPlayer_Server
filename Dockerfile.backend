@@ -11,15 +11,15 @@ ENV NODE_ENV=production
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV YOUPLAYER_SPOTIFY_BROWSER_ENABLED=false
 
-COPY package.json package-lock.json ./
+COPY --chown=node:node package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 
-COPY server/ ./server/
-COPY client-utils.js ./client-utils.js
+COPY --chown=node:node server/ ./server/
+COPY --chown=node:node client-utils.js ./client-utils.js
 # Playlists are mounted at runtime and must not be embedded in release images.
 
 RUN mkdir -p musiq local_song playlists /var/lib/youplayer \
-    && chown -R node:node /var/www/html /var/lib/youplayer
+    && chown node:node musiq local_song playlists /var/lib/youplayer
 
 USER node
 

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import https from 'node:https';
 import { createPublicKey } from 'node:crypto';
 import { backupProduction, verifyBackup } from './production.mjs';
-import { createGitReleaseSource, updateProvider } from './update-channel.mjs';
+import { createGitReleaseSource, updateProvider, validateImageRepository, validateRegistryImages, compareReleaseVersions } from './update-channel.mjs';
 import { writeUpdateJson, updateBusy } from '../src/server/update-control.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -30,7 +30,7 @@ async function readJob(file) {
 }
 
 async function command(program, args, cwd) {
-	const timeout = program === 'podman-compose' ? 5 * 60_000 : args[0] === 'load' ? 10 * 60_000 : 30_000;
+	const timeout = program === 'podman-compose' ? 5 * 60_000 : ['load', 'pull'].includes(args[0]) ? 10 * 60_000 : 30_000;
 	try { return (await execute(program, args, { cwd, timeout, maxBuffer: 4 * 1024 * 1024 })).stdout; }
 	catch { throw new Error('Commande de mise a jour echouee ; sortie privee masquee'); }
 }
@@ -43,6 +43,7 @@ export async function initializeUpdates(root = ROOT) {
 }
 
 export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', sourceFactory = createGitReleaseSource,
+	initialVersion,
 	runCommand = (program, args) => command(program, args, root),
 	backup = () => backupProduction({ root, project, maintenance: true }),
 	verify = verifyBackup, readiness, wait = sleep } = {}) {
@@ -78,7 +79,12 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 		updateProvider(value);
 		const key = createPublicKey({ key: Buffer.from(value.publicKey, 'base64'), format: 'der', type: 'spki' });
 		if (key.asymmetricKeyType !== 'ed25519') throw new Error('Cle Ed25519 requise');
-		return { repository: value.repository, provider: value.provider, publicKey: value.publicKey, allowedDownloadOrigins: value.allowedDownloadOrigins };
+		if (value.allowedImageRepositories !== undefined) {
+			if (!Array.isArray(value.allowedImageRepositories)) throw new Error('Depots images invalides');
+			value.allowedImageRepositories.forEach(validateImageRepository);
+		}
+		return { repository: value.repository, provider: value.provider, publicKey: value.publicKey,
+			allowedDownloadOrigins: value.allowedDownloadOrigins, allowedImageRepositories: value.allowedImageRepositories };
 	}
 	async function deployment() {
 		const images = {}, healthchecks = {};
@@ -141,8 +147,27 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 	}
 	async function initialize() {
 		await initializeUpdates(root);
-		try { active = JSON.parse(await fs.readFile(path.join(host, 'active.json'), 'utf8')); }
-		catch { active = { version: 'Installation actuelle', sequence: 0 }; }
+		try {
+			active = JSON.parse(await fs.readFile(path.join(host, 'active.json'), 'utf8'));
+			if (active.version === 'Installation actuelle' && active.sequence === 0) {
+				throw Object.assign(new Error('Ancienne installation sans version'), { code: 'ENOENT' });
+			}
+			compareReleaseVersions(active.version, active.version);
+			if (!Number.isSafeInteger(active.sequence) || active.sequence < 0) throw new Error('Sequence invalide');
+		}
+		catch (error) {
+			if (error.code !== 'ENOENT') throw new Error('Version installee illisible');
+			let version = initialVersion;
+			if (!version) {
+				// The host checkout must be updated alongside its installed images on
+				// first migration. Afterwards active.json is the authoritative version.
+				try { version = (await runCommand('git', ['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*'])).trim(); } catch {}
+				try { compareReleaseVersions(version, version); }
+				catch { version = JSON.parse(await fs.readFile(path.join(root, 'src', 'package.json'), 'utf8')).version; }
+			}
+			compareReleaseVersions(version, version);
+			active = { version, sequence: 0 };
+		}
 		state.currentVersion = active.version;
 		let transaction;
 		try { transaction = JSON.parse(await fs.readFile(path.join(host, 'transaction.json'), 'utf8')); }
@@ -180,8 +205,10 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 			const source = sourceFactory(settings);
 			const candidate = await source.latest();
 			const manifest = candidate.manifest;
+			if (manifest.schema === 2) validateRegistryImages(manifest, settings.allowedImageRepositories);
 			const previous = await deployment();
 			const available = manifest.sequence > active.sequence
+				&& compareReleaseVersions(manifest.version, active.version) > 0
 				&& ['backend', 'frontend'].some(service => manifest.images[service] !== previous.images[service]);
 			await publish({ enabled: true, latestVersion: manifest.version, updateAvailable: available });
 			if (job.action === 'check') { await publish({ phase: 'idle' }); return; }
@@ -189,13 +216,29 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 				await publish({ phase: 'succeeded', updateAvailable: false }); return;
 			}
 			if (!available || manifest.version !== job.version) throw new Error('Release changee ou deja installee');
-			const archive = path.join(host, 'images.tar');
 			await publish({ phase: 'downloading' });
-			let lastProgress = -1;
-			await source.download(candidate, archive, async progress => {
-				if (progress !== lastProgress) { lastProgress = progress; await publish({ progress }); }
-			});
-			await runCommand('podman', ['load', '--input', archive]);
+			if (manifest.schema === 2) {
+				const platform = (await runCommand('podman', ['info', '--format', '{{.Host.OS}}/{{.Host.Arch}}'])).trim();
+				if (platform !== manifest.platform) throw new Error('Plateforme incompatible');
+				for (const [index, service] of ['backend', 'frontend'].entries()) {
+					const reference = manifest.registry[service];
+					await runCommand('podman', ['pull', '--tls-verify=true', '--policy=always', '--platform', manifest.platform, reference]);
+					// A registry manifest digest differs from a local image config ID.
+					// Inspect the exact pulled reference, then bind it to the signed ID.
+					const image = JSON.parse(await runCommand('podman', ['image', 'inspect', reference]));
+					if (image.length !== 1 || image[0].Id?.replace(/^sha256:/, '') !== manifest.images[service]
+						|| `${image[0].Os}/${image[0].Architecture}` !== manifest.platform
+						|| !image[0].RepoDigests?.includes(reference)) throw new Error('Image recuperee invalide');
+					await publish({ progress: (index + 1) * 50 });
+				}
+			} else {
+				const archive = path.join(host, 'images.tar');
+				let lastProgress = -1;
+				await source.download(candidate, archive, async progress => {
+					if (progress !== lastProgress) { lastProgress = progress; await publish({ progress }); }
+				});
+				await runCommand('podman', ['load', '--input', archive]);
+			}
 			for (const identity of Object.values(manifest.images)) await runCommand('podman', ['image', 'exists', identity]);
 			await publish({ phase: 'backing_up', progress: 100 });
 			const snapshot = await backup();
@@ -265,11 +308,13 @@ async function cli() {
 		if (key.asymmetricKeyType !== 'ed25519') throw new Error('Cle Ed25519 requise');
 		const config = { repository, provider: args.includes('--gitlab') ? 'gitlab' : 'github',
 			publicKey: key.export({ type: 'spki', format: 'der' }).toString('base64') };
+		const repositories = args.flatMap((arg, index) => arg === '--image-repository' ? [args[index + 1]] : []);
+		if (repositories.length) config.allowedImageRepositories = repositories.map(validateImageRepository);
 		updateProvider(config);
 		await writeUpdateJson(path.join(ROOT, '.updates', 'host', 'config.json'), config);
 		console.log(JSON.stringify({ ok: true })); return;
 	}
-	if (action !== 'run') throw new Error('Commande : init | configure --repository URL --public-key FICHIER [--gitlab] | run');
+	if (action !== 'run') throw new Error('Commande : init | configure --repository URL --public-key FICHIER [--gitlab] [--image-repository REGISTRE/DEPOT] | run');
 	const worker = createUpdateWorker();
 	await worker.initialize();
 	let stop = false;
