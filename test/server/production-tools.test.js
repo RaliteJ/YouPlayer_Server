@@ -46,12 +46,13 @@ test('restore override selects copied data and refuses incomplete mappings or ov
 	const targetRoot = await mkdtemp(path.join(os.tmpdir(), 'youplayer-restore-'));
 	try {
 		await assert.rejects(writeRestoreOverride({ project: 'synthetic', volumes: {}, targetRoot }), /Volumes courants absents/);
-		const volumes = { synthetic_youplayer_data: 'restore-data', synthetic_redis_data: 'restore-redis' };
+		const volumes = { synthetic_youplayer_data: 'restore-data', synthetic_redis_data: 'restore-redis', synthetic_frontend_certs: 'restore-certs' };
 		await writeRestoreOverride({ project: 'synthetic', volumes, targetRoot });
 		const file = path.join(targetRoot, 'restore-compose.json');
 		const override = JSON.parse(await readFile(file, 'utf8'));
 		assert.deepEqual(override.volumes.youplayer_data, { external: true, name: 'restore-data' });
 		assert.deepEqual(override.volumes.redis_data, { external: true, name: 'restore-redis' });
+		assert.deepEqual(override.volumes.frontend_certs, { external: true, name: 'restore-certs' });
 		assert.ok(override.services.backend.volumes[0].startsWith(targetRoot + '/playlists:'));
 		assert.equal((await stat(file)).mode & 0o077, 0);
 		await assert.rejects(writeRestoreOverride({ project: 'synthetic', volumes, targetRoot }), { code: 'EEXIST' });

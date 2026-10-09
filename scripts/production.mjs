@@ -191,6 +191,8 @@ export async function writeRestoreOverride({ project, volumes, targetRoot }) {
 		`${targetRoot}/playlists:/var/www/html/playlists:Z`, `${targetRoot}/local_song:/var/www/html/local_song:Z`,
 		'youplayer_data:/var/lib/youplayer:Z,U'
 	] } }, volumes: { youplayer_data: { external: true, name: data }, redis_data: { external: true, name: redis } } };
+	const certs = volumes[`${project}_frontend_certs`];
+	if (certs) override.volumes.frontend_certs = { external: true, name: certs };
 	await fs.writeFile(path.join(targetRoot, 'restore-compose.json'), JSON.stringify(override, null, 2), { mode: 0o600, flag: 'wx' });
 }
 

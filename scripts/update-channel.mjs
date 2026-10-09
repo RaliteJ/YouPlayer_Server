@@ -5,6 +5,36 @@ import path from 'node:path';
 export const MAX_IMAGE_ARCHIVE = 10 * 1024 ** 3;
 const MAX_METADATA = 1024 * 1024;
 
+// Stable numeric versions only; historical v1/v2 tags mean v1.0.0/v2.0.0.
+export function compareReleaseVersions(candidate, installed) {
+	const parse = value => {
+		if (typeof value !== 'string' || !/^v?(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*)){0,2}$/.test(value)) throw new Error('Version stable numerique requise');
+		return value.replace(/^v/, '').split('.').map(BigInt);
+	};
+	const next = parse(candidate), current = parse(installed);
+	for (let index = 0; index < 3; index++) {
+		const a = next[index] ?? 0n, b = current[index] ?? 0n;
+		if (a !== b) return a > b ? 1 : -1;
+	}
+	return 0;
+}
+
+// Fully qualified repositories only: no short-name resolution or mutable tags.
+export function validateImageRepository(value) {
+	if (typeof value !== 'string' || value.length > 240
+		|| !/^[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[1-9][0-9]{0,4})?\/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/.test(value)
+		|| !value.split('/')[0].includes('.') || value.split('/')[0].startsWith('localhost')) throw new Error('Depot image invalide');
+	return value;
+}
+
+export function validateRegistryImages(manifest, allowedRepositories) {
+	if (!Array.isArray(allowedRepositories) || !allowedRepositories.length) throw new Error('Registre non configure');
+	for (const item of allowedRepositories) validateImageRepository(item);
+	for (const reference of Object.values(manifest.registry)) {
+		if (!allowedRepositories.includes(reference.split('@')[0])) throw new Error('Depot image refuse');
+	}
+}
+
 export function validateUpdateManifest(envelope, publicKey) {
 	if (typeof envelope?.payload !== 'string' || typeof envelope?.signature !== 'string'
 		|| envelope.payload.length > 90_000 || envelope.signature.length > 100) throw new Error('Release invalide');
@@ -14,13 +44,22 @@ export function validateUpdateManifest(envelope, publicKey) {
 		throw new Error('Signature de release invalide');
 	}
 	const value = JSON.parse(bytes.toString('utf8'));
-	if (value.schema !== 1 || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(value.version)
+	if (![1, 2].includes(value.schema) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(value.version)
 		|| !Number.isSafeInteger(value.sequence) || value.sequence < 1
 		|| Object.keys(value.images || {}).sort().join(',') !== 'backend,frontend'
-		|| !['backend', 'frontend'].every(service => /^[a-f0-9]{64}$/.test(value.images?.[service]))
-		|| value.archive?.name !== 'youplayer-images.tar' || !/^[a-f0-9]{64}$/.test(value.archive.sha256)
-		|| !Number.isSafeInteger(value.archive.size) || value.archive.size < 1 || value.archive.size > MAX_IMAGE_ARCHIVE) {
+		|| !['backend', 'frontend'].every(service => /^[a-f0-9]{64}$/.test(value.images?.[service]))) {
 		throw new Error('Format de release incompatible');
+	}
+	if (value.schema === 1) {
+		if (value.archive?.name !== 'youplayer-images.tar' || !/^[a-f0-9]{64}$/.test(value.archive.sha256)
+			|| !Number.isSafeInteger(value.archive.size) || value.archive.size < 1 || value.archive.size > MAX_IMAGE_ARCHIVE) throw new Error('Archive invalide');
+	} else {
+		if (value.archive !== undefined || !['linux/amd64', 'linux/arm64'].includes(value.platform)
+			|| Object.keys(value.registry || {}).sort().join(',') !== 'backend,frontend') throw new Error('Registre invalide');
+		for (const reference of Object.values(value.registry)) {
+			if (typeof reference !== 'string' || reference.split('@').length !== 2 || !/@sha256:[a-f0-9]{64}$/.test(reference)) throw new Error('Digest image invalide');
+			validateImageRepository(reference.split('@')[0]);
+		}
 	}
 	return value;
 }
@@ -95,6 +134,10 @@ export function createGitReleaseSource(config, { fetchImpl = fetch } = {}) {
 		};
 		const manifest = validateUpdateManifest(await json(assetUrl('youplayer-update.json'), true), config.publicKey);
 		if (release.tag_name !== manifest.version) throw new Error('Version signee differente du tag Git');
+		if (manifest.schema === 2) {
+			validateRegistryImages(manifest, config.allowedImageRepositories);
+			return { manifest };
+		}
 		return { manifest, archiveUrl: assetUrl(manifest.archive.name) };
 	}
 	async function download(candidate, destination, progress = () => {}) {

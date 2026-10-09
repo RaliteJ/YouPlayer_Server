@@ -1,12 +1,7 @@
 FROM docker.io/library/nginx:1.30.5-alpine@sha256:0985e772fb9f729e6fa0980da05fca5d9c468e870eed43071545afa9d2e27d94
 
-RUN apk add --no-cache openssl \
-    && mkdir -p /etc/nginx/certs \
-    && openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -keyout /etc/nginx/certs/youplayer.key \
-        -out /etc/nginx/certs/youplayer.crt \
-        -subj "/CN=localhost" \
-        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+RUN apk add --no-cache openssl && mkdir -p /etc/nginx/certs
+COPY --chmod=755 scripts/15-youplayer-certificates.sh /docker-entrypoint.d/15-youplayer-certificates.sh
 
 ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
 COPY nginx.conf /etc/nginx/templates/default.conf.template

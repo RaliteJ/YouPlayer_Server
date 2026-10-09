@@ -2,6 +2,8 @@
 
 !Dockerfile.frontend
 !nginx.conf
+!scripts/
+!scripts/15-youplayer-certificates.sh
 
 !src/
 !src/index.html

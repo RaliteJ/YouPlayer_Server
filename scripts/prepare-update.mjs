@@ -8,19 +8,26 @@ export async function prepareSignedUpdate({ releaseDirectory, privateKeyFile, ve
 	const release = path.resolve(releaseDirectory);
 	const metadata = JSON.parse(await fs.readFile(path.join(release, 'images.json'), 'utf8'));
 	const archive = path.join(release, 'images.tar');
-	const digest = await imageArchiveHash(archive);
-	if (digest !== metadata.archives['images.tar']) throw new Error('Archive de release alteree');
+	const registry = metadata.registry !== undefined;
+	let transport;
+	if (registry) transport = { schema: 2, registry: metadata.registry, platform: metadata.platform };
+	else {
+		const digest = await imageArchiveHash(archive);
+		if (digest !== metadata.archives['images.tar']) throw new Error('Archive de release alteree');
+		transport = { schema: 1, archive: { name: 'youplayer-images.tar', size: (await fs.stat(archive)).size, sha256: digest } };
+	}
 	const privateKey = createPrivateKey(await fs.readFile(privateKeyFile));
 	if (privateKey.asymmetricKeyType !== 'ed25519') throw new Error('Cle Ed25519 requise');
-	const payload = Buffer.from(JSON.stringify({ schema: 1, version, sequence, images: metadata.images,
-		archive: { name: 'youplayer-images.tar', size: (await fs.stat(archive)).size, sha256: digest } }));
+	const payload = Buffer.from(JSON.stringify({ ...transport, version, sequence, images: metadata.images }));
 	const envelope = { payload: payload.toString('base64'), signature: sign(null, payload, privateKey).toString('base64') };
 	const { createPublicKey } = await import('node:crypto');
 	validateUpdateManifest(envelope, createPublicKey(privateKey).export({ type: 'spki', format: 'der' }).toString('base64'));
 	const output = path.join(release, 'update-assets');
 	await fs.mkdir(output, { mode: 0o700 });
-	await fs.copyFile(archive, path.join(output, 'youplayer-images.tar'), fs.constants.COPYFILE_EXCL);
-	await fs.chmod(path.join(output, 'youplayer-images.tar'), 0o600);
+	if (!registry) {
+		await fs.copyFile(archive, path.join(output, 'youplayer-images.tar'), fs.constants.COPYFILE_EXCL);
+		await fs.chmod(path.join(output, 'youplayer-images.tar'), 0o600);
+	}
 	await fs.writeFile(path.join(output, 'youplayer-update.json'), JSON.stringify(envelope), { flag: 'wx', mode: 0o600 });
 	return { ok: true, directory: output, version };
 }

@@ -9,6 +9,11 @@ on:
         description: Tag Git existant a publier
         required: true
         type: string
+      registry_prefix:
+        description: 'Publication volontaire par couches : registre/espace/youplayer (vide = archive historique)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -42,6 +47,9 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
           RELEASE_SIGNING_KEY: ${{ secrets.YOUPLAYER_RELEASE_SIGNING_KEY }}
+          REGISTRY_PREFIX: ${{ inputs.registry_prefix }}
+          REGISTRY_USERNAME: ${{ secrets.YOUPLAYER_REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.YOUPLAYER_REGISTRY_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -51,18 +59,32 @@ jobs:
           chmod 600 "$keyfile"
           trap 'rm -f "$keyfile"' EXIT
           printf '%s' "$RELEASE_SIGNING_KEY" > "$keyfile"
-          node scripts/build-update-release.mjs "$RELEASE_TAG" "$keyfile"
+          options=()
+          if [ -n "$REGISTRY_PREFIX" ]; then
+            node --input-type=module -e 'import {validateImageRepository} from "./scripts/update-channel.mjs"; for (const service of ["backend", "frontend"]) validateImageRepository(`${process.env.REGISTRY_PREFIX}-${service}`);'
+            test -n "$REGISTRY_USERNAME"
+            test -n "$REGISTRY_PASSWORD"
+            export REGISTRY_AUTH_FILE="$RUNNER_TEMP/youplayer-registry-auth.json"
+            trap 'rm -f "$keyfile" "$REGISTRY_AUTH_FILE"' EXIT
+            printf '%s' "$REGISTRY_PASSWORD" | podman login --tls-verify=true --username "$REGISTRY_USERNAME" --password-stdin "${REGISTRY_PREFIX%%/*}"
+            options=(--registry-prefix "$REGISTRY_PREFIX")
+          fi
+          node scripts/build-update-release.mjs "$RELEASE_TAG" "$keyfile" "${options[@]}"
       - name: Attacher les images a la release GitHub
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          REGISTRY_PREFIX: ${{ inputs.registry_prefix }}
         shell: bash
         run: |
           set -euo pipefail
-          archive="releases/$RELEASE_TAG/update-assets/youplayer-images.tar"
           manifest="releases/$RELEASE_TAG/update-assets/youplayer-update.json"
+          assets=("$manifest")
+          if [ -z "$REGISTRY_PREFIX" ]; then
+            assets+=("releases/$RELEASE_TAG/update-assets/youplayer-images.tar")
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$archive" "$manifest" --clobber
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
-            gh release create "$RELEASE_TAG" "$archive" "$manifest" --verify-tag --title "$RELEASE_TAG" --generate-notes
+            gh release create "$RELEASE_TAG" "${assets[@]}" --verify-tag --title "$RELEASE_TAG" --generate-notes
           fi
