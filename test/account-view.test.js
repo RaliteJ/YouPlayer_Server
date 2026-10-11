@@ -44,6 +44,32 @@ function form(values) {
 const event = form => ({ preventDefault() {}, currentTarget: form });
 const ok = data => ({ ok: true, json: async () => data });
 
+test('security panel shows counts and rebuild notice, requires explicit actions and rejects late account results', async () => {
+  const state = { online: true, phase: 'finished', result: 'vulnerable', counts: { critical: 1, high: 0, moderate: 0, low: 0, info: 0 }, rebuildRequired: true };
+  let finish;
+  const h = harness(async () => ok(state));
+  const elements = Object.fromEntries(['admin-security-date', 'admin-security-counts', 'admin-security-rebuild'].map(id => [id, element()]));
+  h.document.getElementById = id => elements[id];
+  Object.assign(h.view, { currentUser: { id: 'manager', role: 'admin' }, adminSecurityStatus: {}, adminSecurityCheck: {}, adminSecurityFix: {} });
+  await h.view.fetchSecurityStatus();
+  assert.match(elements['admin-security-counts'].textContent, /Critiques : 1/);
+  assert.equal(elements['admin-security-rebuild'].hidden, false);
+  assert.equal(h.view.adminSecurityFix.disabled, false);
+  state.online = false;
+  await h.view.fetchSecurityStatus();
+  assert.equal(h.view.adminSecurityCheck.disabled, true);
+  assert.equal(h.view.adminSecurityFix.disabled, true);
+  h.view.currentUser.role = 'user';
+  await h.view.startSecurityAudit('fix');
+  const late = harness(() => new Promise(resolve => { finish = resolve; }));
+  Object.assign(late.view, { currentUser: { id: 'manager', role: 'admin' }, adminSecurityStatus: { textContent: 'original' }, adminSecurityCheck: {}, adminSecurityFix: {} });
+  const pending = late.view.fetchSecurityStatus();
+  late.view.currentUser = { id: 'listener', role: 'user' };
+  finish(ok(state));
+  await pending;
+  assert.equal(late.view.adminSecurityStatus.textContent, 'original');
+});
+
 test('admin update controls follow version availability without exposing technical configuration', async () => {
 	const state = { enabled: true, online: true, phase: 'idle', currentVersion: 'v1', latestVersion: 'v2', updateAvailable: true };
 	const requests = [];

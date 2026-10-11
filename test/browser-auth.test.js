@@ -17,6 +17,63 @@ let tempRoot;
 let browserSetupError;
 const browserExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
 
+test('security tab checks explicitly, shows corrections and Podman rebuild on mobile and desktop', { timeout: 25000 }, async t => {
+  if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
+  const page = await browser.newPage();
+  let state = { online: true, phase: 'idle', result: 'not-checked', rebuildRequired: false };
+  const actions = [];
+  const jobId = '12345678-1234-1234-1234-123456789abc';
+  try {
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      const route = new URL(request.url()).pathname;
+      if (route.startsWith('/admin/security')) {
+        if (request.method() === 'POST') {
+          const action = route.split('/').at(-1);
+          actions.push(action);
+          state = { ...state, requestId: jobId, phase: action === 'fix' ? 'fixing' : 'checking' };
+          request.respond({ status: 202, contentType: 'application/json', body: JSON.stringify({ requestId: jobId }) });
+        } else request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(state) });
+      } else if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) request.continue();
+      else request.abort();
+    });
+    await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+    await page.evaluate(async () => {
+      const { App } = await import(document.querySelector('script[type="module"]').src);
+      window.securityFixtureApp = App;
+      App.currentUser = { id: 'synthetic-admin', role: 'admin', pseudo: 'Synthetic' };
+      App.apiFetch = async () => [];
+      document.body.classList.remove('auth-required');
+      document.querySelector('.auth-screen').hidden = true;
+      App.loadView('admin');
+      await App.fetchSecurityStatus();
+    });
+    await page.click('#admin-tab-security');
+    await page.waitForFunction(() => !document.getElementById('admin-security-check').disabled);
+    assert.deepEqual(actions, [], 'Opening the panel does not audit npm');
+    await page.click('#admin-security-check');
+    await page.waitForFunction(() => document.getElementById('admin-security-status').textContent.includes('en cours'));
+    assert.equal(await page.$eval('#admin-security-fix', el => el.disabled), true);
+    state = { ...state, phase: 'finished', result: 'vulnerable', checkedAt: '2026-10-11T12:00:00Z', counts: { critical: 1, high: 2, moderate: 0, low: 0, info: 0 } };
+    await page.evaluate(() => window.securityFixtureApp.fetchSecurityStatus());
+    assert.match(await page.$eval('#admin-security-counts', el => el.textContent), /Critiques : 1/);
+    await page.click('#admin-security-fix');
+    await page.waitForFunction(() => document.getElementById('admin-security-status').textContent.includes('validation'));
+    state = { ...state, phase: 'finished', result: 'updated-rebuild-required', rebuildRequired: true, counts: { critical: 0, high: 1, moderate: 0, low: 0, info: 0 } };
+    await page.evaluate(() => window.securityFixtureApp.fetchSecurityStatus());
+    assert.equal(await page.$eval('#admin-security-rebuild', el => el.hidden), false);
+    assert.match(await page.$eval('#admin-security-rebuild code', el => el.textContent), /up -d --build/);
+    for (const width of [320, 390, 768, 1280]) {
+      await page.setViewport({ width, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `security panel fits at ${width}`);
+    }
+    state = { ...state, rebuildRequired: false, installedMatchesAudit: true };
+    await page.evaluate(() => window.securityFixtureApp.fetchSecurityStatus());
+    assert.equal(await page.$eval('#admin-security-rebuild', el => el.hidden), true);
+    assert.deepEqual(actions, ['check', 'fix']);
+  } finally { await page.close(); }
+});
+
 async function closeServer() {
 	if (!server?.listening) return;
 	await new Promise((resolve) => server.close(resolve));
@@ -919,7 +976,7 @@ test('admin account forms create a user and reset its password without exposing 
 		await page.keyboard.press('Home');
 		for (const width of [320, 390, 768, 1280]) {
 			await page.setViewport({ width, height: 844 });
-			for (const name of ['accounts', 'history', 'updates', 'integrations']) {
+			for (const name of ['accounts', 'history', 'security', 'updates', 'integrations']) {
 				await page.click(`#admin-tab-${name}`);
 				assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${name} fits at ${width}`);
 				assert.equal(await page.$$eval('#view-admin [role="tabpanel"]', panels => panels.filter(panel => !panel.hidden).length), 1);

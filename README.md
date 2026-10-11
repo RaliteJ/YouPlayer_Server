@@ -351,6 +351,70 @@ Les releases officielles sont disponibles sur [RaliteJ/YouPlayer_Server](https:/
 
 Ne partagez jamais `.env`, `.updates/`, les sauvegardes, journaux, médias ou données des utilisateurs. Toute distribution publique doit conserver uniquement des exemples descriptifs sans valeurs personnelles.
 
+#### Contrôle automatique des dépendances npm
+
+L'onglet **Admin → Sécurité** affiche le dernier contrôle, le nombre de
+vulnérabilités par gravité et deux actions explicites : **Vérifier la sécurité
+des dépendances**, puis **Appliquer les corrections compatibles**. L'ouverture
+de l'onglet ne lance aucun audit externe. Les résultats concernent les fichiers
+du projet sur l'hôte ; une correction attend une reconstruction des conteneurs
+avant d'être effective dans l'application.
+
+Pour utiliser les boutons, démarrer ce service dans le dossier d'installation,
+avec le compte Podman utilisateur, sans sudo :
+
+```bash
+node scripts/dependency-audit.mjs --serve
+```
+
+Le processus reste actif et traite uniquement les demandes de l'Admin. Il est
+indépendant de la configuration du dépôt des releases. Il utilise les dossiers
+`requests` et `status` déjà montés par Compose ; aucun accès Podman n'est donné
+au backend. Aucun service de lancement automatique n'est installé. Chromium
+et npm sont nécessaires sur l'hôte pour valider les corrections. Après un arrêt
+brutal, vérifier qu'aucun service Sécurité ne tourne avant de retirer le dossier
+verrou `.updates/dependency-audit/service`.
+
+Après une correction validée, l'onglet demande de **reconstruire et relancer
+Podman**, avec la commande correspondante. Un simple redémarrage des anciens
+conteneurs ne met pas leurs dépendances à jour. L'avertissement persiste après
+un nouvel audit et disparaît lorsque le verrou embarqué dans le backend
+correspond aux corrections. Recharger la page après la reconstruction.
+
+Le mode terminal reste disponible, indépendamment de l'onglet :
+
+Depuis la racine, avec Node et npm, sans sudo :
+
+```bash
+# Vérification ponctuelle
+node scripts/dependency-audit.mjs
+# Vérification immédiate puis quotidienne, avec corrections compatibles
+node scripts/dependency-audit.mjs --fix --watch
+```
+
+Le processus doit rester actif ; Ctrl+C l'arrête. Lancer cette commande constitue
+une demande de contact avec le registre npm : l'audit lui transmet les noms et
+versions des dépendances. Il recherche les vulnérabilités connues des paquets,
+pas les failles propres au code, à l'OS ou aux images conteneurs.
+
+Les corrections utilisent `npm audit fix --package-lock-only --ignore-scripts`,
+sans `--force`, dans un dossier temporaire isolé. Le script exige une diminution
+du nombre de vulnérabilités sans augmentation dans une catégorie de gravité,
+installe les dépendances candidates puis lance `npm test`. Chromium doit être
+disponible pour les tests navigateur (`PUPPETEER_EXECUTABLE_PATH` si nécessaire).
+Un échec conserve les fichiers originaux. Une correction incompatible ou sans
+amélioration est signalée par `manual-review`.
+
+Si les tests réussissent, seul `src/package-lock.json` est remplacé. Le rapport
+et le verrou précédent sont conservés dans `.updates/dependency-audit/`.
+Les dépendances installées et les conteneurs actifs conservent leur version :
+le statut `updated-rebuild-required` demande une reconstruction explicite avec
+`podman-compose -p youplayer-server up -d --build`, puis une vérification de la
+connexion et de la lecture. Un audit ultérieur porte sur le verrou du projet,
+pas sur les conteneurs encore en service. Aucune publication n'est effectuée.
+Après un arrêt brutal, vérifier qu'aucun audit ne tourne avant de retirer le
+dossier verrou `.updates/dependency-audit/running`.
+
 <a id="organisation"></a>
 
 ### 10. Organisation du projet

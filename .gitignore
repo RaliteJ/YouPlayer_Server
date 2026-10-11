@@ -25,6 +25,7 @@ src/.env.*
 
 # Configuration, cles et artefacts locaux
 .test-tmp/
+src/.dependency-audit-lock.tmp
 *.log
 *.key
 *.pem
