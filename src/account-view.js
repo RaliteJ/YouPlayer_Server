@@ -14,6 +14,7 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 if (panel) panel.hidden = !selected;
             }
             if (focus) tab.focus();
+            if (tab.id === 'admin-tab-security') this.fetchSecurityStatus();
         },
 
         bindAdminTabs() {
@@ -124,6 +125,9 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         showAuth(message = '') {
+            clearTimeout(this.securityPollTimer);
+            this.securityRequestId = null;
+            this.securityPollUntil = null;
             this.playlistLoadRevision++;
             this.playlistTracks = [];
             this.clearTrackPageScrolling(this.playlistContainer);
@@ -250,6 +254,9 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         async logout() {
+            clearTimeout(this.securityPollTimer);
+            this.securityRequestId = null;
+            this.securityPollUntil = null;
             this.playlistLoadRevision++;
             this.playlistTracks = [];
             this.playlistContainer?.replaceChildren();
@@ -390,6 +397,7 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
             async fetchAdminData() {
                 if (this.currentUser?.role !== 'admin') return;
             if (this.adminUpdateStatus) await this.fetchUpdateStatus();
+            if (this.adminSecurityStatus) await this.fetchSecurityStatus();
 
             const [users, events, logs, integrations] = await Promise.all([
                 this.apiFetch('/admin/users'),
@@ -460,6 +468,83 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 this.integrationsChecking = false;
                 if (this.adminIntegrationCheck) this.adminIntegrationCheck.disabled = false;
             }
+        },
+
+        renderSecurityStatus(status) {
+            const pending = Boolean(this.securityRequestId && this.securityRequestId !== status.requestId);
+            const busy = ['checking', 'fixing'].includes(status.phase);
+            const labels = {
+                'not-checked': 'Aucune vérification effectuée.',
+                clean: 'Aucune vulnérabilité connue détectée dans les dépendances vérifiées.',
+                vulnerable: 'Des vulnérabilités ont été détectées.',
+                'manual-review': 'Certaines vulnérabilités demandent une intervention manuelle.',
+                'updated-rebuild-required': status.rebuildRequired
+                    ? 'Les corrections compatibles ont passé les tests.' : 'Les corrections ont été appliquées au serveur.'
+            };
+            this.adminSecurityStatus.textContent = !status.online ? 'Le service Sécurité est arrêté. Le dernier résultat reste affiché ci-dessous.'
+                : pending ? 'Demande en attente…'
+                : status.phase === 'checking' ? 'Vérification des dépendances en cours…'
+                : status.phase === 'fixing' ? 'Préparation des corrections et validation par les tests…'
+                : status.phase === 'failed' ? 'Le contrôle a échoué. Aucune nouvelle correction validée. Vérifiez le service Sécurité.'
+                : labels[status.result] || labels['not-checked'];
+            const date = document.getElementById('admin-security-date');
+            if (date) date.textContent = status.checkedAt
+                ? `Dernier résultat : ${new Date(status.checkedAt).toLocaleString('fr-FR')}${status.installedMatchesAudit ? '' : ' · dépendances du projet sur l’hôte'}` : '';
+            const counts = document.getElementById('admin-security-counts');
+            if (counts) counts.textContent = status.counts ? [
+                `Critiques : ${status.counts.critical}`, `Élevées : ${status.counts.high}`,
+                `Modérées : ${status.counts.moderate}`, `Faibles : ${status.counts.low}`, `Information : ${status.counts.info}`
+            ].join(' · ') : '';
+            const rebuild = document.getElementById('admin-security-rebuild');
+            if (rebuild) rebuild.hidden = !status.rebuildRequired;
+            this.adminSecurityCheck.disabled = !status.online || busy || pending;
+            this.adminSecurityFix.disabled = this.adminSecurityCheck.disabled || !['vulnerable', 'manual-review'].includes(status.result);
+            if (!pending && !busy && this.securityRequestId === status.requestId) this.securityRequestId = null;
+            return status.online && (pending || busy);
+        },
+
+        async fetchSecurityStatus() {
+            clearTimeout(this.securityPollTimer);
+            if (this.currentUser?.role !== 'admin' || !this.adminSecurityStatus) return;
+            const userId = this.currentUser.id;
+            let polling = false;
+            try {
+                const response = await fetchImpl(`${API_URL}/admin/security`, { credentials: 'include', signal: AbortSignal.timeout(5000) });
+                if (!response.ok) throw new Error('Security status unavailable');
+                const status = await response.json();
+                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
+                polling = this.renderSecurityStatus(status);
+            } catch {
+                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
+                this.adminSecurityStatus.textContent = 'État de sécurité indisponible. Réessayez dans un instant.';
+                this.adminSecurityCheck.disabled = this.adminSecurityFix.disabled = true;
+                polling = Boolean(this.securityRequestId);
+            }
+            if (polling) {
+                this.securityPollUntil ||= Date.now() + 30 * 60_000;
+                if (Date.now() < this.securityPollUntil) this.securityPollTimer = setTimeout(() => this.fetchSecurityStatus(), 2000);
+                else this.adminSecurityStatus.textContent = 'Le contrôle prend plus de temps que prévu. Rouvrez cet onglet pour actualiser son état.';
+            } else this.securityPollUntil = null;
+        },
+
+        async startSecurityAudit(action) {
+            if (this.currentUser?.role !== 'admin' || !['check', 'fix'].includes(action) || this.securityStarting) return;
+            const userId = this.currentUser.id;
+            this.securityStarting = true;
+            this.adminSecurityCheck.disabled = this.adminSecurityFix.disabled = true;
+            try {
+                const response = await fetchImpl(`${API_URL}/admin/security/${action}`, {
+                    method: 'POST', credentials: 'include', signal: AbortSignal.timeout(5000)
+                });
+                if (!response.ok) throw new Error('Security request rejected');
+                const result = await response.json();
+                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
+                this.securityRequestId = result.requestId;
+                this.securityPollUntil = Date.now() + 30 * 60_000;
+            } catch {
+                if (this.currentUser?.id === userId && this.currentUser?.role === 'admin') this.showNotice('Impossible de lancer le contrôle. Vérifiez que le service Sécurité est actif.', true);
+            } finally { this.securityStarting = false; }
+            if (this.currentUser?.id === userId && this.currentUser?.role === 'admin') await this.fetchSecurityStatus();
         },
 
         async fetchUpdateStatus() {

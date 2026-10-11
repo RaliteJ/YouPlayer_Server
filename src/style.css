@@ -2640,3 +2640,11 @@ li:hover {
 .admin-tab-panel[hidden] { display: none; }
 .admin-tab-panel { grid-template-columns: minmax(0, 1fr); }
 #admin-pane-accounts { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+.security-rebuild {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid #b08b35;
+  border-radius: 10px;
+}
+.security-rebuild code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
+#admin-security-counts { overflow-wrap: anywhere; }

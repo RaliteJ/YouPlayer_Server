@@ -1029,6 +1029,16 @@ test('admin-only routes expose users, login events and audit logs only to role=a
 	assert.equal((await userClient.request('/admin/updates/install', { method: 'POST', body: { version: 'v2' } })).status, 403);
 	assert.equal((await adminClient.request('/admin/updates/check', { method: 'POST', skipOrigin: true })).status, 403);
 	assert.equal((await adminClient.request('/admin/updates/install', { method: 'POST', body: { version: 'v2' } })).status, 503);
+	assert.equal((await stranger.request('/admin/security')).status, 401);
+	assert.equal((await userClient.request('/admin/security')).status, 403);
+	assert.equal((await adminClient.request('/admin/security')).status, 200);
+	for (const action of ['check', 'fix']) {
+		assert.equal((await stranger.request(`/admin/security/${action}`, { method: 'POST' })).status, 401);
+		assert.equal((await userClient.request(`/admin/security/${action}`, { method: 'POST' })).status, 403);
+		assert.equal((await adminClient.request(`/admin/security/${action}`, { method: 'POST', skipOrigin: true })).status, 403);
+		assert.equal((await adminClient.request(`/admin/security/${action}`, { method: 'POST', headers: { origin: 'https://untrusted.test' } })).status, 403);
+		assert.equal((await adminClient.request(`/admin/security/${action}`, { method: 'POST' })).status, 503);
+	}
 });
 
 

@@ -1,7 +1,7 @@
 import { createDiscoveryView } from './discovery-view.js';
 import { createPlayerController } from './player-controller.js';
 import { playerView } from './player-view.js';
-import { createAccountView } from './account-view.js';
+import { createAccountView } from './account-view.js?v=20261011-security';
 import { playlistView } from './playlist-view.js';
 import { libraryView } from './library-view.js';
 import { bindQueueSwipe } from './track-gestures.js';
@@ -136,6 +136,9 @@ const App = {
         this.adminUpdateCheck = document.getElementById('admin-update-check');
         this.adminUpdateInstall = document.getElementById('admin-update-install');
         this.adminIntegrationCheck = document.getElementById('admin-integrations-check');
+        this.adminSecurityStatus = document.getElementById('admin-security-status');
+        this.adminSecurityCheck = document.getElementById('admin-security-check');
+        this.adminSecurityFix = document.getElementById('admin-security-fix');
         this.passwordChangeForm = document.getElementById('password-change-form');
         this.passwordChangeMessage = document.getElementById('password-change-message');
         this.spotifySettingsStatus = document.getElementById('spotify-settings-status');
@@ -303,6 +306,8 @@ const App = {
         }
         if (this.adminUpdateCheck) this.adminUpdateCheck.onclick = () => this.startAppUpdate('check');
         if (this.adminUpdateInstall) this.adminUpdateInstall.onclick = () => this.startAppUpdate('install');
+        if (this.adminSecurityCheck) this.adminSecurityCheck.onclick = () => this.startSecurityAudit('check');
+        if (this.adminSecurityFix) this.adminSecurityFix.onclick = () => this.startSecurityAudit('fix');
         if (this.adminIntegrationCheck) this.adminIntegrationCheck.onclick = () => this.checkIntegrations();
         if (this.passwordChangeForm) {
             this.passwordChangeForm.onsubmit = (e) => this.changeOwnPassword(e);

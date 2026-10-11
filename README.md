@@ -353,6 +353,36 @@ Ne partagez jamais `.env`, `.updates/`, les sauvegardes, journaux, médias ou do
 
 #### Contrôle automatique des dépendances npm
 
+L'onglet **Admin → Sécurité** affiche le dernier contrôle, le nombre de
+vulnérabilités par gravité et deux actions explicites : **Vérifier la sécurité
+des dépendances**, puis **Appliquer les corrections compatibles**. L'ouverture
+de l'onglet ne lance aucun audit externe. Les résultats concernent les fichiers
+du projet sur l'hôte ; une correction attend une reconstruction des conteneurs
+avant d'être effective dans l'application.
+
+Pour utiliser les boutons, démarrer ce service dans le dossier d'installation,
+avec le compte Podman utilisateur, sans sudo :
+
+```bash
+node scripts/dependency-audit.mjs --serve
+```
+
+Le processus reste actif et traite uniquement les demandes de l'Admin. Il est
+indépendant de la configuration du dépôt des releases. Il utilise les dossiers
+`requests` et `status` déjà montés par Compose ; aucun accès Podman n'est donné
+au backend. Aucun service de lancement automatique n'est installé. Chromium
+et npm sont nécessaires sur l'hôte pour valider les corrections. Après un arrêt
+brutal, vérifier qu'aucun service Sécurité ne tourne avant de retirer le dossier
+verrou `.updates/dependency-audit/service`.
+
+Après une correction validée, l'onglet demande de **reconstruire et relancer
+Podman**, avec la commande correspondante. Un simple redémarrage des anciens
+conteneurs ne met pas leurs dépendances à jour. L'avertissement persiste après
+un nouvel audit et disparaît lorsque le verrou embarqué dans le backend
+correspond aux corrections. Recharger la page après la reconstruction.
+
+Le mode terminal reste disponible, indépendamment de l'onglet :
+
 Depuis la racine, avec Node et npm, sans sudo :
 
 ```bash

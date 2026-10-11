@@ -46,6 +46,10 @@ for (const failed of [false, true]) test(`candidate ${failed ? 'failed tests pre
   assert.ok(tested);
   assert.equal(await fs.readFile(path.join(root, 'src/package-lock.json'), 'utf8'), failed ? 'original' : 'corrected');
   if (!failed) assert.equal(await fs.readFile(path.join(root, '.updates/dependency-audit/previous-package-lock.json'), 'utf8'), 'original');
+  if (!failed) {
+    const later = await auditDependencies({ root, runNpm: async () => audit(0) });
+    assert.equal(later.pendingLockHash, later.auditedLockHash, 'a subsequent audit retains the pending rebuild');
+  }
 });
 
 test('registry error is not treated as a clean audit and releases its lock', async t => {
