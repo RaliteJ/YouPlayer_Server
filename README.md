@@ -73,6 +73,8 @@ Une fois le serveur installé :
 
 Les contrôles du lecteur permettent ensuite de mettre en pause, de changer de morceau et d'activer la lecture aléatoire.
 
+La lecture est sauvegardée sur votre compte : en ouvrant YouPlayer avec le même compte sur un autre appareil, vous retrouvez le morceau, sa position et la file à venir. La position est enregistrée environ chaque seconde pendant la lecture, ainsi qu'à la pause et lorsque vous quittez la page. L'ancien appareil se met en pause lorsqu'il détecte la reprise ailleurs. Si le navigateur bloque le démarrage automatique du son, appuyez sur Lecture pour reprendre à la position retrouvée.
+
 Un compte **admin** ouvre les outils de gestion. Pour écouter, demandez un compte **user** ou créez-en un depuis Admin si vous gérez vous-même l'instance.
 
 <a id="comptes-et-confidentialite"></a>

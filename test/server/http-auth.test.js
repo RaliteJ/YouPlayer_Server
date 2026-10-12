@@ -275,6 +275,57 @@ async function login(client, pseudo = 'user', password = 'password123') {
 	return response.body.user;
 }
 
+test('account playback moves between sessions with the full queue and isolated ownership', async () => {
+	const phone = createClient();
+	const computer = createClient();
+	const stranger = createClient();
+	const admin = createClient();
+	const anonymous = createClient();
+	const store = app.locals.youplayerStore;
+	const user = await store.createUser({ pseudo: 'resume-account', password: 'resume-password123' });
+	await login(phone, 'resume-account', 'resume-password123');
+	await login(computer, 'resume-account', 'resume-password123');
+	await login(stranger, 'second');
+	await login(admin, 'admin');
+	const tracks = Array.from({ length: 25 }, (_, i) => ({ type: 'local', title: `Resume ${i}`, url: `resume-${i}.mp3` }));
+	await writeFile(path.join(tempRoot, 'local_song', tracks[0].url), 'synthetic audio');
+	await writeFile(path.join(tempRoot, 'local_song', tracks[1].url), 'synthetic next');
+	await store.appendPlaylistItems(user.id, 'account-resume', tracks);
+	await phone.request('/playlist_used', { method: 'POST', body: { arg: ['account-resume.json'], random: false } });
+	const first = await phone.request('/next_song');
+	assert.equal(first.status, 200);
+	const checkpoint = { trackId: first.body.currentId, trackKey: trackLikeKey(first.body.current),
+		position: 42.75, playing: true, repeat: true, claim: true };
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: checkpoint })).status, 204);
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: checkpoint, skipOrigin: true })).status, 403);
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: { ...checkpoint, position: -1 } })).status, 400);
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: { ...checkpoint, trackKey: 'wrong' } })).status, 409);
+	assert.equal((await anonymous.request('/account_playback/restore', { method: 'POST', body: {} })).status, 401);
+	assert.equal((await admin.request('/account_playback/restore', { method: 'POST', body: {} })).status, 403);
+	assert.equal((await stranger.request('/account_playback/restore', { method: 'POST', body: {} })).status, 204);
+	assert.equal((await computer.request('/account_playback/restore', { method: 'POST', body: {}, skipOrigin: true })).status, 403);
+	const restored = await computer.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(restored.status, 200);
+	assert.equal(restored.body.current.title, 'Resume 0');
+	assert.deepEqual(restored.body.resume.position, 42.75);
+	assert.equal(restored.body.resume.playing, true);
+	assert.equal(restored.body.resume.repeat, true);
+	assert.equal((await computer.request('/playlist')).body.length, 25, 'account snapshot keeps more than the 20 displayed upcoming tracks');
+	assert.equal((await computer.request('/play_status/0')).body.status, 'ready');
+	const stale = await phone.request('/account_playback', { method: 'POST', body: { ...checkpoint, claim: false, position: 99 } });
+	assert.equal(stale.status, 409);
+	assert.equal(stale.body.transferred, true);
+	const currentCheckpoint = { ...checkpoint, trackId: restored.body.currentId, trackKey: trackLikeKey(restored.body.current), position: 44, claim: false };
+	assert.equal((await computer.request('/account_playback', { method: 'POST', body: currentCheckpoint })).status, 204);
+	assert.equal((await computer.request('/account_playback/restore', { method: 'POST', body: {} })).body.resume.position, 44);
+	assert.equal((await computer.request('/next_song')).body.current.title, 'Resume 1', 'resume does not consume the next track');
+	assert.equal((await computer.request('/auth/me')).text.includes('playbackResume'), false);
+	await computer.request('/auth/logout', { method: 'POST' });
+	const reopened = createClient();
+	await login(reopened, 'resume-account', 'resume-password123');
+	assert.equal((await reopened.request('/account_playback/restore', { method: 'POST', body: {} })).body.resume.position, 44);
+});
+
 before(async () => {
 	process.env.NODE_ENV = 'test';
 	console.error = () => {};

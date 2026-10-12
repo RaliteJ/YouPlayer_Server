@@ -135,6 +135,22 @@ export class MemoryYouplayerStore {
 		return libraryPreferences(user.libraryPreferences);
 	}
 
+	async saveAccountPlayback(userId, snapshot, owner, claim = false) {
+		const user = await this.findUserById(userId);
+		if (!user) throw new Error('Utilisateur introuvable');
+		if (user.playbackResume && user.playbackResume.owner !== owner && !claim) return false;
+		user.playbackResume = { owner, snapshot: structuredClone(snapshot) };
+		return true;
+	}
+
+	async claimAccountPlayback(userId, owner) {
+		const user = await this.findUserById(userId);
+		if (!user) throw new Error('Utilisateur introuvable');
+		if (!user.playbackResume) return null;
+		user.playbackResume.owner = owner;
+		return structuredClone(user.playbackResume.snapshot);
+	}
+
 	async updateLibraryPreferences(userId, change) {
 		const user = await this.findUserById(userId);
 		if (!user) throw new Error("Utilisateur introuvable");

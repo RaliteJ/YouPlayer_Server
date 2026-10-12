@@ -1,5 +1,155 @@
+import { trackLikeKey } from './client-utils.js';
+
 export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) => fetch(...args) }) {
     return {
+    playbackStorageKey() {
+        if (this.currentUser?.role === 'admin' || (!this.currentUser && this.authEnabled !== false)) return null;
+        return `playbackResume:${this.currentUser?.id ?? 'local'}`;
+    },
+
+    savePlaybackPosition(force = false, nativeSnapshot = null) {
+        const key = this.playbackStorageKey();
+        const audio = nativeSnapshot ? {
+            ...nativeSnapshot, paused: nativeSnapshot.paused === true, ended: false,
+            currentSrc: 'native', readyState: 1
+        } : this.activeAudioPlayer();
+        const trackKey = trackLikeKey(this.playerState.currentTrack);
+        if (!key || !audio || !trackKey || this.currentId == null || this.restoringPlayback || this.pendingPlaybackSeek
+            || this.suppressMainPlayerEvents || this.suppressSpecialPlayerEvents
+            || !audio.currentSrc || audio.readyState < 1 || !Number.isFinite(audio.currentTime)) return;
+        const now = Date.now();
+        if (!force && now - (this.lastPlaybackSave || 0) < 1000) return;
+        const saved = {
+                version: 1, trackId: Number(this.currentId), trackKey,
+                position: audio.ended ? 0 : audio.currentTime,
+                playing: !audio.paused && !audio.ended, repeat: this.repeatTrack === true
+        };
+        try {
+            window.localStorage.setItem(key, JSON.stringify(saved));
+        } catch { /* Private browsing or full storage must not interrupt playback. */ }
+        this.lastPlaybackSave = now;
+        if (this.currentUser && this.accountPlaybackReady && !this.accountPlaybackBlocked) {
+            return this.persistAccountPlayback(saved);
+        }
+    },
+
+    persistAccountPlayback(saved) {
+        // Serialize checkpoints, retaining the latest one while a request runs.
+        // A slow earlier request must never overwrite a newer position.
+        this.accountPlaybackQueued = saved;
+        if (this.accountPlaybackWritePending) return this.accountPlaybackWritePending;
+        const userId = this.currentUser?.id;
+        const generation = this.accountPlaybackGeneration || 0;
+        const pending = (async () => {
+            while (this.accountPlaybackQueued && this.currentUser?.id === userId
+                && (this.accountPlaybackGeneration || 0) === generation && !this.accountPlaybackBlocked) {
+                const checkpoint = this.accountPlaybackQueued;
+                this.accountPlaybackQueued = null;
+                const claim = this.accountPlaybackClaimRequested === true;
+                try {
+                    const response = await fetchImpl(`${API_URL}/account_playback`, {
+                        method: 'POST', credentials: 'include', keepalive: true,
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ...checkpoint, claim }), signal: AbortSignal.timeout(5000)
+                    });
+                    if (this.currentUser?.id !== userId || (this.accountPlaybackGeneration || 0) !== generation) return;
+                    if (response.ok && claim) this.accountPlaybackClaimRequested = false;
+                    if (response.status === 409 && (await response.json()).transferred) {
+                        this.accountPlaybackBlocked = true;
+                        this.accountPlaybackQueued = null;
+                        this.crossfade?.cancel();
+                        this.pauseAudioWithDiagnostics(this.lecteur, 'playback-transferred');
+                        this.showNotice('Lecture reprise sur un autre appareil.');
+                    }
+                } catch { /* Keep the local checkpoint during a temporary connection loss. */ }
+            }
+        })().finally(() => {
+            if (this.accountPlaybackWritePending === pending) this.accountPlaybackWritePending = null;
+        });
+        this.accountPlaybackWritePending = pending;
+        return pending;
+    },
+
+    clearPlaybackPosition() {
+        const key = this.playbackStorageKey();
+        try { if (key) window.localStorage.removeItem(key); } catch {}
+        this.playbackRestoreGeneration = (this.playbackRestoreGeneration || 0) + 1;
+        this.accountPlaybackGeneration = (this.accountPlaybackGeneration || 0) + 1;
+        this.restoringPlayback = false;
+        this.accountPlaybackReady = false;
+        this.accountPlaybackClaimRequested = false;
+        this.accountPlaybackQueued = null;
+        this.pendingPlaybackSeek = false;
+    },
+
+    async restorePlaybackPosition() {
+        const key = this.playbackStorageKey();
+        if (!key || !this.activeAudioPlayer() || this.restoringPlayback || this.lecteur.currentSrc) return;
+        const generation = (this.playbackRestoreGeneration || 0) + 1;
+        this.playbackRestoreGeneration = generation;
+        this.restoringPlayback = true;
+        const stillCurrent = () => this.playbackRestoreGeneration === generation
+            && this.playbackStorageKey() === key && !this.lecteur.currentSrc;
+        try {
+            let saved;
+            let resumed;
+            if (this.currentUser) {
+                this.accountPlaybackBlocked = false;
+                resumed = await this.apiFetch('/account_playback/restore', 'POST', {});
+                if (!stillCurrent()) return;
+                if (resumed === null) return;
+                this.accountPlaybackReady = true;
+                if (resumed?.resume) saved = { ...resumed.resume, trackId: resumed.currentId };
+            }
+            if (!saved) {
+                try { saved = JSON.parse(window.localStorage.getItem(key)); } catch { return; }
+                if (saved?.version !== 1 || !Number.isInteger(saved.trackId) || saved.trackId < 0
+                    || typeof saved.trackKey !== 'string' || !Number.isFinite(saved.position) || saved.position < 0) return;
+                const state = await this.apiFetch('/playback_state');
+                if (!state || !stillCurrent() || state.currentId !== saved.trackId
+                    || trackLikeKey(state.current) !== saved.trackKey) return;
+                resumed = await this.apiFetch('/resume_playback', 'POST', {
+                    trackId: saved.trackId, trackKey: saved.trackKey
+                });
+            }
+            if (!resumed || !stillCurrent()) return;
+            // Show the restored track on the current page while its private
+            // audio file is being prepared, without advancing the queue.
+            this.updatePlaybackUi(resumed);
+            this.setRepeatMode(saved.repeat === true);
+            this.playerState.currentTime = saved.position;
+            this.playerState.loading = true;
+            const path = await this.waitForTrackReady(saved.trackId);
+            if (!path || !stillCurrent()) {
+                if (stillCurrent()) this.playerState.loading = false;
+                return;
+            }
+            this.setMainAudioSource(path, { trigger: 'restore-playback', nextTrackId: saved.trackId });
+            // Seeking waits for metadata, including when autoplay is disallowed.
+            const audio = this.lecteur;
+            const source = audio.src;
+            this.pendingPlaybackSeek = true;
+            const seek = () => {
+                if (this.playbackRestoreGeneration !== generation || audio.src !== source) return;
+                audio.currentTime = Number.isFinite(audio.duration)
+                    ? Math.min(saved.position, Math.max(0, audio.duration - 0.1)) : saved.position;
+                this.pendingPlaybackSeek = false;
+                this.syncStateFromAudio(true);
+            };
+            if (audio.readyState >= 1) seek();
+            else audio.addEventListener('loadedmetadata', seek, { once: true });
+            this.userPausedAudio = saved.playing !== true;
+            if (saved.playing === true) await this.playAudioWithDiagnostics(audio, { trigger: 'restore-playback' });
+            void this.prefetchUpcomingTrack(resumed.queue || []);
+        } catch {
+            if (this.playbackRestoreGeneration === generation) {
+                this.showNotice('La reprise est momentanément indisponible. Réessaie dans un instant.', true);
+            }
+        } finally {
+            if (this.playbackRestoreGeneration === generation) this.restoringPlayback = false;
+        }
+    },
+
     bindAudioEvents() {
         if (!this.lecteur || this.audioEventsBound) return;
         this.audioEventsBound = true;
@@ -47,6 +197,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 this.userPausedAudio = true;
             }
             this.renderPlayerTransport();
+            this.savePlaybackPosition(true);
         });
         this.lecteur.addEventListener('ended', () => {
             if (eventsSuppressed()) return;
@@ -92,6 +243,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.updatePlayerProgress();
         this.renderPlayerTransport();
         this.updateMediaPositionState(player, forcePositionUpdate);
+        this.savePlaybackPosition(forcePositionUpdate);
     },
 
     async handleMainAudioError() {
@@ -176,6 +328,10 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
 
     async playAudioWithDiagnostics(audio, context = {}, { reportRejection = true } = {}) {
         if (!audio) return false;
+        if (['play-pause-control', 'media-session-play', 'restart-current-track'].includes(context.trigger)) {
+            this.accountPlaybackBlocked = false;
+            this.accountPlaybackClaimRequested = true;
+        }
         if (['play-pause-control', 'media-session-play', 'restart-current-track'].includes(context.trigger)) this.sleepTimer?.resume();
         // A transition may resolve after the timer. Its source can be prepared,
         // but leave it paused without treating the user's pause as a play failure.
@@ -265,6 +421,11 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
     },
 
     setMainAudioSource(path, context = {}) {
+        if (context.trigger !== 'restore-playback') {
+            this.playbackRestoreGeneration = (this.playbackRestoreGeneration || 0) + 1;
+            this.restoringPlayback = false;
+        }
+        this.pendingPlaybackSeek = false;
         if (context.crossfadeHandoff) this.crossfade?.beginHandoff(path);
         else this.crossfade?.cancel();
         this.handledPlaybackErrorKey = null;
@@ -771,6 +932,10 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
 
 
     enqueueNextSong(trackId, { playNow = false, collection, collectionIndex = 0 } = {}) {
+        if (playNow) {
+            this.accountPlaybackBlocked = false;
+            this.accountPlaybackClaimRequested = true;
+        }
         if (playNow) this.sleepTimer?.resume();
         let startPlayback = false;
         const previous = this.queueEditPromise || Promise.resolve();

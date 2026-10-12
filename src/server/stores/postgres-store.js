@@ -77,6 +77,7 @@ export class PostgresYouplayerStore {
 			);
 
 			ALTER TABLE yp_users ADD COLUMN IF NOT EXISTS library_preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
+			ALTER TABLE yp_users ADD COLUMN IF NOT EXISTS playback_resume JSONB;
 
 			CREATE TABLE IF NOT EXISTS yp_playlists (
 				id BIGSERIAL PRIMARY KEY,
@@ -210,6 +211,20 @@ export class PostgresYouplayerStore {
 		const result = await this.query('SELECT library_preferences FROM yp_users WHERE id = $1', [userId]);
 		if (!result.rows[0]) throw new Error("Utilisateur introuvable");
 		return libraryPreferences(result.rows[0].library_preferences);
+	}
+
+	async saveAccountPlayback(userId, snapshot, owner, claim = false) {
+		const result = await this.query(`UPDATE yp_users SET playback_resume = $2::jsonb
+			WHERE id = $1 AND (playback_resume IS NULL OR playback_resume->>'owner' = $3 OR $4)
+			RETURNING id`, [userId, JSON.stringify({ owner, snapshot }), owner, claim]);
+		return result.rows.length > 0;
+	}
+
+	async claimAccountPlayback(userId, owner) {
+		const result = await this.query(`UPDATE yp_users
+			SET playback_resume = jsonb_set(playback_resume, '{owner}', to_jsonb($2::text))
+			WHERE id = $1 AND playback_resume IS NOT NULL RETURNING playback_resume`, [userId, owner]);
+		return result.rows[0]?.playback_resume?.snapshot || null;
 	}
 
 	async updateLibraryPreferences(userId, change) {

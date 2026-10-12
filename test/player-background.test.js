@@ -13,6 +13,17 @@ const appSource = (await readFile(new URL('../src/app.js', import.meta.url), 'ut
 const indexSource = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
 const nginxSource = await readFile(new URL('../nginx.conf', import.meta.url), 'utf8');
 
+test('Nginx forwards account checkpoint and resume requests to the authenticated backend', () => {
+	const expression = nginxSource.match(/location ~ (\^\/\(auth\|[^\s]+) \{/)[1];
+	const apiRoutes = new RegExp(expression);
+	for (const route of ['/account_playback', '/account_playback/restore', '/resume_playback']) {
+		assert.equal(apiRoutes.test(route), true, route);
+	}
+	for (const route of ['/server/server.js', '/playlists/private.json', '/account_playback_other']) {
+		assert.equal(apiRoutes.test(route), false, route);
+	}
+});
+
 test('background advancement uses one native ended listener and no duration fallback timer', () => {
 	assert.equal((appSource.match(/this\.lecteur\.addEventListener\('ended'/g) || []).length, 1);
 	assert.match(appSource, /addEventListener\('ended',[\s\S]*advanceToNextSong\('ended'\)/);

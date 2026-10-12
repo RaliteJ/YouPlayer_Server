@@ -1,6 +1,6 @@
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -16,6 +16,172 @@ let baseUrl;
 let tempRoot;
 let browserSetupError;
 const browserExecutablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
+
+test('same account resumes real audio in a separate browser session and pauses the former device', { timeout: 30000 }, async t => {
+	if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
+	const phone = await browser.createBrowserContext();
+	const computer = await browser.createBrowserContext();
+	const other = await browser.createBrowserContext();
+	let preparingRestoredTrack = false;
+	const store = app.locals.youplayerStore;
+	const user = await store.createUser({ pseudo: 'browser-resume', password: 'synthetic-resume-password' });
+	const samples = 8000 * 60;
+	const wav = Buffer.alloc(44 + samples * 2);
+	wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4);
+	wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+	wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+	wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28);
+	wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+	wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+	await writeFile(path.join(tempRoot, 'local_song', 'account-browser-resume.wav'), wav);
+	await store.appendPlaylistItems(user.id, 'browser-resume', [
+		{ type: 'local', url: 'account-browser-resume.wav', title: 'Account resume fixture' },
+		{ type: 'local', url: 'account-browser-resume.wav', title: 'Upcoming fixture' }
+	]);
+	const open = async (context, pseudo, password) => {
+		const page = await context.newPage();
+		page.setDefaultTimeout(6000);
+		await page.setRequestInterception(true);
+		page.on('request', request => {
+			if (preparingRestoredTrack && new URL(request.url()).pathname === '/play_status/0') {
+				return void request.respond({ status: 202, contentType: 'application/json', body: JSON.stringify({ status: 'pending' }) });
+			}
+			if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) void request.continue();
+			else void request.abort();
+		});
+		await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+		await page.evaluate(async ({ pseudo, password }) => {
+			const response = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pseudo, password }) });
+			if (!response.ok) throw new Error('Synthetic login failed');
+		}, { pseudo, password });
+		await page.reload({ waitUntil: 'networkidle0' });
+		return page;
+	};
+	try {
+		const first = await open(phone, 'browser-resume', 'synthetic-resume-password');
+		await first.evaluate(async () => {
+			const { App } = await import(document.querySelector('script[type="module"]').src);
+			await App.apiFetch('/playlist_used', 'POST', { arg: ['browser-resume.json'], random: false });
+			const state = await App.apiFetch('/next_song');
+			App.updatePlaybackUi(state);
+			App.setMainAudioSource('/play/0');
+			await App.lecteur.play();
+			App.lecteur.currentTime = 17.25;
+			await new Promise(resolve => App.lecteur.addEventListener('seeked', resolve, { once: true }));
+			await App.savePlaybackPosition(true);
+		});
+		preparingRestoredTrack = true;
+		const second = await open(computer, 'browser-resume', 'synthetic-resume-password');
+		await second.waitForFunction(() => document.getElementById('actual_song')?.innerText === 'Account resume fixture');
+		assert.equal(await second.$eval('.player-controls', element => element.classList.contains('visible')), true);
+		assert.equal(await second.$eval('#lecteur', audio => audio.currentSrc), '', 'title is shown before the audio is ready');
+		preparingRestoredTrack = false;
+		await second.waitForFunction(() => {
+			const audio = document.getElementById('lecteur');
+			return !audio.paused && audio.currentTime >= 17.25 && audio.currentTime < 25;
+		});
+		await first.waitForFunction(() => document.getElementById('lecteur').paused);
+		assert.equal(await second.$$eval('audio', elements => elements.length), 1);
+		assert.equal(await second.evaluate(async () => (await (await fetch('/playback_state')).json()).queue[0].title), 'Upcoming fixture');
+		const stranger = await open(other, 'second', 'password123');
+		assert.equal(await stranger.$eval('#lecteur', audio => audio.currentSrc), '');
+		// The former device's late checkpoint cannot replace the new position.
+		await first.evaluate(async () => {
+			const { App } = await import(document.querySelector('script[type="module"]').src);
+			App.lecteur.currentTime = 2;
+			await App.savePlaybackPosition(true);
+		});
+		await second.reload({ waitUntil: 'networkidle0' });
+		await second.waitForFunction(() => document.getElementById('lecteur').currentTime >= 17.25);
+	} finally {
+		await Promise.all([phone.close(), computer.close(), other.close()]);
+	}
+});
+
+test('reopening the app restores real audio at the saved position and preserves pause', { timeout: 30000 }, async t => {
+	if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
+	const page = await browser.newPage();
+	page.setDefaultTimeout(6000);
+	const requests = [];
+	const state = { currentId: 0, current: { type: 'local', url: 'resume-fixture.wav', title: 'Synthetic resume' }, queue: [] };
+	const samples = 8000 * 30;
+	const wav = Buffer.alloc(44 + samples * 2);
+	wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4);
+	wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+	wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+	wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28);
+	wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+	wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+	try {
+		await page.setRequestInterception(true);
+		page.on('request', request => {
+			const route = new URL(request.url()).pathname;
+			const json = data => request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(data) });
+			if (route === '/auth/me') return void json({ user: { id: 'resume-user', role: 'user' }, authEnabled: true });
+			if (route === '/playlist_summaries') return void json([]);
+			if (route === '/playlist_preferences') return void json({ pinned: [], recent: [] });
+			if (route === '/liked_tracks') return void json({ items: [] });
+			if (route === '/account_playback' || route === '/account_playback/restore') {
+				return void request.respond({ status: 204 });
+			}
+			if (route === '/playback_state' || route === '/resume_playback') {
+				requests.push(route); return void json(state);
+			}
+			if (route === '/play_status/0') return void json({ status: 'ready', path: '/play/0' });
+			if (route === '/play/0') {
+				const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers().range || '');
+				const start = range ? Number(range[1]) : 0;
+				const end = range?.[2] ? Math.min(Number(range[2]), wav.length - 1) : wav.length - 1;
+				return void request.respond({ status: range ? 206 : 200, contentType: 'audio/wav',
+					headers: { 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${wav.length}` } : {}) },
+					body: wav.subarray(start, end + 1) });
+			}
+			if (!request.url().startsWith(baseUrl)) return void request.abort();
+			void request.continue();
+		});
+		await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+		await page.evaluate(async state => {
+			const { App } = await import(document.querySelector('script[type="module"]').src);
+			App.updatePlaybackUi(state);
+			App.setMainAudioSource('/play/0');
+			await new Promise((resolve, reject) => {
+				App.lecteur.addEventListener('loadedmetadata', resolve, { once: true });
+				setTimeout(() => reject(new Error(`Metadata unavailable: ${App.lecteur.error?.message || App.lecteur.currentSrc}`)), 5000);
+			});
+			App.lecteur.currentTime = 12.5;
+			await new Promise((resolve, reject) => {
+				App.lecteur.addEventListener('seeked', resolve, { once: true });
+				setTimeout(() => reject(new Error('Seek unavailable')), 5000);
+			});
+			App.savePlaybackPosition(true);
+		}, state);
+		await page.reload({ waitUntil: 'networkidle0' });
+		await page.waitForFunction(() => {
+			const audio = document.getElementById('lecteur');
+			return audio.readyState >= 1 && Math.abs(audio.currentTime - 12.5) < 0.1;
+		});
+		assert.equal(await page.$eval('#lecteur', audio => audio.paused), true);
+		assert.equal(await page.$$eval('audio', elements => elements.length), 1);
+		assert.equal(requests.filter(path => path === '/resume_playback').length, 1);
+		// A formerly playing track resumes, with a real advancing media clock.
+		await page.click('#miniPlayPause');
+		await page.waitForFunction(() => !document.getElementById('lecteur').paused);
+		await page.reload({ waitUntil: 'networkidle0' });
+		await page.waitForFunction(() => {
+			const audio = document.getElementById('lecteur');
+			return !audio.paused && audio.currentTime > 12.5 && audio.currentTime < 18;
+		});
+	} catch (error) {
+		t.diagnostic(JSON.stringify(await page.evaluate(() => {
+			const audio = document.getElementById('lecteur');
+			return { position: audio.currentTime, paused: audio.paused, source: audio.currentSrc,
+				ready: audio.readyState, saved: localStorage.getItem('playbackResume:resume-user') };
+		})));
+		throw error;
+	} finally {
+		await page.close();
+	}
+});
 
 test('security tab checks explicitly, shows corrections and Podman rebuild on mobile and desktop', { timeout: 25000 }, async t => {
   if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);

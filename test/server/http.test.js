@@ -576,6 +576,24 @@ test('GET /play_status reports local tracks as ready only when the stored file e
 		status: 'ready',
 		path: '/play/0'
 	});
+	await client.request('/next_song');
+	const before = await client.request('/playback_state');
+	const resumed = await client.request('/resume_playback', {
+		method: 'POST', body: { trackId: 0, trackKey: `local:${localFileName}` }
+	});
+	assert.equal(resumed.status, 200);
+	assert.deepEqual(resumed.body, before.body);
+	const changed = await client.request('/resume_playback', {
+		method: 'POST', body: { trackId: 0, trackKey: 'local:different.mp3' }
+	});
+	assert.equal(changed.status, 409);
+	const other = createClient();
+	await login(other);
+	const isolated = await other.request('/resume_playback', {
+		method: 'POST', body: { trackId: 0, trackKey: `local:${localFileName}` }
+	});
+	assert.equal(isolated.status, 409);
+	assert.deepEqual((await client.request('/playback_state')).body, before.body);
 });
 
 test('legacy direct download and Spotify add routes are closed', async () => {
