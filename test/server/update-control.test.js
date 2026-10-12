@@ -53,3 +53,20 @@ test('update endpoints require a real admin session even when the supplied auth 
 	assert.equal((await request('POST /admin/updates/install', { userId: 'admin', role: 'admin' }, { version: 'v2', url: 'https://untrusted.test', command: 'rm' })).statusCode, 202);
 	assert.deepEqual(jobs, [['install', 'v2']]); assert.equal(audits.length, 1);
 });
+
+test('update failure status only exposes approved codes and stages and blocks recovery requests', async t => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), 'youplayer-update-failure-'));
+	t.after(() => fs.rm(root, { recursive: true, force: true }));
+	const requestsDirectory = path.join(root, 'requests'), statusDirectory = path.join(root, 'status');
+	await fs.mkdir(requestsDirectory);
+	const control = createUpdateControl({ requestsDirectory, statusDirectory, now: () => 50_000 });
+	const status = { heartbeat: 50_000, enabled: false, phase: 'failed', recoveryRequired: true,
+		stage: 'synthetic-private-stage', failure: { code: 'synthetic-private-code', stage: 'synthetic-private-stage', output: 'synthetic-private-output' } };
+	await writeUpdateJson(path.join(statusDirectory, 'status.json'), status);
+	const result = await control.status();
+	assert.deepEqual(result.failure, { code: 'internal', stage: 'startup' });
+	assert.equal(result.stage, null);
+	assert.equal(result.recoveryRequired, true);
+	assert.equal(JSON.stringify(result).includes('synthetic-private'), false);
+	await assert.rejects(control.request('check'), { statusCode: 503 });
+});

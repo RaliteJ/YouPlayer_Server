@@ -33,10 +33,11 @@ for (const failed of [false, true]) test(`candidate ${failed ? 'failed tests pre
       return { code: 0 };
     }
     if (args[0] === 'audit') return audit(checks++ === 0 ? 1 : 0);
-    if (args[0] === 'test') {
+    if (args[0] === 'run') {
+      assert.deepEqual(args, ['run', 'test:security', '--ignore-scripts']);
       tested = true;
       assert.equal(await fs.readFile(path.join(root, 'src/package-lock.json'), 'utf8'), 'original');
-      return { code: failed ? 1 : 0 };
+      return { code: failed ? 1 : 0, stdout: 'synthetic-private-validation-output' };
     }
     assert.equal(args[0], 'ci');
     return { code: 0 };
@@ -45,6 +46,15 @@ for (const failed of [false, true]) test(`candidate ${failed ? 'failed tests pre
   else assert.equal((await auditDependencies({ root, fix: true, runNpm })).status, 'updated-rebuild-required');
   assert.ok(tested);
   assert.equal(await fs.readFile(path.join(root, 'src/package-lock.json'), 'utf8'), failed ? 'original' : 'corrected');
+  if (failed) {
+    const diagnostic = JSON.parse(await fs.readFile(path.join(root, '.updates/dependency-audit/failure.json'), 'utf8'));
+    assert.equal(diagnostic.code, 'tests-failed');
+    assert.equal(diagnostic.stage, 'validation');
+    assert.equal(JSON.stringify(diagnostic).includes('synthetic-private'), false);
+    const log = path.join(root, '.updates/dependency-audit/last-command.log');
+    assert.match(await fs.readFile(log, 'utf8'), /synthetic-private-validation-output/);
+    assert.equal((await fs.stat(log)).mode & 0o777, 0o600);
+  }
   if (!failed) assert.equal(await fs.readFile(path.join(root, '.updates/dependency-audit/previous-package-lock.json'), 'utf8'), 'original');
   if (!failed) {
     const later = await auditDependencies({ root, runNpm: async () => audit(0) });
@@ -83,7 +93,7 @@ test('a concurrent manual dependency change is preserved', async t => {
       return { code: 0 };
     }
     if (args[0] === 'audit') return audit(checks++ === 0 ? 1 : 0);
-    if (args[0] === 'test') await fs.writeFile(path.join(root, 'src/package-lock.json'), 'manual-change');
+    if (args[0] === 'run') await fs.writeFile(path.join(root, 'src/package-lock.json'), 'manual-change');
     return { code: 0 };
   };
   await assert.rejects(auditDependencies({ root, fix: true, runNpm }), /modifiees pendant/);

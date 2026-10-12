@@ -105,7 +105,10 @@ export function createGitReleaseSource(config, { fetchImpl = fetch } = {}) {
 				target = new URL(location, target);
 				continue;
 			}
-			if (!result.ok) { await result.body?.cancel(); throw new Error('Release Git indisponible'); }
+			if (!result.ok) {
+				await result.body?.cancel();
+				throw Object.assign(new Error('Release Git indisponible'), { updateCode: result.status === 404 ? 'release-not-found' : 'release-unavailable' });
+			}
 			return result;
 		}
 		throw new Error('Trop de redirections');

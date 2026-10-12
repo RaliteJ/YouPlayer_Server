@@ -481,11 +481,29 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 'updated-rebuild-required': status.rebuildRequired
                     ? 'Les corrections compatibles ont passé les tests.' : 'Les corrections ont été appliquées au serveur.'
             };
+            const failureLabels = {
+                'npm-missing': 'npm est introuvable pour le service Sécurité. Vérifiez son installation sur l’hôte.',
+                'npm-timeout': 'La commande npm a dépassé le délai prévu ou a été interrompue. Vérifiez le service avant de réessayer.',
+                'npm-failed': 'npm n’a pas pu préparer les corrections. Consultez le diagnostic local du service.',
+                'audit-unavailable': 'Le registre npm n’a pas fourni d’audit valide. Vérifiez son accès réseau et réessayez.',
+                'audit-response': 'La réponse de npm est illisible. Vérifiez npm et son accès au registre.',
+                permissions: 'Le service ne peut pas lire ou écrire les fichiers nécessaires. Vérifiez les permissions du compte utilisateur.',
+                'files-missing': 'Des fichiers nécessaires sont absents. Vérifiez que le dossier d’installation contient les sources et les tests.',
+                'lock-busy': 'Un autre audit est actif ou un verrou subsiste après un arrêt brutal. Vérifiez le service avant de réessayer.',
+                'install-failed': 'L’installation des dépendances candidates a échoué. Les dépendances d’origine ont été conservées.',
+                'tests-failed': 'Les tests de validation des corrections ont échoué. Le verrou d’origine est conservé ; consultez le journal local de validation.',
+                'manifest-change': 'npm propose de modifier les contraintes du projet. Une intervention manuelle est nécessaire.',
+                'dependencies-changed': 'Les dépendances ont été modifiées pendant le contrôle. La correction a été annulée pour conserver ces changements.',
+                'invalid-request': 'La demande de contrôle est invalide. Relancez la vérification.',
+                interrupted: 'Le service a été interrompu pendant le contrôle. Relancez la vérification.'
+            };
+            const failureMessage = Object.hasOwn(failureLabels, status.failure?.code) ? failureLabels[status.failure.code]
+                : 'Le contrôle a échoué. Consultez le diagnostic local du service Sécurité.';
             this.adminSecurityStatus.textContent = !status.online ? 'Le service Sécurité est arrêté. Le dernier résultat reste affiché ci-dessous.'
                 : pending ? 'Demande en attente…'
                 : status.phase === 'checking' ? 'Vérification des dépendances en cours…'
                 : status.phase === 'fixing' ? 'Préparation des corrections et validation par les tests…'
-                : status.phase === 'failed' ? 'Le contrôle a échoué. Aucune nouvelle correction validée. Vérifiez le service Sécurité.'
+                : status.phase === 'failed' ? failureMessage
                 : labels[status.result] || labels['not-checked'];
             const date = document.getElementById('admin-security-date');
             if (date) date.textContent = status.checkedAt
@@ -562,19 +580,56 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 const status = await response.json();
                 const pending = this.updateRequestId && this.updateRequestId !== status.requestId;
                 const busy = ['checking', 'downloading', 'backing_up', 'restarting', 'rolling_back'].includes(status.phase);
+                const stages = {
+                    configuration: 'configuration', release: 'lecture de la release signée', preflight: 'contrôle de l’installation',
+                    download: 'récupération des images', backup: 'sauvegarde', recreate: 'remplacement des conteneurs',
+                    health: 'vérification du démarrage', commit: 'enregistrement de la version', rollback: 'retour à la version précédente'
+                };
+                const failures = {
+                    'release-not-found': 'Le dépôt ou la release est introuvable. Vérifiez l’adresse configurée et son accès public.',
+                    'release-unavailable': 'Le serveur de releases refuse la demande. Vérifiez sa disponibilité et les limites d’accès.',
+                    'signature-invalid': 'La signature de la release ne correspond pas à la clé publique configurée.',
+                    'release-invalid': 'La release est incomplète, incompatible ou a changé depuis la vérification.',
+                    'registry-refused': 'Le registre de cette release n’est pas autorisé dans la configuration.',
+                    network: 'Le service ne peut pas joindre le serveur de releases. Vérifiez la connexion réseau.',
+                    'environment-invalid': 'La configuration locale est absente ou invalide. Vérifiez le fichier .env sur l’hôte.',
+                    'project-mismatch': 'Le nom du projet configuré ne correspond pas aux conteneurs de l’installation.',
+                    'project-conflict': 'Une autre installation partage le port ou les données. Identifiez les deux installations avant de réessayer.',
+                    'containers-missing': 'Les conteneurs attendus sont absents. Vérifiez le projet Podman de cette installation.',
+                    'resources-mismatch': 'Les volumes, réseaux ou dossiers ne correspondent pas à l’installation attendue.',
+                    'image-mismatch': 'Les images démarrées ne correspondent pas aux images attendues.',
+                    'deployment-changed': 'L’installation a été modifiée pendant le contrôle. Relancez la vérification.',
+                    unhealthy: 'Les conteneurs n’ont pas atteint un état sain dans le délai prévu.',
+                    'command-missing': 'Podman ou Compose est introuvable pour le service de mise à jour.',
+                    'command-timeout': 'Une commande de déploiement a dépassé le délai prévu.',
+                    'command-failed': 'Une commande Podman ou Compose a échoué. Consultez son diagnostic sur l’hôte.',
+                    'port-conflict': 'Le port de l’application est déjà utilisé par un autre service.',
+                    'disk-full': 'L’espace disque disponible est insuffisant pour la mise à jour.',
+                    permissions: 'Le service n’a pas les permissions nécessaires sur l’installation.',
+                    'files-missing': 'Un fichier nécessaire au service est absent.',
+                    'recovery-required': 'La transaction interrompue nécessite une vérification sur l’hôte.'
+                };
+                const reason = Object.hasOwn(failures, status.failure?.code) ? failures[status.failure.code]
+                    : 'Consultez le diagnostic local du service de mise à jour.';
+                const step = Object.hasOwn(stages, status.failure?.stage) ? ` Étape : ${stages[status.failure.stage]}.` : '';
                 const labels = {
                     idle: status.updateAvailable ? 'Une nouvelle version est disponible.' : 'Aucune mise à jour détectée.',
                     checking: 'Recherche de la nouvelle version…', downloading: `Téléchargement : ${status.progress || 0} %`,
-                    backing_up: 'Sauvegarde des données…', restarting: 'Installation et redémarrage…',
+                    backing_up: 'Sauvegarde des données…', restarting: status.stage === 'health'
+                        ? 'Vérification du démarrage des nouveaux conteneurs…' : status.stage === 'commit'
+                            ? 'Enregistrement de la version installée…' : 'Remplacement des conteneurs…',
                     rolling_back: 'Retour à la version précédente…', succeeded: 'Mise à jour terminée.',
-                    failed: status.rolledBack ? 'Installation échouée. La version précédente a été rétablie.' : 'Opération échouée. Vérifie le service de mise à jour.'
+                    failed: `${status.rolledBack ? 'Installation échouée. La version précédente a été rétablie. ' : 'Opération échouée. '}${reason}${step}`
                 };
-                this.adminUpdateStatus.textContent = !status.enabled ? 'Les mises à jour ne sont pas encore configurées.'
+                this.adminUpdateStatus.textContent = status.recoveryRequired
+                    ? `Récupération nécessaire sur l’hôte. Les installations sont bloquées. ${reason}${step}`
+                    : status.phase === 'failed' && !pending ? labels.failed
+                    : !status.enabled ? 'Les mises à jour ne sont pas encore configurées.'
                     : !status.online ? 'Le service de mise à jour est arrêté.'
                         : pending ? 'Demande en attente…' : labels[status.phase] || 'Vérification…';
-                this.adminUpdateVersions.textContent = [status.currentVersion && `Version actuelle : ${status.currentVersion}`,
+                this.adminUpdateVersions.textContent = [status.currentVersion && `Version actuelle${status.versionVerified === false ? ' estimée' : ''} : ${status.currentVersion}`,
                     status.latestVersion && `Dernière release : ${status.latestVersion}`].filter(Boolean).join(' · ');
-                this.adminUpdateCheck.disabled = !status.enabled || !status.online || busy || Boolean(pending);
+                this.adminUpdateCheck.disabled = status.recoveryRequired || !status.enabled || !status.online || busy || Boolean(pending);
                 this.adminUpdateInstall.disabled = this.adminUpdateCheck.disabled || !status.updateAvailable;
                 this.updateLatestVersion = status.latestVersion;
                 keepPolling = Boolean(pending || busy);

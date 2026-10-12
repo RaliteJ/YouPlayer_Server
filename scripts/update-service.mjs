@@ -1,18 +1,24 @@
 import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import https from 'node:https';
 import { createPublicKey } from 'node:crypto';
 import { backupProduction, verifyBackup } from './production.mjs';
 import { createGitReleaseSource, updateProvider, validateImageRepository, validateRegistryImages, compareReleaseVersions } from './update-channel.mjs';
-import { writeUpdateJson, updateBusy } from '../src/server/update-control.js';
+import { writeUpdateJson, updateBusy, safeUpdateFailure } from '../src/server/update-control.js';
+import { createDeployment, composeEnvironment, deploymentError, lockUpdateService } from './update-deployment.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const execute = promisify(execFile);
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const imageIdsValid = images => ['backend', 'frontend'].every(service => /^[a-f0-9]{64}$/.test(images?.[service]));
+const probeReady = () => new Promise(resolve => {
+	const request = https.get('https://127.0.0.1:8443/health/ready', { rejectUnauthorized: false, timeout: 5000 }, response => {
+		response.resume(); resolve(response.statusCode === 200);
+	});
+	request.on('error', () => resolve(false));
+	request.on('timeout', () => { request.destroy(); resolve(false); });
+});
 
 function validateJob(job) {
 	if (!/^[a-f0-9-]{36}$/.test(job?.id) || !['check', 'install'].includes(job.action)
@@ -29,10 +35,53 @@ async function readJob(file) {
 	} finally { await handle.close(); }
 }
 
-async function command(program, args, cwd) {
-	const timeout = program === 'podman-compose' ? 5 * 60_000 : ['load', 'pull'].includes(args[0]) ? 10 * 60_000 : 30_000;
-	try { return (await execute(program, args, { cwd, timeout, maxBuffer: 4 * 1024 * 1024 })).stdout; }
-	catch { throw new Error('Commande de mise a jour echouee ; sortie privee masquee'); }
+export async function runUpdateCommand(program, args, cwd, env = process.env, timeoutMs) {
+	const timeout = timeoutMs ?? (program === 'podman-compose' ? 5 * 60_000 : ['load', 'pull'].includes(args[0]) ? 10 * 60_000 : 30_000);
+	try {
+		return await new Promise((resolve, reject) => {
+			// execFile does not forward detached; spawn gives Compose and its
+			// children their own process group, which can be stopped together.
+			const child = spawn(program, args, { cwd, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+			const stdout = [], stderr = [];
+			let length = 0, timedOut = false, overflow = false;
+			function stop() {
+				try {
+					if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+					else child.kill('SIGKILL');
+				} catch { /* Already exited. */ }
+			}
+			const timer = setTimeout(() => { timedOut = true; stop(); }, timeout);
+			function collect(chunks, chunk) {
+				length += chunk.length;
+				if (length > 4 * 1024 * 1024) { overflow = true; stop(); return; }
+				chunks.push(chunk);
+			}
+			child.stdout.on('data', chunk => collect(stdout, chunk));
+			child.stderr.on('data', chunk => collect(stderr, chunk));
+			child.once('error', error => { clearTimeout(timer); reject(error); });
+			child.once('close', code => {
+				clearTimeout(timer);
+				if (code === 0 && !timedOut && !overflow) resolve(Buffer.concat(stdout).toString('utf8'));
+				else reject(Object.assign(new Error('Commande echouee'), { killed: timedOut, stderr: Buffer.concat(stderr).toString('utf8') }));
+			});
+		});
+	}
+	catch (error) {
+		const output = String(error.stderr || '');
+		const code = error.code === 'ENOENT' ? 'command-missing' : error.killed ? 'command-timeout'
+			: /address already in use|port is already allocated/i.test(output) ? 'port-conflict'
+			: /no space left on device/i.test(output) ? 'disk-full' : 'command-failed';
+		// Raw command output stays on the host, outside the mounted status directory.
+		await (async () => {
+			const handle = await fs.open(path.join(cwd, '.updates', 'host', 'last-command.log'),
+				constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+			try {
+				await handle.chmod(0o600);
+				await handle.writeFile(`${program} (${code})\n${output.slice(-1024 * 1024)}`);
+			} finally { await handle.close(); }
+		})().catch(() => {});
+		throw deploymentError(code);
+	}
 }
 
 export async function initializeUpdates(root = ROOT) {
@@ -42,16 +91,20 @@ export async function initializeUpdates(root = ROOT) {
 	}
 }
 
-export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', sourceFactory = createGitReleaseSource,
+export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', port = 8443, sourceFactory = createGitReleaseSource,
+	healthTimeoutMs = 180_000, healthIntervalMs = 2000,
 	initialVersion,
-	runCommand = (program, args) => command(program, args, root),
+	runCommand = (program, args) => runUpdateCommand(program, args, root, ['podman-compose', 'python3'].includes(program) ? composeEnvironment(root, project) : process.env),
 	backup = () => backupProduction({ root, project, maintenance: true }),
-	verify = verifyBackup, readiness, wait = sleep } = {}) {
+	verify = verifyBackup, readiness, readinessProbe = probeReady, wait = sleep } = {}) {
 	if (!/^[a-z][a-z0-9-]*$/.test(project)) throw new Error('Projet invalide');
+	root = path.resolve(root);
 	const directory = path.join(root, '.updates');
 	const host = path.join(directory, 'host');
 	const statusFile = path.join(directory, 'status', 'status.json');
-	let state = { enabled: false, phase: 'idle', currentVersion: 'Installation actuelle' };
+	let state = { enabled: false, phase: 'idle', currentVersion: 'Version non identifiée', versionVerified: false, recoveryRequired: false };
+	const target = createDeployment({ root, project, port, runCommand });
+	let processing = false;
 	let active = null;
 	let writing = Promise.resolve();
 	const maintenanceLock = path.join(root, 'backups', '.backup-lock');
@@ -74,6 +127,12 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 		writing = writing.catch(() => {}).then(() => writeUpdateJson(statusFile, snapshot));
 		await writing;
 	}
+	async function failed(error, stage = state.stage, patch = {}) {
+		const failure = safeUpdateFailure(error, stage);
+		await writeUpdateJson(path.join(host, 'failure.json'), { ...failure, failedAt: new Date().toISOString() });
+		console.error(`Mise a jour : ${failure.code} (${failure.stage})`);
+		await publish({ phase: 'failed', updateAvailable: false, failure, ...patch });
+	}
 	async function config() {
 		const value = JSON.parse(await fs.readFile(path.join(host, 'config.json'), 'utf8'));
 		updateProvider(value);
@@ -86,64 +145,49 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 		return { repository: value.repository, provider: value.provider, publicKey: value.publicKey,
 			allowedDownloadOrigins: value.allowedDownloadOrigins, allowedImageRepositories: value.allowedImageRepositories };
 	}
-	async function deployment() {
-		const images = {}, healthchecks = {};
-		for (const service of ['backend', 'frontend']) {
-			images[service] = (await runCommand('podman', ['inspect', `${project}_${service}_1`, '--format', '{{.Image}}'])).trim().replace(/^sha256:/, '');
-			const health = JSON.parse((await runCommand('podman', ['inspect', `${project}_${service}_1`, '--format', '{{json .Config.Healthcheck}}'])).trim());
-			if (health?.Test) healthchecks[service] = { test: health.Test };
-		}
-		if (!imageIdsValid(images)) throw new Error('Images actuelles indisponibles');
-		return { images, healthchecks };
-	}
-	async function apply(images, healthchecks = {}) {
+	async function apply(images, previous) {
 		if (!imageIdsValid(images)) throw new Error('Images invalides');
-		const override = path.join(host, 'deploy.json');
-		await writeUpdateJson(override, { services: Object.fromEntries(['backend', 'frontend'].map(service =>
-			[service, { image: images[service], ...(healthchecks[service] ? { healthcheck: healthchecks[service] } : {}) }])) });
-		await runCommand('podman', ['start', `${project}_redis_1`]);
-		await runCommand('podman-compose', ['-p', project, '-f', 'docker-compose.yml', '-f', override,
-			'up', '-d', '--no-build', '--force-recreate', '--no-deps', 'backend', 'frontend']);
+		await target.apply(images, previous, path.join(host, 'deploy.json'));
+	}
+	async function verifyDeployment(images, previous) {
+		const installed = await target.snapshot();
+		if (JSON.stringify(installed.resources) !== JSON.stringify(previous.resources)) throw deploymentError('resources-mismatch');
+		if (['backend', 'frontend'].some(s => installed.images[s] !== images[s])) throw deploymentError('image-mismatch');
 	}
 	async function healthy(images) {
 		if (readiness) return readiness(images);
-		const deadline = Date.now() + 180_000;
+		const deadline = Date.now() + healthTimeoutMs;
 		for (let attempt = 0; attempt < 90 && Date.now() < deadline; attempt++) {
 			let ok = true;
 			for (const service of ['backend', 'frontend', 'redis']) {
 				try {
-					const values = (await runCommand('podman', ['inspect', `${project}_${service}_1`, '--format', '{{.State.Status}} {{.State.Health.Status}} {{.Image}}'])).trim().split(/\s+/);
-					if (values[0] !== 'running' || values[1] !== 'healthy' || (service !== 'redis' && values[2].replace(/^sha256:/, '') !== images[service])) ok = false;
+					const [container] = JSON.parse(await runCommand('podman', ['inspect', `${project}_${service}_1`]));
+					const health = container.State?.Health?.Status || container.State?.Healthcheck?.Status;
+					if (container.State?.Status !== 'running' || health !== 'healthy'
+						|| (service !== 'redis' && container.Image?.replace(/^sha256:/, '') !== images[service])) ok = false;
 				} catch { ok = false; }
 			}
-			if (ok) {
-				const ready = await new Promise(resolve => {
-					const request = https.get('https://127.0.0.1:8443/health/ready', { rejectUnauthorized: false, timeout: 5000 }, response => {
-						response.resume(); resolve(response.statusCode === 200);
-					});
-					request.on('error', () => resolve(false));
-					request.on('timeout', () => { request.destroy(); resolve(false); });
-				});
-				if (ready) return;
-			}
-			await wait(2000);
+			if (ok && await readinessProbe()) return;
+			await wait(healthIntervalMs);
 		}
-		throw new Error('Nouvelle version non saine');
+		throw deploymentError('unhealthy');
 	}
 	async function setTags(images) {
 		for (const service of ['backend', 'frontend']) {
-			await runCommand('podman', ['tag', images[service], `localhost/youplayer-${service}:latest`]);
+			await runCommand('podman', ['tag', images[service], `localhost/youplayer-server-${service}:latest`]);
 		}
 	}
 	async function rollback(transaction) {
-		await publish({ phase: 'rolling_back' });
-		await apply(transaction.previous.images, transaction.previous.healthchecks);
+		await publish({ phase: 'rolling_back', stage: 'rollback' });
+		await apply(transaction.previous.images, transaction.previous);
 		await healthy(transaction.previous.images);
+		await verifyDeployment(transaction.previous.images, transaction.previous);
 		await setTags(transaction.previous.images);
 		active = transaction.active;
 		await writeUpdateJson(path.join(host, 'active.json'), active);
 		await fs.rm(path.join(host, 'transaction.json'));
-		await publish({ phase: 'failed', rolledBack: true, currentVersion: active.version, updateAvailable: true });
+		await publish({ phase: 'failed', rolledBack: true, currentVersion: active.version, updateAvailable: false,
+			versionVerified: imageIdsValid(active.images) && ['backend', 'frontend'].every(s => active.images[s] === transaction.previous.images[s]), recoveryRequired: false });
 	}
 	async function initialize() {
 		await initializeUpdates(root);
@@ -177,13 +221,20 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 		catch (error) { if (error.code !== 'ENOENT') throw new Error('Demande de mise a jour illisible'); }
 		if (transaction) {
 			state.requestId = transaction.requestId;
-			const owner = await fs.readFile(path.join(maintenanceLock, '.update-owner'), 'utf8').catch(() => null);
-			if (owner === transaction.requestId) {
-				await fs.rm(path.join(maintenanceLock, '.update-owner')); await fs.rmdir(maintenanceLock);
+			try {
+				target.validateResources(transaction.previous?.resources);
+				if (!imageIdsValid(transaction.previous?.images)) throw deploymentError('recovery-required');
+				const owner = await fs.readFile(path.join(maintenanceLock, '.update-owner'), 'utf8').catch(() => null);
+				if (owner === transaction.requestId) {
+					await fs.rm(path.join(maintenanceLock, '.update-owner')); await fs.rmdir(maintenanceLock);
+				}
+				await lockMaintenance(transaction.requestId);
+				try { await rollback(transaction); } finally { await unlockMaintenance(); }
+				await fs.rm(path.join(host, 'job.json'), { force: true });
+			} catch (error) {
+				await failed(error, 'rollback', { enabled: false, recoveryRequired: true, rolledBack: false });
+				return;
 			}
-			await lockMaintenance(transaction.requestId);
-			try { await rollback(transaction); } finally { await unlockMaintenance(); }
-			await fs.rm(path.join(host, 'job.json'), { force: true });
 		}
 		try { await config(); state.enabled = true; } catch { state.enabled = false; }
 		await publish();
@@ -198,28 +249,44 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 	}
 	async function processRequest(job) {
 		validateJob(job);
-		await publish({ requestId: job.id, phase: 'checking', progress: 0, rolledBack: false });
+		if (processing || state.recoveryRequired) throw deploymentError('recovery-required');
+		processing = true;
 		let transaction;
 		try {
+			await publish({ requestId: job.id, phase: 'checking', stage: 'configuration', progress: 0, rolledBack: false, failure: null, updateAvailable: false });
 			const settings = await config();
+			await publish({ stage: 'release' });
 			const source = sourceFactory(settings);
 			const candidate = await source.latest();
 			const manifest = candidate.manifest;
 			if (manifest.schema === 2) validateRegistryImages(manifest, settings.allowedImageRepositories);
-			const previous = await deployment();
+			await publish({ stage: 'preflight' });
+			composeEnvironment(root, project);
+			const previous = await target.snapshot();
+			// A signature binding the running image IDs is stronger evidence than
+			// a host checkout tag. Recognize an already installed release without
+			// restarting anything, while preserving the established replay floor.
+			if (['backend', 'frontend'].every(s => manifest.images[s] === previous.images[s])
+				&& (!imageIdsValid(active.images) || (manifest.sequence >= active.sequence
+					&& compareReleaseVersions(manifest.version, active.version) >= 0))) {
+				const confirmed = { version: manifest.version, sequence: manifest.sequence, images: manifest.images };
+				if (JSON.stringify(confirmed) !== JSON.stringify(active)) await writeUpdateJson(path.join(host, 'active.json'), confirmed);
+				active = confirmed;
+			}
+			const versionVerified = imageIdsValid(active.images) && ['backend', 'frontend'].every(s => active.images[s] === previous.images[s]);
 			const available = manifest.sequence > active.sequence
 				&& compareReleaseVersions(manifest.version, active.version) > 0
 				&& ['backend', 'frontend'].some(service => manifest.images[service] !== previous.images[service]);
-			await publish({ enabled: true, latestVersion: manifest.version, updateAvailable: available });
+			await publish({ enabled: true, currentVersion: active.version, latestVersion: manifest.version, updateAvailable: available, versionVerified });
 			if (job.action === 'check') { await publish({ phase: 'idle' }); return; }
-			if (manifest.version === active.version && !available && manifest.sequence === active.sequence) {
+			if (versionVerified && manifest.version === active.version && manifest.sequence === active.sequence && job.version === manifest.version) {
 				await publish({ phase: 'succeeded', updateAvailable: false }); return;
 			}
 			if (!available || manifest.version !== job.version) throw new Error('Release changee ou deja installee');
-			await publish({ phase: 'downloading' });
+			await publish({ phase: 'downloading', stage: 'download' });
 			if (manifest.schema === 2) {
 				const platform = (await runCommand('podman', ['info', '--format', '{{.Host.OS}}/{{.Host.Arch}}'])).trim();
-				if (platform !== manifest.platform) throw new Error('Plateforme incompatible');
+				if (platform !== manifest.platform) throw deploymentError('image-mismatch');
 				for (const [index, service] of ['backend', 'frontend'].entries()) {
 					const reference = manifest.registry[service];
 					await runCommand('podman', ['pull', '--tls-verify=true', '--policy=always', '--platform', manifest.platform, reference]);
@@ -228,7 +295,7 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 					const image = JSON.parse(await runCommand('podman', ['image', 'inspect', reference]));
 					if (image.length !== 1 || image[0].Id?.replace(/^sha256:/, '') !== manifest.images[service]
 						|| `${image[0].Os}/${image[0].Architecture}` !== manifest.platform
-						|| !image[0].RepoDigests?.includes(reference)) throw new Error('Image recuperee invalide');
+						|| !image[0].RepoDigests?.includes(reference)) throw deploymentError('image-mismatch');
 					await publish({ progress: (index + 1) * 50 });
 				}
 			} else {
@@ -240,30 +307,56 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 				await runCommand('podman', ['load', '--input', archive]);
 			}
 			for (const identity of Object.values(manifest.images)) await runCommand('podman', ['image', 'exists', identity]);
-			await publish({ phase: 'backing_up', progress: 100 });
+			await publish({ stage: 'preflight' });
+			if (JSON.stringify(await target.snapshot()) !== JSON.stringify(previous)) throw deploymentError('deployment-changed');
+			await publish({ phase: 'backing_up', stage: 'backup', progress: 100 });
 			const snapshot = await backup();
 			await verify(snapshot.directory);
 			// Share the existing backup mutex through restart/rollback so a daily
 			// maintenance backup cannot stop containers in the middle of deployment.
 			await lockMaintenance(job.id);
+			if (JSON.stringify(await target.snapshot()) !== JSON.stringify(previous)) throw deploymentError('deployment-changed');
 			transaction = { requestId: job.id, previous, active, backup: snapshot.directory };
 			await writeUpdateJson(path.join(host, 'transaction.json'), transaction);
-			await publish({ phase: 'restarting' });
-			await apply(manifest.images);
+			await publish({ phase: 'restarting', stage: 'recreate' });
+			await apply(manifest.images, previous);
+			await publish({ stage: 'health' });
 			await healthy(manifest.images);
+			await verifyDeployment(manifest.images, previous);
+			await publish({ stage: 'commit' });
 			await setTags(manifest.images);
 			active = { version: manifest.version, sequence: manifest.sequence, images: manifest.images };
 			await writeUpdateJson(path.join(host, 'active.json'), active);
 			await fs.rm(path.join(host, 'transaction.json'));
-			await publish({ phase: 'succeeded', currentVersion: active.version, updateAvailable: false });
-		} catch {
+			transaction = null; // The durable commit is complete; display errors must not undo it.
+			await fs.rm(path.join(host, 'failure.json'), { force: true }).catch(() => {});
+			await publish({ phase: 'succeeded', currentVersion: active.version, updateAvailable: false, versionVerified: true });
+		} catch (error) {
+			if (transaction && error.deploymentUntouched) {
+				// A failed preparation must not cause a needless outage by recreating
+				// the still-intact old application in the rollback path.
+				try {
+					if (JSON.stringify(await target.snapshot()) === JSON.stringify(transaction.previous)) {
+						await fs.rm(path.join(host, 'transaction.json'));
+						transaction = null;
+					}
+				} catch { /* If identities cannot be confirmed, retain normal recovery. */ }
+			}
+			// Keep polling active until rollback has actually finished.
+			await failed(error, state.stage, transaction ? { phase: 'rolling_back', stage: 'rollback' } : {});
 			if (transaction) {
-				try { await rollback(transaction); } catch { await publish({ phase: 'failed', rolledBack: false, enabled: false }); }
-			} else await publish({ phase: 'failed' });
-		} finally { await unlockMaintenance(); await fs.rm(path.join(host, 'job.json'), { force: true }); }
+				try { await rollback(transaction); }
+				catch (rollbackError) { await failed(rollbackError, 'rollback', { rolledBack: false, enabled: false, recoveryRequired: true }); }
+			}
+		} finally {
+			try {
+				await unlockMaintenance();
+				if (!state.recoveryRequired) await fs.rm(path.join(host, 'job.json'), { force: true });
+			} finally { processing = false; }
+		}
 	}
 	async function tick() {
-		if (updateBusy(state.phase)) return;
+		if (processing || updateBusy(state.phase) || state.recoveryRequired) return;
 		if (await fs.stat(path.join(host, 'transaction.json')).then(() => true, () => false)) return;
 		const requestFile = path.join(directory, 'requests', 'request.json');
 		let job;
@@ -271,18 +364,18 @@ export function createUpdateWorker({ root = ROOT, project = 'youplayer-server', 
 			job = await readJob(requestFile);
 		} catch (error) {
 			if (error.code === 'ENOENT') return;
-			await fs.rm(requestFile, { force: true }); await publish({ phase: 'failed' }); return;
+			await fs.rm(requestFile, { force: true }); await failed(deploymentError('invalid-request'), 'request'); return;
 		}
 		// Mark busy before removing the queue slot so concurrent admins cannot install twice.
 		await publish({ phase: 'checking', requestId: job.id });
 		await fs.rename(requestFile, path.join(host, 'job.json'));
-		try { await processRequest(job); } catch { await publish({ phase: 'failed' }); }
+		try { await processRequest(job); } catch (error) { await failed(error); }
 	}
 	async function heartbeat() {
 		if (!updateBusy(state.phase)) {
 			try {
 				await config();
-				state.enabled = !(await fs.stat(path.join(host, 'transaction.json')).then(() => true, () => false));
+				state.enabled = !state.recoveryRequired && !(await fs.stat(path.join(host, 'transaction.json')).then(() => true, () => false));
 			} catch { state.enabled = false; }
 		}
 		await publish();
@@ -300,7 +393,7 @@ async function cli() {
 		if ((!args.includes('--repository') && !args.includes('--from-git')) || !args.includes('--public-key')) throw new Error('Depot et cle publique requis');
 		let repository = option('--repository');
 		if (args.includes('--from-git')) {
-			const remote = (await command('git', ['config', '--get', 'remote.origin.url'], ROOT)).trim();
+			const remote = (await runUpdateCommand('git', ['config', '--get', 'remote.origin.url'], ROOT)).trim();
 			if (/^git@[^:]+:/.test(remote)) repository = remote.replace(/^git@([^:]+):/, 'https://$1/');
 			else { const parsed = new URL(remote); repository = `https://${parsed.host}${parsed.pathname}`; }
 		}
@@ -315,15 +408,18 @@ async function cli() {
 		console.log(JSON.stringify({ ok: true })); return;
 	}
 	if (action !== 'run') throw new Error('Commande : init | configure --repository URL --public-key FICHIER [--gitlab] [--image-repository REGISTRE/DEPOT] | run');
-	const worker = createUpdateWorker();
-	await worker.initialize();
-	let stop = false;
-	process.on('SIGTERM', () => { stop = true; }); process.on('SIGINT', () => { stop = true; });
-	const timer = setInterval(() => worker.heartbeat().catch(() => {}), 5000);
-	try { while (!stop) { await worker.tick(); await sleep(1000); } }
-	finally { clearInterval(timer); }
+	const releaseLock = await lockUpdateService(ROOT);
+	let timer;
+	try {
+		const worker = createUpdateWorker();
+		let stop = false;
+		process.on('SIGTERM', () => { stop = true; }); process.on('SIGINT', () => { stop = true; });
+		timer = setInterval(() => worker.heartbeat().catch(() => {}), 5000);
+		await worker.initialize();
+		while (!stop) { await worker.tick(); await sleep(1000); }
+	} finally { clearInterval(timer); await releaseLock(); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-	cli().catch(() => { console.error('Service de mise a jour indisponible ; sortie privee masquee'); process.exitCode = 1; });
+	cli().catch(error => { const diagnostic = safeUpdateFailure(error); console.error(`Service de mise a jour : ${diagnostic.code} (${diagnostic.stage})`); process.exitCode = 1; });
 }

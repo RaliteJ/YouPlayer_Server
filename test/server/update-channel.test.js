@@ -121,6 +121,16 @@ test('release redirects cannot send requests to an unapproved origin', async () 
 	await assert.rejects(source.latest()); assert.equal(calls, 1);
 });
 
+test('release HTTP failures retain a safe diagnostic without publishing provider response bodies', async () => {
+	for (const status of [404, 403, 429, 500]) {
+		const source = createGitReleaseSource({ repository: 'https://github.com/example/public', publicKey }, {
+			fetchImpl: async () => new Response('synthetic-private-provider-body', { status })
+		});
+		await assert.rejects(source.latest(), error => error.updateCode === (status === 404 ? 'release-not-found' : 'release-unavailable')
+			&& !error.message.includes('synthetic-private'));
+	}
+});
+
 test('public GitLab latest release links use the configured repository origin without authentication', async () => {
 	const source = createGitReleaseSource({ repository: 'https://git.example.test/group/public', provider: 'gitlab', publicKey, token: 'synthetic-token' }, {
 		fetchImpl: async (url, options) => {

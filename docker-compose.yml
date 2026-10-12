@@ -4,6 +4,7 @@ x-podman:
 services:
   backend:
     image: localhost/youplayer-server-backend:latest
+    pull_policy: never
     build:
       context: ./src
       dockerfile: ../Dockerfile.backend
@@ -80,6 +81,7 @@ services:
 
   frontend:
     image: localhost/youplayer-server-frontend:latest
+    pull_policy: never
     build:
       context: .
       dockerfile: Dockerfile.frontend
@@ -108,6 +110,6 @@ networks:
     internal: true
 
 volumes:
-  youplayer_data:
-  redis_data:
-  frontend_certs:
+  youplayer_data: {}
+  redis_data: {}
+  frontend_certs: {}

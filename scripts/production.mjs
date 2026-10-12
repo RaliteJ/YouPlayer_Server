@@ -119,8 +119,13 @@ export async function backupProduction({ root = ROOT, project = 'youplayer-serve
 		const sources = [path.join(root, 'src/playlists'), path.join(root, 'src/local_song')];
 		const writers = running.filter(container => container.Mounts?.some(mount => names.includes(mount.Name) || sources.includes(mount.Source)));
 		if (writers.length && !maintenance) throw new Error('Services actifs : utiliser --maintenance pour une copie coherente');
-		// Backend writers stop before Redis; only originally running containers restart.
-		writers.sort((a, b) => Number(/redis/.test(a.Name)) - Number(/redis/.test(b.Name)));
+		// Stop dependants first; restarting in reverse must bring up Redis,
+		// then backend DNS, then nginx. Podman's ps order is not dependency order.
+		const rank = c => {
+			const service = c.Config?.Labels?.['com.docker.compose.service'] || c.Config?.Labels?.['io.podman.compose.service'];
+			return service === 'frontend' ? 0 : service === 'redis' ? 2 : 1;
+		};
+		writers.sort((a, b) => rank(a) - rank(b));
 		for (const container of writers) {
 			checkInterrupted();
 			restart.unshift(container.Id);

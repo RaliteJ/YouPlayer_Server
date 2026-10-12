@@ -7,7 +7,8 @@
     "start": "node server/server.js",
     "extension:build": "node ../scripts/build-spotify-extension.mjs",
     "extension:check": "node ../scripts/build-spotify-extension.mjs --check",
-    "test": "node --test ../test/*.test.js ../test/server/*.test.js"
+    "test": "node --test ../test/*.test.js ../test/server/*.test.js",
+    "test:security": "node --test ../test/server/*.test.js"
   },
   "dependencies": {
     "connect-redis": "^9.0.0",

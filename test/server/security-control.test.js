@@ -37,7 +37,12 @@ test('security status hides private data, retains pending rebuild and detects in
 test('security host worker only audits on explicit requests and fixes only on fix requests', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'youplayer-security-worker-'));
   const calls = [];
-  const worker = await createSecurityWorker({ root, audit: async options => { calls.push(options); return { status: 'vulnerable', before: { critical: 1 } }; } });
+  let failing = false;
+  const worker = await createSecurityWorker({ root, audit: async options => {
+    calls.push(options);
+    if (failing) throw Object.assign(new Error('synthetic-private-details'), { auditCode: 'tests-failed', stage: 'validation' });
+    return { status: 'vulnerable', before: { critical: 1 } };
+  } });
   t.after(async () => { await worker.close(); await fs.rm(root, { recursive: true, force: true }); });
   await worker.tick();
   assert.equal(calls.length, 0);
@@ -49,9 +54,15 @@ test('security host worker only audits on explicit requests and fixes only on fi
   await control.request('fix');
   await worker.tick();
   assert.equal(calls[1].fix, true);
+  failing = true;
+  await control.request('fix');
+  await worker.tick();
+  const failed = await control.status();
+  assert.deepEqual(failed.failure, { code: 'tests-failed', stage: 'validation' });
+  assert.equal(JSON.stringify(failed).includes('synthetic-private'), false);
   await fs.writeFile(path.join(root, '.updates/requests/security.json'), '{"action":"shell"}');
   await worker.tick();
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.equal((await control.status()).phase, 'failed');
 });
 

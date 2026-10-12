@@ -36,7 +36,7 @@ jobs:
           node-version: '24'
           package-manager-cache: false
       - name: Verifier le mecanisme de mise a jour
-        run: node --test --test-isolation=none test/server/update-control.test.js test/server/update-channel.test.js test/server/update-service.test.js test/server/production-tools.test.js test/account-view.test.js test/spotify-explorer.test.js
+        run: node --test --test-isolation=none test/server/update-control.test.js test/server/update-channel.test.js test/server/update-service.test.js test/server/update-deployment.test.js test/server/update-container-plan.test.js test/server/production-tools.test.js test/account-view.test.js test/spotify-explorer.test.js
       - name: Preparer Podman
         shell: bash
         run: |

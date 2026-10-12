@@ -5,29 +5,30 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeUpdateJson } from '../src/server/update-control.js';
-import { dependencyLockHash } from '../src/server/security-control.js';
+import { dependencyLockHash, safeSecurityFailure } from '../src/server/security-control.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execute = promisify(execFile);
 const levels = ['info', 'low', 'moderate', 'high', 'critical'];
+const failure = (auditCode, message) => Object.assign(new Error(message), { auditCode });
 async function npm(args, cwd) {
   // Do not pass production credentials to npm or to the test suite.
-  const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'PUPPETEER_EXECUTABLE_PATH'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
+  const env = Object.fromEntries(['PATH', 'HOME', 'TMPDIR'].filter(key => process.env[key]).map(key => [key, process.env[key]]));
   Object.assign(env, { CI: 'true', NODE_ENV: 'test', PUPPETEER_SKIP_DOWNLOAD: 'true' });
   try {
     const { stdout } = await execute('npm', args, { cwd, env, timeout: 20 * 60_000, maxBuffer: 16 * 1024 * 1024 });
     return { code: 0, stdout };
   } catch (error) {
-    if (error.code === 1 && !error.killed) return { code: 1, stdout: error.stdout };
-    throw new Error('Commande npm indisponible ou interrompue ; sortie privee masquee');
+    if (typeof error.code === 'number' && !error.killed) return { code: error.code, stdout: error.stdout, stderr: error.stderr };
+    throw failure(error.code === 'ENOENT' ? 'npm-missing' : error.killed ? 'npm-timeout' : 'npm-failed', 'Commande npm indisponible ou interrompue ; sortie privee masquee');
   }
 }
 
 function counts(result) {
   let value;
-  try { value = JSON.parse(result.stdout); } catch { throw new Error('Reponse audit illisible'); }
+  try { value = JSON.parse(result.stdout); } catch { throw failure('audit-response', 'Reponse audit illisible'); }
   const vulnerabilities = value?.metadata?.vulnerabilities;
-  if (value.error || !vulnerabilities || !levels.every(key => Number.isSafeInteger(vulnerabilities[key]) && vulnerabilities[key] >= 0)) throw new Error('Audit indisponible');
+  if (value.error || !vulnerabilities || !levels.every(key => Number.isSafeInteger(vulnerabilities[key]) && vulnerabilities[key] >= 0)) throw failure('audit-unavailable', 'Audit indisponible');
   return Object.fromEntries(levels.map(key => [key, vulnerabilities[key]]));
 }
 const total = value => Object.values(value).reduce((a, b) => a + b, 0);
@@ -47,8 +48,9 @@ export async function auditDependencies({ root = ROOT, fix = false, runNpm = npm
   await fs.mkdir(state, { recursive: true, mode: 0o700 });
   const lock = path.join(state, 'running');
   try { await fs.mkdir(lock, { mode: 0o700 }); }
-  catch (error) { if (error.code === 'EEXIST') throw new Error('Un audit est deja actif (ou son verrou doit etre verifie)'); throw error; }
+  catch (error) { if (error.code === 'EEXIST') throw failure('lock-busy', 'Un audit est deja actif (ou son verrou doit etre verifie)'); throw error; }
   let stage;
+  let currentStage = 'setup';
   try {
     const manifestFile = path.join(root, 'src', 'package.json');
     const lockFile = path.join(root, 'src', 'package-lock.json');
@@ -61,25 +63,41 @@ export async function auditDependencies({ root = ROOT, fix = false, runNpm = npm
     await fs.mkdir(cwd);
     await fs.writeFile(path.join(cwd, 'package.json'), originalManifest);
     await fs.writeFile(path.join(cwd, 'package-lock.json'), originalLock);
-    const before = counts(await runNpm(['audit', '--json', '--ignore-scripts'], cwd));
+    async function run(args, step) {
+      currentStage = step;
+      const result = await runNpm(args, cwd);
+      if (result.code !== 0 || step === 'validation') {
+        const file = path.join(state, 'last-command.log');
+        const handle = await fs.open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+        try {
+          await handle.chmod(0o600);
+          await handle.writeFile(`${step} (exit ${result.code})\n${String(result.stdout || '').slice(-2 * 1024 * 1024)}\n${String(result.stderr || '').slice(-2 * 1024 * 1024)}`);
+        } finally { await handle.close(); }
+      }
+      return result;
+    }
+    const before = counts(await run(['audit', '--json', '--ignore-scripts'], 'audit'));
     let report = { checkedAt: new Date().toISOString(), status: total(before) ? 'vulnerable' : 'clean', before,
       auditedLockHash: dependencyLockHash(originalLock), pendingLockHash: previous.pendingLockHash || null };
     if (fix && total(before)) {
       // npm may return 1 if some advisories have no compatible fix.
-      await runNpm(['audit', 'fix', '--package-lock-only', '--ignore-scripts', '--no-fund'], cwd);
-      const after = counts(await runNpm(['audit', '--json', '--ignore-scripts'], cwd));
+      const correction = await run(['audit', 'fix', '--package-lock-only', '--ignore-scripts', '--no-fund'], 'correction');
+      if (correction.code > 1) throw failure('npm-failed', 'Preparation des corrections npm echouee');
+      const after = counts(await run(['audit', '--json', '--ignore-scripts'], 'correction'));
       const updatedLock = await fs.readFile(path.join(cwd, 'package-lock.json'));
       const updatedManifest = await fs.readFile(path.join(cwd, 'package.json'));
-      if (!updatedManifest.equals(originalManifest)) throw new Error('Correction refusée : package.json modifie');
+      if (!updatedManifest.equals(originalManifest)) throw failure('manifest-change', 'Correction refusée : package.json modifie');
       if (updatedLock.equals(originalLock) || total(after) >= total(before) || levels.some(key => after[key] > before[key])) {
         report.status = 'manual-review';
       } else {
+        currentStage = 'validation';
         for (const directory of ['src', 'scripts', 'test']) await copyCode(path.join(root, directory), path.join(stage, directory));
         // Copying the source above restores the old lock; restore the candidate.
         await fs.writeFile(path.join(cwd, 'package-lock.json'), updatedLock);
-        if ((await runNpm(['ci', '--ignore-scripts', '--no-audit', '--no-fund'], cwd)).code !== 0) throw new Error('Installation candidate echouee ; fichiers originaux conserves');
-        if ((await runNpm(['test', '--ignore-scripts'], cwd)).code !== 0) throw new Error('Tests candidats echoues ; fichiers originaux conserves');
-        if (!(await fs.readFile(manifestFile)).equals(originalManifest) || !(await fs.readFile(lockFile)).equals(originalLock)) throw new Error('Dependances modifiees pendant le controle ; correction annulee');
+        if ((await run(['ci', '--ignore-scripts', '--no-audit', '--no-fund'], 'installation')).code !== 0) throw failure('install-failed', 'Installation candidate echouee ; fichiers originaux conserves');
+        if ((await run(['run', 'test:security', '--ignore-scripts'], 'validation')).code !== 0) throw failure('tests-failed', 'Tests candidats echoues ; fichiers originaux conserves');
+        currentStage = 'save';
+        if (!(await fs.readFile(manifestFile)).equals(originalManifest) || !(await fs.readFile(lockFile)).equals(originalLock)) throw failure('dependencies-changed', 'Dependances modifiees pendant le controle ; correction annulee');
         await fs.writeFile(path.join(state, 'previous-package-lock.json'), originalLock, { mode: 0o600 });
         const pending = path.join(root, 'src', '.dependency-audit-lock.tmp');
         await fs.writeFile(pending, updatedLock, { flag: 'wx', mode: 0o644 });
@@ -89,8 +107,14 @@ export async function auditDependencies({ root = ROOT, fix = false, runNpm = npm
         report.auditedLockHash = report.pendingLockHash = dependencyLockHash(updatedLock);
       }
     }
+    currentStage = 'save';
     await writeUpdateJson(path.join(state, 'report.json'), report);
+    await fs.rm(path.join(state, 'failure.json'), { force: true });
     return report;
+  } catch (error) {
+    const diagnostic = safeSecurityFailure(error, currentStage);
+    await writeUpdateJson(path.join(state, 'failure.json'), { ...diagnostic, failedAt: new Date().toISOString() }).catch(() => {});
+    throw Object.assign(error, { auditCode: diagnostic.code, stage: diagnostic.stage });
   } finally {
     try { if (stage) await fs.rm(stage, { recursive: true, force: true }); }
     finally { await fs.rmdir(lock); }
@@ -106,6 +130,7 @@ export async function createSecurityWorker({ root = ROOT, audit = options => aud
   await fs.mkdir(serviceLock, { mode: 0o700 });
   const priorStatus = await fs.readFile(statusFile, 'utf8').then(JSON.parse).catch(() => null);
   const state = { phase: ['checking', 'fixing'].includes(priorStatus?.phase) ? 'failed' : 'idle',
+    failure: ['checking', 'fixing'].includes(priorStatus?.phase) ? { code: 'interrupted', stage: 'setup' } : null,
     requestId: priorStatus?.requestId,
     report: await fs.readFile(path.join(root, '.updates', 'dependency-audit', 'report.json'), 'utf8').then(JSON.parse).catch(() => null) };
   let writing = Promise.resolve();
@@ -130,17 +155,23 @@ export async function createSecurityWorker({ root = ROOT, audit = options => aud
       if (error.code === 'ENOENT') return;
       await fs.rm(queued, { force: true });
       state.phase = 'failed';
+      state.failure = { code: 'invalid-request', stage: 'setup' };
       await heartbeat();
       return;
     }
     state.phase = job.action === 'fix' ? 'fixing' : 'checking';
+    state.failure = null;
     state.requestId = job.id;
     await heartbeat();
     await fs.rm(queued);
     try {
       state.report = await audit({ root, fix: job.action === 'fix' });
       state.phase = 'finished';
-    } catch { state.phase = 'failed'; }
+    } catch (error) {
+      state.phase = 'failed';
+      state.failure = safeSecurityFailure(error);
+      console.error(`Securite : ${state.failure.code} (${state.failure.stage})`);
+    }
     await heartbeat();
   }
   async function close() {
@@ -175,7 +206,7 @@ async function cli() {
   }
   do {
     try { console.log(JSON.stringify(await auditDependencies({ fix: args.includes('--fix') }))); }
-    catch (error) { console.error(error.message); if (!args.includes('--watch')) { process.exitCode = 1; return; } }
+    catch (error) { const diagnostic = safeSecurityFailure(error); console.error(`Securite : ${diagnostic.code} (${diagnostic.stage})`); if (!args.includes('--watch')) { process.exitCode = 1; return; } }
     if (!args.includes('--watch') || stopped) break;
     await new Promise(resolve => {
       const timer = setTimeout(resolve, 24 * 60 * 60_000);
