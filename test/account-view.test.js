@@ -55,6 +55,15 @@ test('security panel shows counts and rebuild notice, requires explicit actions 
   assert.match(elements['admin-security-counts'].textContent, /Critiques : 1/);
   assert.equal(elements['admin-security-rebuild'].hidden, false);
   assert.equal(h.view.adminSecurityFix.disabled, false);
+  state.phase = 'failed';
+  state.failure = { code: 'tests-failed', output: 'synthetic-private-details' };
+  await h.view.fetchSecurityStatus();
+  assert.match(h.view.adminSecurityStatus.textContent, /tests de validation.*échoué/);
+  assert.equal(h.view.adminSecurityStatus.textContent.includes('synthetic-private'), false);
+  state.failure.code = 'synthetic-private-error';
+  await h.view.fetchSecurityStatus();
+  assert.match(h.view.adminSecurityStatus.textContent, /diagnostic local/);
+  assert.equal(h.view.adminSecurityStatus.textContent.includes('synthetic-private'), false);
   state.online = false;
   await h.view.fetchSecurityStatus();
   assert.equal(h.view.adminSecurityCheck.disabled, true);
@@ -84,6 +93,34 @@ test('admin update controls follow version availability without exposing technic
 	h.view.currentUser.role = 'user';
 	await h.view.startAppUpdate('install');
 	assert.equal(requests.length, 2);
+});
+
+test('update panel distinguishes recreation, health, rollback and host recovery without private output', async () => {
+	const state = { enabled: true, online: true, phase: 'restarting', stage: 'recreate', currentVersion: 'v1', versionVerified: false };
+	const h = harness(async () => ok(state));
+	Object.assign(h.view, { currentUser: { role: 'admin' }, adminUpdateStatus: {}, adminUpdateVersions: {}, adminUpdateCheck: {}, adminUpdateInstall: {} });
+	await h.view.fetchUpdateStatus();
+	assert.match(h.view.adminUpdateStatus.textContent, /Remplacement des conteneurs/);
+	assert.match(h.view.adminUpdateVersions.textContent, /Version actuelle estimée/);
+	state.stage = 'health';
+	await h.view.fetchUpdateStatus();
+	assert.match(h.view.adminUpdateStatus.textContent, /Vérification du démarrage/);
+	state.phase = 'failed';
+	state.failure = { code: 'project-conflict', stage: 'preflight', output: 'synthetic-private' };
+	await h.view.fetchUpdateStatus();
+	assert.match(h.view.adminUpdateStatus.textContent, /autre installation.*port ou les données/);
+	assert.equal(h.view.adminUpdateStatus.textContent.includes('synthetic-private'), false);
+	state.rolledBack = true;
+	state.failure = { code: 'unhealthy', stage: 'health' };
+	await h.view.fetchUpdateStatus();
+	assert.match(h.view.adminUpdateStatus.textContent, /version précédente a été rétablie/);
+	state.enabled = false; state.rolledBack = false; state.recoveryRequired = true;
+	state.failure = { code: 'synthetic-private-code', stage: 'synthetic-private-stage' };
+	await h.view.fetchUpdateStatus();
+	assert.match(h.view.adminUpdateStatus.textContent, /Récupération nécessaire/);
+	assert.equal(h.view.adminUpdateStatus.textContent.includes('synthetic-private'), false);
+	assert.equal(h.view.adminUpdateCheck.disabled, true);
+	assert.equal(h.view.adminUpdateInstall.disabled, true);
 });
 
 test('integration controls show safe individual states and deduplicate explicit checks', async () => {

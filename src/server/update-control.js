@@ -4,13 +4,37 @@ import { randomUUID } from 'node:crypto';
 
 export const UPDATE_PHASES = new Set(['idle', 'checking', 'downloading', 'backing_up', 'restarting', 'rolling_back', 'succeeded', 'failed']);
 export const updateBusy = phase => ['checking', 'downloading', 'backing_up', 'restarting', 'rolling_back'].includes(phase);
+export const UPDATE_STAGES = new Set(['configuration', 'release', 'preflight', 'download', 'backup', 'recreate', 'health', 'commit', 'rollback', 'request', 'startup']);
+const failureCodes = new Set(['internal', 'release-not-found', 'release-unavailable', 'signature-invalid', 'release-invalid',
+	'registry-refused', 'network', 'permissions', 'files-missing', 'command-missing', 'command-timeout', 'command-failed',
+	'environment-invalid', 'project-mismatch', 'project-conflict', 'containers-missing', 'resources-mismatch',
+	'image-mismatch', 'deployment-changed', 'unhealthy', 'recovery-required', 'service-locked', 'invalid-request', 'port-conflict', 'disk-full']);
+const releaseFailures = new Map([
+	['Signature de release invalide', 'signature-invalid'], ['Release Git indisponible', 'release-unavailable'],
+	['Registre non configure', 'registry-refused'], ['Depot image refuse', 'registry-refused'],
+	...['Release invalide', 'Format de release incompatible', 'Archive invalide', 'Version signee differente du tag Git',
+		'Asset de release manquant ou ambigu', 'Assets de release manquants', 'Metadonnees de release invalides',
+		'Release changee ou deja installee'].map(message => [message, 'release-invalid'])
+]);
+export function safeUpdateFailure(error, stage = 'startup') {
+	const native = { EACCES: 'permissions', EPERM: 'permissions', EROFS: 'permissions', ENOENT: 'files-missing' };
+	const code = failureCodes.has(error?.updateCode) ? error.updateCode
+		: releaseFailures.get(error?.message) || native[error?.code]
+		|| (['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT'].includes(error?.cause?.code)
+			|| ['TimeoutError', 'AbortError'].includes(error?.name) ? 'network' : 'internal');
+	return { code, stage: UPDATE_STAGES.has(stage) ? stage : 'startup' };
+}
 
 export async function writeUpdateJson(file, value) {
 	await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
 	const temporary = `${file}.${randomUUID()}.tmp`;
 	try {
-		await fs.writeFile(temporary, JSON.stringify(value), { flag: 'wx', mode: 0o600 });
+		const handle = await fs.open(temporary, 'wx', 0o600);
+		try { await handle.writeFile(JSON.stringify(value)); await handle.sync(); }
+		finally { await handle.close(); }
 		await fs.rename(temporary, file);
+		const directory = await fs.open(path.dirname(file), 'r');
+		try { await directory.sync(); } finally { await directory.close(); }
 	} finally { await fs.rm(temporary, { force: true }); }
 }
 
@@ -29,13 +53,17 @@ export function createUpdateControl({ requestsDirectory, statusDirectory, now = 
 			phase, currentVersion: label(value.currentVersion), latestVersion: label(value.latestVersion),
 			updateAvailable: value.updateAvailable === true, requestId: label(value.requestId),
 			progress: Math.min(100, Math.max(0, Number(value.progress) || 0)),
-			rolledBack: value.rolledBack === true
+			rolledBack: value.rolledBack === true,
+			stage: UPDATE_STAGES.has(value.stage) ? value.stage : null,
+			failure: value.phase === 'failed' ? safeUpdateFailure({ updateCode: value.failure?.code }, value.failure?.stage) : null,
+			recoveryRequired: value.recoveryRequired === true,
+			versionVerified: value.versionVerified === true
 		};
 	}
 	async function request(action, version) {
 		if (!['check', 'install'].includes(action)) throw Object.assign(new Error('Action invalide'), { statusCode: 400 });
 		const current = await status();
-		if (!current.enabled || !current.online) throw Object.assign(new Error('Service de mise a jour indisponible'), { statusCode: 503 });
+		if (!current.enabled || !current.online || current.recoveryRequired) throw Object.assign(new Error('Service de mise a jour indisponible'), { statusCode: 503 });
 		if (updateBusy(current.phase)) throw Object.assign(new Error('Mise a jour deja en cours'), { statusCode: 409 });
 		if (action === 'install' && (!current.updateAvailable || version !== current.latestVersion)) {
 			throw Object.assign(new Error('Verifier la nouvelle version avant installation'), { statusCode: 409 });

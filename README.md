@@ -349,6 +349,58 @@ Les mises à jour depuis Admin sont facultatives et non configurées au clonage.
 
 Les releases officielles sont disponibles sur [RaliteJ/YouPlayer_Server](https://github.com/RaliteJ/YouPlayer_Server/releases). [UPDATES.md](UPDATES.md) décrit la configuration du dépôt, la clé publique de confiance, le lancement du service et, pour le mainteneur, la construction et la publication des releases signées.
 
+#### Installer une mise à jour depuis Admin
+
+Depuis le dossier permanent de l'installation, initialisez puis configurez une
+fois le canal officiel. Ces commandes ne téléchargent et n'installent aucune
+mise à jour :
+
+```bash
+node scripts/update-service.mjs init
+node scripts/update-service.mjs configure \
+  --repository https://github.com/RaliteJ/YouPlayer_Server \
+  --public-key keys/release-public-key.pem
+```
+
+Lancez ensuite le worker avec le même utilisateur que celui qui possède la
+stack Podman et laissez ce terminal ouvert pendant toute l'opération :
+
+```bash
+node scripts/update-service.mjs run
+```
+
+Ce worker ne recherche et n'installe rien de sa propre initiative. Dans
+**Admin → Mises à jour**, cliquez d'abord sur **Vérifier les mises à jour**.
+Contrôlez la version proposée, puis cliquez explicitement sur
+**Installer et redémarrer**. Le service vérifie la signature et les images,
+sauvegarde les données, remplace uniquement backend/frontend, contrôle leur
+santé et tente un retour aux anciennes images en cas d'échec. Ne fermez pas le
+worker et ne lancez pas `podman-compose down` pendant cette opération.
+
+Après la fin de l'installation, vérifiez la stack et la disponibilité HTTPS :
+
+```bash
+podman-compose --env-file .env -p youplayer-server ps
+curl --fail --silent --show-error --insecure https://127.0.0.1:8443/health/ready
+```
+
+Utilisez toujours `--env-file .env -p youplayer-server` pour les commandes
+Compose. Sans `-p`, un dossier nommé `YouPlayer_Server` peut être normalisé en
+projet `youplayer_server`, qui ne correspond pas aux conteneurs
+`youplayer-server_*`. Pour démarrer ou arrêter manuellement la bonne stack :
+
+```bash
+podman-compose --env-file .env -p youplayer-server up -d
+podman-compose --env-file .env -p youplayer-server down
+```
+
+**N'ajoutez pas `-v` à `down`** : cette option supprime les volumes des comptes,
+sessions Redis et certificats. Une mise à jour Admin normale ne demande ni
+`down`, ni `down -v`, ni suppression manuelle d'un conteneur ou d'une
+transaction. Le lancement automatique du worker par systemd n'est pas encore
+installé par le projet ; tant qu'il ne l'est pas, relancez explicitement
+`node scripts/update-service.mjs run` après un redémarrage de l'hôte.
+
 Ne partagez jamais `.env`, `.updates/`, les sauvegardes, journaux, médias ou données des utilisateurs. Toute distribution publique doit conserver uniquement des exemples descriptifs sans valeurs personnelles.
 
 #### Contrôle automatique des dépendances npm
@@ -370,8 +422,8 @@ node scripts/dependency-audit.mjs --serve
 Le processus reste actif et traite uniquement les demandes de l'Admin. Il est
 indépendant de la configuration du dépôt des releases. Il utilise les dossiers
 `requests` et `status` déjà montés par Compose ; aucun accès Podman n'est donné
-au backend. Aucun service de lancement automatique n'est installé. Chromium
-et npm sont nécessaires sur l'hôte pour valider les corrections. Après un arrêt
+au backend. Aucun service de lancement automatique n'est installé. Node et npm
+sont nécessaires sur l'hôte pour valider les corrections. Après un arrêt
 brutal, vérifier qu'aucun service Sécurité ne tourne avant de retirer le dossier
 verrou `.updates/dependency-audit/service`.
 
@@ -400,8 +452,9 @@ pas les failles propres au code, à l'OS ou aux images conteneurs.
 Les corrections utilisent `npm audit fix --package-lock-only --ignore-scripts`,
 sans `--force`, dans un dossier temporaire isolé. Le script exige une diminution
 du nombre de vulnérabilités sans augmentation dans une catégorie de gravité,
-installe les dépendances candidates puis lance `npm test`. Chromium doit être
-disponible pour les tests navigateur (`PUPPETEER_EXECUTABLE_PATH` si nécessaire).
+installe les dépendances candidates puis lance `npm run test:security`, la suite
+de tests serveur sans navigateur. Chromium n'est pas requis pour ce service.
+La suite complète, avec les tests navigateur, reste exécutée dans la CI.
 Un échec conserve les fichiers originaux. Une correction incompatible ou sans
 amélioration est signalée par `manual-review`.
 
@@ -414,6 +467,17 @@ connexion et de la lecture. Un audit ultérieur porte sur le verrou du projet,
 pas sur les conteneurs encore en service. Aucune publication n'est effectuée.
 Après un arrêt brutal, vérifier qu'aucun audit ne tourne avant de retirer le
 dossier verrou `.updates/dependency-audit/running`.
+
+Si **Appliquer les corrections compatibles** échoue, l'onglet indique une cause
+précise : installation candidate impossible, tests serveur en échec,
+permissions ou accès au registre npm.
+
+Le service affiche seulement un code d'erreur et l'étape concernée. Le même
+diagnostic est conservé dans `.updates/dependency-audit/failure.json`. Le journal
+de la dernière commande npm en échec ou de validation est conservé dans
+`.updates/dependency-audit/last-command.log`, avec des permissions privées.
+Consulter ce fichier uniquement sur l'hôte ; il n'est jamais renvoyé dans
+l'interface. Ne pas le publier ni partager son contenu brut.
 
 <a id="organisation"></a>
 

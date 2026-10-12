@@ -1,7 +1,7 @@
 import { createDiscoveryView } from './discovery-view.js';
 import { createPlayerController } from './player-controller.js';
 import { playerView } from './player-view.js';
-import { createAccountView } from './account-view.js?v=20261011-security';
+import { createAccountView } from './account-view.js?v=20261011-security-diagnostics-update-reliability';
 import { playlistView } from './playlist-view.js';
 import { libraryView } from './library-view.js';
 import { bindQueueSwipe } from './track-gestures.js';

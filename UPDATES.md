@@ -12,16 +12,17 @@ Le depot officiel des releases est [RaliteJ/YouPlayer_Server](https://github.com
 ## Preparation volontaire
 
 Utiliser le compte Podman de l'installation, sans sudo. Node >=22.12, Podman
-Compose et flock sont requis. Le backend ne recoit pas de socket Podman.
+Compose, Python 3 (PyYAML) et flock sont requis. Le backend ne recoit pas de socket Podman.
 
 ```bash
 node scripts/update-service.mjs init
 node scripts/update-service.mjs configure --repository https://github.com/RaliteJ/YouPlayer_Server \
-  --public-key .updates/publisher/public-key.pem
+  --public-key keys/release-public-key.pem
 ```
 
-Installer la cle publique Ed25519 fournie par le signataire des releases dans
-`.updates/publisher/public-key.pem`, puis executer la commande de configuration.
+Le fichier `keys/release-public-key.pem` contient la cle publique du signataire
+officiel. Verifier la provenance du code hote avant de configurer cette confiance.
+Pour un autre signataire, utiliser sa cle publique verifiee et adapter le chemin.
 Ne pas generer une nouvelle paire sur chaque installation : une cle differente
 ne pourra pas verifier les releases officielles. Pour un autre depot GitLab,
 modifier l'URL et ajouter `--gitlab`. `.updates/` contient les cles, configuration, archives et transactions
@@ -65,6 +66,99 @@ par la preparation locale de cette distribution.
 Le format v1 remplace backend/frontend ; il ne migre pas les donnees et ne met
 pas a jour automatiquement Redis ou Compose. Conserver des sauvegardes privees
 verifiees et des images compatibles de retour arriere.
+
+## Controles avant installation et reprise apres echec
+
+Le service cible exclusivement le projet `youplayer-server`. Le fichier `.env`
+doit contenir une configuration de production valide ; si `COMPOSE_PROJECT_NAME`
+est renseigne, sa valeur doit etre `youplayer-server`. Chaque commande Compose
+recoit le chemin absolu de ce fichier et son nom explicite, depuis le dossier
+du projet. L'option `--project-directory`, absente d'anciennes versions de
+`podman-compose`, n'est pas necessaire.
+Les variables `YOUPLAYER_*` exportees dans le terminal ne remplacent pas celles
+de l'installation. Le service ne modifie pas `.env`.
+
+Avant de telecharger les images, le service controle les noms et labels des trois
+conteneurs, les trois volumes du projet, les reseaux `private` et `sessions`, les
+dossiers montes et le port 8443. Une autre stack partageant ce port ou ces donnees,
+meme arretee, bloque l'installation avant la sauvegarde et la recreation.
+Les installations qui utilisent une autre topologie sont refusees ; le service
+ne devine pas leur correspondance avec les volumes attendus.
+Une modification de `.env`, de Compose ou des images pendant l'operation annule
+la bascule. Les empreintes de configuration restent dans la transaction privee.
+
+Compose sert uniquement a resoudre la configuration via `config`. Le service
+valide les options prises en charge et refuse une configuration inconnue avant
+le telechargement : il ne supprime pas silencieusement une option de securite.
+La configuration courante du depot est prise en charge ; une personnalisation
+doit etre ajoutee et testee explicitement avant installation.
+
+La recreation utilise directement `podman create`, `stop`, `rm`, `rename` et
+`start`. Les deux candidats sont crees et controles a l'arret avant de couper
+les services existants. Le frontend puis le backend sont arretes proprement et
+retires par leurs identifiants verifies. Les candidats prennent ensuite leurs
+noms habituels et demarrent backend puis frontend. Redis conserve son identite ;
+les volumes et reseaux existants sont reutilises. Les alias DNS, controles de
+sante, espaces utilisateur, options de securite et montages prives sont conserves
+depuis la configuration validee. Aucun `compose run`, `up`, build ou pull n'est
+execute pendant cette bascule. Cela evite la recreation globale que certaines
+versions de Podman Compose effectuent sur un changement de configuration.
+
+Les variables des conteneurs passent par des fichiers temporaires en mode 0600
+dans un dossier prive de l'hote, jamais par les arguments de commande ou l'API.
+Ces fichiers sont retires apres la tentative. Les candidats abandonnes ne sont
+retires a la reprise que si leur identite, leurs labels et leurs montages
+correspondent a cette transaction. Un echec de preparation qui laisse les anciens
+conteneurs intacts ne provoque pas leur recreation inutile.
+Les images de backend/frontend sont controlees apres recreation, puis le service
+attend leur sante et la reponse HTTPS de `/health/ready`. Les deux variantes Podman
+`State.Health` et `State.Healthcheck` sont acceptees. La version n'est enregistree
+comme installee qu'apres ces controles. Les tags locaux correspondent a ceux de
+Compose : `localhost/youplayer-server-backend:latest` et
+`localhost/youplayer-server-frontend:latest`.
+Compose impose `pull_policy: never` pour ces deux images locales : aucun registre
+sur `localhost` n'est necessaire. Avant une recreation ou un retour arriere, le
+service verifie que les deux identifiants d'image sont presents localement.
+L'archive importe des tags de release ; elle ne garantit pas la presence du tag
+`latest`. Une commande Compose lancee seule apres un echec ne remplace donc pas
+la procedure d'installation ou de reprise du service.
+
+Admin distingue le remplacement des conteneurs, la verification du demarrage
+et l'enregistrement de la version. Un echec affiche un code traduit et son etape :
+depot/release introuvable, signature invalide, conflit de projets, configuration,
+images inattendues, delai depasse ou sante insuffisante. Les diagnostics codes
+sont conserves dans `.updates/host/failure.json`. La sortie d'une commande hote en
+echec est conservee uniquement dans `.updates/host/last-command.log` (mode 0600),
+jamais dans l'API. Ce journal peut contenir des informations privees : le consulter
+sur l'hote, ne pas publier ni partager sa sortie brute.
+
+Le retour arriere est declare reussi seulement apres controle des anciennes
+images, des ressources et de la sante. S'il echoue, `transaction.json` et
+`job.json` sont conserves, et toute nouvelle installation est bloquee. Un
+redemarrage explicite du service tente de reprendre le retour arriere avec les
+ressources enregistrees. Les anciennes transactions sans cette description
+des ressources demandent une verification manuelle sur l'hote : aucune ressource
+n'est supprimee ou devinee automatiquement.
+
+Un verrou systeme sur `.updates/host/service.flock` empeche deux services hote de
+traiter la meme installation et se libere apres un arret brutal. Ne jamais
+supprimer ce fichier pendant qu'un service tourne : cela permettrait de verrouiller
+un autre inode. Un ancien `service.lock/pid` actif est respecte pendant la migration.
+Les enregistrements de transaction et de version sont synchronises sur disque.
+Ne pas supprimer la transaction ou les verrous de sauvegarde pour contourner un echec.
+Les commandes ont un delai maximal ; sur l'hote POSIX, un depassement arrete
+aussi leurs sous-processus avant tout retour arriere, afin qu'une ancienne
+commande Compose ne continue pas a modifier les conteneurs pendant la reprise.
+
+Pour migrer, installer le code hote mis a jour, y compris
+`scripts/update-deployment.mjs`, `scripts/update-container-plan.mjs`,
+`scripts/update-compose-config.py` et `src/server/update-control.js`, puis arreter
+l'ancien processus de mise a jour et relancer `node scripts/update-service.mjs run`.
+Le frontend/backend doivent egalement utiliser cette version du code pour afficher
+les nouveaux diagnostics. Une mise a jour d'images ne remplace pas les scripts hote.
+Si deux stacks existent deja, les identifier par leurs labels, montages et volumes
+avant toute suppression ou nouvelle tentative. Ces changements locaux ne nettoient
+pas une installation distante.
 
 ## Transport par couches (registre, schema 2)
 
@@ -155,6 +249,21 @@ certificat dans ce volume avant la bascule.
 
 ### Validation et limites
 
+Le scenario local `node scripts/verify-update-stack.mjs /tmp/ARCHIVE_IMAGES_BASE.tar`
+attend une archive Podman contenant les images backend/frontend `latest` et
+Redis du Compose. Il cree un stockage Podman et des donnees synthetiques dans
+un dossier prive de `/tmp`, puis nettoie ses conteneurs. Les artefacts restent
+dans ce dossier pour diagnostic. Il ne reutilise pas les volumes de l'installation.
+Python 3, PyYAML, podman-compose et Podman avec reseau rootless sont necessaires.
+
+Ce scenario execute une verification Admin sans recreation, une installation
+d'archive signee, un retour arriere apres echec de sante et une reprise avec
+frontend absent. Il controle HTTPS, session utilisateur, playlist, fichiers,
+volumes et identite Redis. Les releases et le transport sont synthetiques et
+locaux ; les healthchecks reels sont executes explicitement, sans minuteur
+systemd dans l'environnement isole. Cela ne valide pas une release distante,
+le transport registre ou un deploiement en production.
+
 Le premier pull et un changement de base/dependances peuvent rester volumineux.
 Le cache de build distant aide a reutiliser les couches de dependances entre
 les runners CI. Aucun gain chiffre n'est garanti sans mesurer les objets
@@ -194,5 +303,11 @@ numeriques ne sont pas installables. La version installee provient de
 le service utilise le dernier tag `v*` accessible depuis HEAD, puis la version
 de `src/package.json` en l'absence de tag numerique valide. Lors de la migration,
 ce checkout doit donc correspondre aux images effectivement installees.
+Cette valeur est affichee comme **estimee** tant que les IDs des images actives
+ne sont pas confirmes par l'enregistrement d'une installation reussie. Lors d'une
+verification, si les images en cours correspondent exactement au manifeste signe,
+le service peut confirmer la version deja installee sans recreation de conteneurs.
+Un enregistrement confirme conserve les controles de version et de sequence
+contre le retour a une ancienne release.
 Le panneau **Admin > Mises a jour** propose **Verifier les mises a jour**, puis
 **Installer et redemarrer** seulement lorsqu'une version admissible est disponible.

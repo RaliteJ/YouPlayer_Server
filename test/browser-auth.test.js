@@ -579,9 +579,12 @@ test('admin update panel follows installation progress and fits mobile and deskt
 		await page.click('#admin-update-install');
 		await page.waitForFunction(() => document.getElementById('admin-update-status').textContent.includes('25 %'));
 		assert.equal(await page.$eval('#admin-update-install', button => button.disabled), true);
-		state = { ...state, phase: 'restarting' };
+		state = { ...state, phase: 'restarting', stage: 'recreate' };
 		await page.evaluate(() => window.updateFixtureApp.fetchUpdateStatus());
-		assert.match(await page.$eval('#admin-update-status', element => element.textContent), /redémarrage/);
+		assert.match(await page.$eval('#admin-update-status', element => element.textContent), /Remplacement des conteneurs/);
+		state = { ...state, stage: 'health' };
+		await page.evaluate(() => window.updateFixtureApp.fetchUpdateStatus());
+		assert.match(await page.$eval('#admin-update-status', element => element.textContent), /Vérification du démarrage/);
 		state = { ...state, phase: 'failed', rolledBack: true };
 		await page.evaluate(() => window.updateFixtureApp.fetchUpdateStatus());
 		assert.match(await page.$eval('#admin-update-status', element => element.textContent), /rétablie/);

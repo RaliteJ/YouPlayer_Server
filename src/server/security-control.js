@@ -5,6 +5,17 @@ import { randomUUID, createHash } from 'node:crypto';
 const phases = new Set(['idle', 'checking', 'fixing', 'finished', 'failed']);
 export const securityBusy = phase => ['checking', 'fixing'].includes(phase);
 export const dependencyLockHash = data => createHash('sha256').update(data).digest('hex');
+const failureCodes = new Set(['npm-missing', 'npm-timeout', 'npm-failed', 'audit-unavailable', 'audit-response',
+  'permissions', 'files-missing', 'lock-busy', 'install-failed', 'tests-failed',
+  'manifest-change', 'dependencies-changed', 'invalid-request', 'interrupted', 'internal']);
+const failureStages = new Set(['setup', 'audit', 'correction', 'installation', 'validation', 'save']);
+export function safeSecurityFailure(value, stage = 'setup') {
+  const nativeCodes = { EACCES: 'permissions', EPERM: 'permissions', EROFS: 'permissions', ENOENT: 'files-missing' };
+  return {
+    code: failureCodes.has(value?.auditCode || value?.code) ? (value.auditCode || value.code) : nativeCodes[value?.code] || 'internal',
+    stage: failureStages.has(value?.stage) ? value.stage : failureStages.has(stage) ? stage : 'setup'
+  };
+}
 
 export function createSecurityControl({ requestsDirectory, statusDirectory, now = Date.now,
   installedLock = new URL('../package-lock.json', import.meta.url) } = {}) {
@@ -26,6 +37,7 @@ export function createSecurityControl({ requestsDirectory, statusDirectory, now 
     return {
       online: age >= 0 && age < 30_000,
       phase: phases.has(value.phase) ? value.phase : 'idle',
+      failure: value.phase === 'failed' ? safeSecurityFailure(value.failure) : null,
       requestId: /^[a-f0-9-]{36}$/.test(value.requestId) ? value.requestId : null,
       result: ['clean', 'vulnerable', 'manual-review', 'updated-rebuild-required'].includes(report.status) ? report.status : 'not-checked',
       checkedAt: typeof report.checkedAt === 'string' && Number.isFinite(Date.parse(report.checkedAt)) ? report.checkedAt : null,
