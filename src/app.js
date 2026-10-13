@@ -1,7 +1,7 @@
 import { createDiscoveryView } from './discovery-view.js';
-import { createPlayerController } from './player-controller.js';
+import { createPlayerController } from './player-controller.js?v=20261012-playback-resume';
 import { playerView } from './player-view.js';
-import { createAccountView } from './account-view.js?v=20261011-security-diagnostics-update-reliability';
+import { createAccountView } from './account-view.js?v=20261012-playback-resume';
 import { playlistView } from './playlist-view.js';
 import { libraryView } from './library-view.js';
 import { bindQueueSwipe } from './track-gestures.js';
@@ -472,6 +472,7 @@ const App = {
         });
 
         document.addEventListener('visibilitychange', () => {
+            if (document.hidden) this.savePlaybackPosition(true);
             this.sleepTimer?.check();
             this.logPageDiagnostic('visibilitychange');
             console.debug('[Player] background:', document.hidden);
@@ -484,6 +485,7 @@ const App = {
             this.logPageDiagnostic('focus');
             void this.reconcilePlaybackAfterWake();
         });
+        window.addEventListener('pagehide', () => this.savePlaybackPosition(true));
     },
 
     escapeHtml(value) {

@@ -13,6 +13,11 @@ const __dirname = dirname(__filename);
 const ROOT_DIR = dirname(__dirname);
 const PLAYLISTS_DIR = path.join(ROOT_DIR, "playlists");
 const MUSIQ_DIR = process.env.YOUPLAYER_MUSIQ_DIR || "/var/www/html/musiq";
+const pendingDownloads = new Map();
+
+function downloadKey(sessionID, id) {
+	return JSON.stringify([String(sessionID), String(id)]);
+}
 
 function downloadFailedPath(sessionID, id) {
 	return path.join(MUSIQ_DIR, String(sessionID), `${id}.failed`);
@@ -23,6 +28,7 @@ function downloadInProgressPath(sessionID, id) {
 }
 
 async function markDownloadFailed(sessionID, id, err) {
+	await fs_promises.mkdir(path.join(MUSIQ_DIR, String(sessionID)), { recursive: true });
 	await fs_promises.writeFile(downloadFailedPath(sessionID, id), err?.message || String(err), "utf8");
 }
 
@@ -111,6 +117,7 @@ export function youtubeDownloadArgs(source, sessionID, id, { nodeBinary = proces
 		'--js-runtimes', `node:${nodeBinary}`,
 		'--remote-components', 'ejs:github',
 		'--extract-audio', '--audio-format', 'mp3',
+		'--check-formats',
 		'--no-playlist', '--no-cookies', '--no-cache-dir',
 		'--output', path.join(MUSIQ_DIR, String(sessionID), `${String(id)}.%(ext)s`),
 		'--', String(source)
@@ -224,7 +231,8 @@ export async function deleteDownloadedTrack(id, sessionID, { musiqDir = MUSIQ_DI
 
 export function check_downloaded(id, sessionID) {
 	if (
-		fs.existsSync(path.join(MUSIQ_DIR, String(sessionID), `${id}.mp3`))
+		pendingDownloads.has(downloadKey(sessionID, id))
+		|| fs.existsSync(path.join(MUSIQ_DIR, String(sessionID), `${id}.mp3`))
 		|| fs.existsSync(downloadInProgressPath(sessionID, id))
 	) {
 		return true
@@ -235,24 +243,28 @@ export function check_downloaded(id, sessionID) {
 }
 
 export function chargement_video(song, id, sessionID) {
+	const key = downloadKey(sessionID, id);
+	if (pendingDownloads.has(key)) return pendingDownloads.get(key);
 	const enqueueDownload = (task) => {
-		downloadQueue.enqueue(task).catch((err) => {
+		const pending = downloadQueue.enqueue(task).catch(async (err) => {
 			logger.error(`Téléchargement échoué pour ${id}:`, err.message);
-			markDownloadFailed(sessionID, id, err).catch((writeErr) => logger.error(writeErr));
-		});
+			await markDownloadFailed(sessionID, id, err).catch((writeErr) => logger.error(writeErr));
+		}).finally(() => pendingDownloads.delete(key));
+		pendingDownloads.set(key, pending);
+		return pending;
 	};
 
 	if (song.type === "spotify") {
 		logger.debug("Téléchargement Spotify:", id);
-		enqueueDownload(() => download_spotify([song.url, id], sessionID, song));
+		return enqueueDownload(() => download_spotify([song.url, id], sessionID, song));
 	}
 	else if (song.id) {
 		logger.debug("Téléchargement depuis l'ID YouTube enregistré");
-		enqueueDownload(() => downloadTrackWithSearchFallback(song, id, sessionID));
+		return enqueueDownload(() => downloadTrackWithSearchFallback(song, id, sessionID));
 	}
 	else if (song.type == "youtube") {
 		logger.debug("Téléchargement YouTube");
-		enqueueDownload(() => downloadTrackWithSearchFallback(song, id, sessionID));
+		return enqueueDownload(() => downloadTrackWithSearchFallback(song, id, sessionID));
 
 	}
 }

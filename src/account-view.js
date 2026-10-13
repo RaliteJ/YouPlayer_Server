@@ -154,6 +154,7 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
             if (this.authScreen) this.authScreen.hidden = true;
             this.renderAuthState();
             if (this.currentUser?.role !== 'admin') void this.refreshLikes();
+            void this.restorePlaybackPosition?.();
         },
 
         async refreshAuthProviders() {
@@ -254,6 +255,10 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         async logout() {
+            const checkpoint = this.savePlaybackPosition?.(true);
+            this.pauseAudioWithDiagnostics(this.lecteur, 'logout');
+            await checkpoint;
+            this.clearPlaybackPosition?.();
             clearTimeout(this.securityPollTimer);
             this.securityRequestId = null;
             this.securityPollUntil = null;
@@ -270,6 +275,7 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 method: 'POST',
                 credentials: 'include'
             }).catch(() => {});
+            this.clearPlaybackPosition?.();
             this.currentUser = null;
             this.selectedPlaylists = [];
             this.pendingPrefetchedTransitions = [];

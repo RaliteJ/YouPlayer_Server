@@ -1,6 +1,6 @@
 import test, { after, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -274,6 +274,90 @@ async function login(client, pseudo = 'user', password = 'password123') {
 	assert.equal(response.status, 200);
 	return response.body.user;
 }
+
+test('reopening retries a failed remote track without changing its private cache key', async () => {
+	const client = createClient();
+	const store = app.locals.youplayerStore;
+	const user = await store.createUser({ pseudo: 'retry-resume', password: 'synthetic-password123' });
+	await login(client, 'retry-resume', 'synthetic-password123');
+	await store.saveAccountPlayback(user.id, {
+		current: { type: 'youtube', id: 'synthetic01', title: 'Synthetic retry', url: 'https://www.youtube.com/watch?v=synthetic01' },
+		queue: [], position: 12, playing: false, repeat: false, random: false,
+		sessionId: 'former-session', updatedAt: '2026-10-12T00:00:00.000Z'
+	}, 'former-session', true);
+	const before = new Set(await readdir(path.join(tempRoot, 'musiq')).catch(() => []));
+	const restored = await client.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(restored.status, 200);
+	const [directory] = (await readdir(path.join(tempRoot, 'musiq'))).filter(name => !before.has(name));
+	const failedPath = path.join(tempRoot, 'musiq', directory, `queue-${restored.body.current.__queueId}.failed`);
+	await writeFile(failedPath, 'Synthetic unavailable audio');
+	assert.equal((await client.request('/play_status/0')).status, 502);
+	const downloadsBefore = downloadQueue.enqueue.mock.calls.length;
+	const retry = await client.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(retry.body.current.__queueId, restored.body.current.__queueId);
+	assert.equal(downloadQueue.enqueue.mock.calls.length, downloadsBefore + 1);
+	await assert.rejects(readFile(failedPath), { code: 'ENOENT' });
+});
+
+test('account playback moves between sessions with the full queue and isolated ownership', async () => {
+	const phone = createClient();
+	const computer = createClient();
+	const stranger = createClient();
+	const admin = createClient();
+	const anonymous = createClient();
+	const store = app.locals.youplayerStore;
+	const user = await store.createUser({ pseudo: 'resume-account', password: 'resume-password123' });
+	await login(phone, 'resume-account', 'resume-password123');
+	await login(computer, 'resume-account', 'resume-password123');
+	await login(stranger, 'second');
+	await login(admin, 'admin');
+	const tracks = Array.from({ length: 25 }, (_, i) => ({ type: 'local', title: `Resume ${i}`, url: `resume-${i}.mp3` }));
+	await writeFile(path.join(tempRoot, 'local_song', tracks[0].url), 'synthetic audio');
+	await writeFile(path.join(tempRoot, 'local_song', tracks[1].url), 'synthetic next');
+	await store.appendPlaylistItems(user.id, 'account-resume', tracks);
+	await phone.request('/playlist_used', { method: 'POST', body: { arg: ['account-resume.json'], random: false } });
+	const first = await phone.request('/next_song');
+	assert.equal(first.status, 200);
+	const checkpoint = { trackId: first.body.currentId, trackKey: trackLikeKey(first.body.current),
+		position: 42.75, playing: true, repeat: true, claim: true };
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: checkpoint })).status, 204);
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: checkpoint, skipOrigin: true })).status, 403);
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: { ...checkpoint, position: -1 } })).status, 400);
+	assert.equal((await phone.request('/account_playback', { method: 'POST', body: { ...checkpoint, trackKey: 'wrong' } })).status, 409);
+	assert.equal((await anonymous.request('/account_playback/restore', { method: 'POST', body: {} })).status, 401);
+	assert.equal((await admin.request('/account_playback/restore', { method: 'POST', body: {} })).status, 403);
+	assert.equal((await stranger.request('/account_playback/restore', { method: 'POST', body: {} })).status, 204);
+	assert.equal((await computer.request('/account_playback/restore', { method: 'POST', body: {}, skipOrigin: true })).status, 403);
+	const restored = await computer.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(restored.status, 200);
+	assert.equal(restored.body.current.title, 'Resume 0');
+	assert.deepEqual(restored.body.resume.position, 42.75);
+	assert.equal(restored.body.resume.playing, true);
+	assert.equal(restored.body.resume.repeat, true);
+	const cacheDirectories = await readdir(path.join(tempRoot, 'musiq'));
+	for (const directory of cacheDirectories) {
+		await writeFile(path.join(tempRoot, 'musiq', directory, 'resume-cache-fixture.mp3'), 'synthetic cache');
+	}
+	const repeated = await computer.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(repeated.body.current.__queueId, restored.body.current.__queueId, 'reopening keeps the private cache key');
+	for (const directory of cacheDirectories) {
+		assert.equal(await readFile(path.join(tempRoot, 'musiq', directory, 'resume-cache-fixture.mp3'), 'utf8'), 'synthetic cache');
+	}
+	assert.equal((await computer.request('/playlist')).body.length, 25, 'account snapshot keeps more than the 20 displayed upcoming tracks');
+	assert.equal((await computer.request('/play_status/0')).body.status, 'ready');
+	const stale = await phone.request('/account_playback', { method: 'POST', body: { ...checkpoint, claim: false, position: 99 } });
+	assert.equal(stale.status, 409);
+	assert.equal(stale.body.transferred, true);
+	const currentCheckpoint = { ...checkpoint, trackId: restored.body.currentId, trackKey: trackLikeKey(restored.body.current), position: 44, claim: false };
+	assert.equal((await computer.request('/account_playback', { method: 'POST', body: currentCheckpoint })).status, 204);
+	assert.equal((await computer.request('/account_playback/restore', { method: 'POST', body: {} })).body.resume.position, 44);
+	assert.equal((await computer.request('/next_song')).body.current.title, 'Resume 1', 'resume does not consume the next track');
+	assert.equal((await computer.request('/auth/me')).text.includes('playbackResume'), false);
+	await computer.request('/auth/logout', { method: 'POST' });
+	const reopened = createClient();
+	await login(reopened, 'resume-account', 'resume-password123');
+	assert.equal((await reopened.request('/account_playback/restore', { method: 'POST', body: {} })).body.resume.position, 44);
+});
 
 before(async () => {
 	process.env.NODE_ENV = 'test';

@@ -19,6 +19,23 @@ async function fixture(t) {
 	return { directory, filePath, reopen, store: await reopen() };
 }
 
+test('account playback persists through restart and rejects the former device after transfer', async t => {
+	const { store, reopen } = await fixture(t);
+	const alice = await store.createUser({ pseudo: 'resume-alice', password: 'synthetic-password' });
+	const bob = await store.createUser({ pseudo: 'resume-bob', password: 'synthetic-password' });
+	const snapshot = { position: 52.5, current: { type: 'local', url: 'synthetic.mp3' }, queue: [], playing: false };
+	assert.equal(await store.saveAccountPlayback(alice.id, snapshot, 'phone'), true);
+	snapshot.position = 0;
+	await store.close();
+	const restarted = await reopen();
+	assert.equal(await restarted.claimAccountPlayback(bob.id, 'other'), null);
+	assert.equal((await restarted.claimAccountPlayback(alice.id, 'computer')).position, 52.5);
+	assert.equal(await restarted.saveAccountPlayback(alice.id, snapshot, 'phone'), false);
+	assert.equal(await restarted.saveAccountPlayback(alice.id, { ...snapshot, position: 60 }, 'computer'), true);
+	assert.equal((await (await reopen()).claimAccountPlayback(alice.id, 'tablet')).position, 60);
+	assert.equal(await restarted.saveAccountPlayback(alice.id, snapshot, 'phone', true), true, 'explicit playback may reclaim ownership');
+});
+
 test('file store restores accounts, password changes, isolated playlists, tokens and logs', async (t) => {
 	const { store, filePath, reopen } = await fixture(t);
 	const first = await store.createUser({ pseudo: 'first', password: 'initial-test-password' });

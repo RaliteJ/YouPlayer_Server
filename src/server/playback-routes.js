@@ -24,7 +24,7 @@ import {
 } from './queue.js';
 
 export function registerPlaybackRoutes(app, {
-	config, firstTrackStreams, playlistAccess, requireAuth, recordAction, sendJsonError
+	config, store, firstTrackStreams, playlistAccess, requireAuth, recordAction, sendJsonError
 }) {
 	const MUSIQ_DIR = config.musiqDir;
 	const LOCAL_SONG_DIR = config.localSongDir;
@@ -137,13 +137,13 @@ export function registerPlaybackRoutes(app, {
 		return tracks;
 	}
 
-	async function initializeSession(req) {
+	async function initializeSession(req, { preserveCache = false } = {}) {
 		const randomEnabled = req.session.random === true;
 		const sessionId = req.sessionID;
 		logger.debug("Nouvelle session créée pour un utilisateur");
 		firstTrackStreams.stopForSession(sessionId, "playlist_replaced");
 		const sessionMusicDir = path.join(MUSIQ_DIR, sessionId);
-		await fs_promises.rm(sessionMusicDir, { recursive: true, force: true });
+		if (!preserveCache) await fs_promises.rm(sessionMusicDir, { recursive: true, force: true });
 		await fs_promises.mkdir(sessionMusicDir, { recursive: true });
 		req.session.stable_playlist_indices = false;
 		req.session.list_order = [];
@@ -401,6 +401,92 @@ export function registerPlaybackRoutes(app, {
 		}
 	});
 
+	app.post('/account_playback', requireAuth, async (req, res) => {
+		try {
+			if (!AUTH_ENABLED) return res.status(204).end();
+			const { trackId, trackKey, position, playing, repeat, claim = false } = req.body || {};
+			if (!Number.isInteger(trackId) || trackId < 0 || typeof trackKey !== 'string'
+				|| !Number.isFinite(position) || position < 0 || position > 86400
+				|| typeof playing !== 'boolean' || typeof repeat !== 'boolean' || typeof claim !== 'boolean') {
+				throw new RequestValidationError('Position de lecture invalide');
+			}
+			const state = playbackState(req);
+			if (state.currentId !== trackId || trackLikeKey(state.current) !== trackKey) {
+				return res.status(409).json({ error: 'Le morceau en cours a changé' });
+			}
+			const snapshot = {
+				position, playing, repeat, random: state.random, sessionId: req.sessionID,
+				current: sanitizeTrackInput(state.current),
+				queue: getUpcomingQueue(req, 5000).map(track => sanitizeTrackInput(track)),
+				updatedAt: new Date().toISOString()
+			};
+			const saved = await store.saveAccountPlayback(req.session.userId, snapshot, req.sessionID, claim);
+			if (!saved) return res.status(409).json({ error: 'La lecture a été reprise sur un autre appareil', transferred: true });
+			res.status(204).end();
+		} catch (error) {
+			sendJsonError(res, error, 'Sauvegarde de lecture impossible', 400);
+		}
+	});
+
+	app.post('/account_playback/restore', requireAuth, async (req, res) => {
+		try {
+			if (!AUTH_ENABLED) return res.status(204).end();
+			const snapshot = await store.claimAccountPlayback(req.session.userId, req.sessionID);
+			if (!snapshot) return res.status(204).end();
+			const sameTrack = trackLikeKey(playbackState(req).current) === trackLikeKey(snapshot.current);
+			const alreadyRestored = req.session.account_playback_restored_at === snapshot.updatedAt && sameTrack;
+			if (!alreadyRestored && (snapshot.sessionId !== req.sessionID || !sameTrack)) {
+				// Reopening must not delete files that are still downloading in
+				// this session or change their cache ids on every page reload.
+				await initializeSession(req, { preserveCache: true });
+				req.session.items = [snapshot.current, ...snapshot.queue].map(track => ({
+					...sanitizeTrackInput(track), __queueId: randomUUID()
+				}));
+				req.session.ecoute_actuelle = 0;
+				req.session.list_order = req.session.items.map((_, index) => index).slice(1).reverse();
+				req.session.queue_initialized = true;
+				req.session.stable_playlist_indices = true;
+				req.session.first_track_special_pending = false;
+				req.session.random = snapshot.random === true;
+			}
+			req.session.account_playback_restored_at = snapshot.updatedAt;
+			req.session.first_track_special_pending = false;
+			const stream = firstTrackStreams.findForSession(req.sessionID);
+			if (stream) firstTrackStreams.stopStream(stream.id, 'resume_playback');
+			await retryResumedTrack(req);
+			req.session.save(error => {
+				if (error) return res.status(503).json({ error: 'Reprise non sauvegardée' });
+				res.json({ ...playbackState(req), resume: {
+					position: snapshot.position, playing: snapshot.playing, repeat: snapshot.repeat,
+					updatedAt: snapshot.updatedAt
+				} });
+			});
+		} catch (error) {
+			sendJsonError(res, error, 'Reprise du compte impossible', 400);
+		}
+	});
+
+	app.post('/resume_playback', requireAuth, async (req, res) => {
+		try {
+			const { trackId, trackKey } = req.body || {};
+			if (!Number.isInteger(trackId) || trackId < 0 || typeof trackKey !== 'string') {
+				throw new RequestValidationError('Reprise invalide');
+			}
+			const state = playbackState(req);
+			if (state.currentId !== trackId || trackLikeKey(state.current) !== trackKey) {
+				return res.status(409).json({ error: 'Le morceau en cours a changé' });
+			}
+			// A disconnected live stream cannot seek. Resume its downloaded file
+			// under the same session, without dequeuing another track.
+			const stream = firstTrackStreams.findForSession(req.sessionID);
+			if (stream) firstTrackStreams.stopStream(stream.id, 'resume_playback');
+			await retryResumedTrack(req);
+			res.json(state);
+		} catch (error) {
+			sendJsonError(res, error, 'Reprise impossible', 400);
+		}
+	});
+
 	async function changeSong(req, res, previous = false) {
 	    try {
 	        const transition = readNativeTransition(req);
@@ -612,6 +698,15 @@ export function registerPlaybackRoutes(app, {
 		listenAfterQueue(req, id,
 			trackId => isDownloadPendingOrDone(trackCacheId(req, trackId), req.sessionID),
 			(song, trackId) => chargement_video(song, trackCacheId(req, trackId), req.sessionID));
+	}
+
+	async function retryResumedTrack(req) {
+		const id = req.session.ecoute_actuelle;
+		if (!Number.isInteger(id) || req.session.items?.[id]?.type === 'local') return;
+		// Reopening is an explicit retry; polling must keep the failure marker
+		// so an unavailable remote track cannot enqueue endlessly.
+		await fs_promises.rm(path.join(MUSIQ_DIR, req.sessionID, `${trackCacheId(req, id)}.failed`), { force: true });
+		listen_after(req, id);
 	}
 
 	function validateSessionTrack(req, trackId) {

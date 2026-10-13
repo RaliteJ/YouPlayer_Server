@@ -94,7 +94,8 @@ for (const method of [
 	"createUser", "changePassword", "setUserPassword", "attachSpotifyConnection",
 	"updateSpotifyTokens", "removeSpotifyConnection", "mergeUserInto",
 	"recordLoginEvent", "recordAuditLog", "ensurePlaylist", "appendPlaylistItems",
-	"setTrackLiked", "deletePlaylist", "deletePlaylistItem", "importPlaylistsFromDirectory", "updateLibraryPreferences"
+	"setTrackLiked", "deletePlaylist", "deletePlaylistItem", "importPlaylistsFromDirectory", "updateLibraryPreferences",
+	"saveAccountPlayback", "claimAccountPlayback"
 ]) {
 	Object.defineProperty(FileYouplayerStore.prototype, method, {
 		value: function (...args) { return this.mutate(method, args); }

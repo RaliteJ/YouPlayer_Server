@@ -292,7 +292,7 @@ async function recordAction(req, action, resourceType = "", resourceId = "", det
 
 const playlistAccess = createPlaylistAccess({ authEnabled: AUTH_ENABLED, store: youplayerStore });
 const { validateSessionTrack, removeSongFromSessionQueue } = registerPlaybackRoutes(app, {
-	config, firstTrackStreams, playlistAccess, requireAuth: requireListener, recordAction, sendJsonError
+	config, store: youplayerStore, firstTrackStreams, playlistAccess, requireAuth: requireListener, recordAction, sendJsonError
 });
 registerYoutubeRoutes(app, { requireAuth: requireListener, sendJsonError, youtubeApiKey: API_KEY });
 registerPlaylistRoutes(app, {
