@@ -89,6 +89,45 @@ test('an unavailable restored track stays visible and leaves loading state', asy
     assert.equal(h.app.playCalls, undefined);
 });
 
+test('switching to a private stream cancels a pending restore and saves the new track', async () => {
+    const writes = [];
+    const h = harness(async (_url, options) => {
+        writes.push(JSON.parse(options.body));
+        return { ok: true, status: 204 };
+    });
+    h.close();
+    let ready;
+    h.app.waitForTrackReady = () => new Promise(resolve => { ready = resolve; });
+    const restoring = h.app.restorePlaybackPosition();
+    while (!ready) await new Promise(resolve => setImmediate(resolve));
+    Object.assign(h.app, {
+        specialPlayer: h.audio, clearMainAudio: () => {},
+        logNextDiagnostic: () => {}, diagnosticInstanceId: () => 'synthetic', requestWakeLock: () => {}
+    });
+    await h.app.startSpecialPlayback({ stream_id: 'synthetic', audio_url: '/audio/synthetic', queue: [] });
+    h.app.currentId = 1;
+    h.app.playerState.currentTrack = { type: 'local', url: 'second.mp3' };
+    h.audio.currentSrc = h.audio.src;
+    h.audio.currentTime = 7;
+    await h.app.savePlaybackPosition(true);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0].trackKey, 'local:second.mp3');
+    ready('/play/0');
+    await restoring;
+    assert.equal(h.audio.src, 'https://player.test/audio/synthetic');
+});
+
+test('switching to a private stream releases an unfinished restored seek', async () => {
+    const h = harness();
+    h.app.pendingPlaybackSeek = true;
+    Object.assign(h.app, {
+        specialPlayer: h.audio, clearMainAudio: () => {},
+        logNextDiagnostic: () => {}, diagnosticInstanceId: () => 'synthetic', requestWakeLock: () => {}
+    });
+    await h.app.startSpecialPlayback({ stream_id: 'synthetic', audio_url: '/audio/synthetic', queue: [] });
+    assert.equal(h.app.pendingPlaybackSeek, false);
+});
+
 test('autoplay refusal leaves the saved seek ready for a user gesture', async () => {
     const h = harness();
     h.close();

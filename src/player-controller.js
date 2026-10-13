@@ -82,6 +82,12 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.pendingPlaybackSeek = false;
     },
 
+    cancelPlaybackRestore() {
+        this.playbackRestoreGeneration = (this.playbackRestoreGeneration || 0) + 1;
+        this.restoringPlayback = false;
+        this.pendingPlaybackSeek = false;
+    },
+
     async restorePlaybackPosition() {
         const key = this.playbackStorageKey();
         if (!key || !this.activeAudioPlayer() || this.restoringPlayback || this.lecteur.currentSrc) return;
@@ -119,7 +125,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             this.setRepeatMode(saved.repeat === true);
             this.playerState.currentTime = saved.position;
             this.playerState.loading = true;
-            const path = await this.waitForTrackReady(saved.trackId);
+            const path = await this.waitForTrackReady(saved.trackId, 90000, { isCurrent: stillCurrent });
             if (!path || !stillCurrent()) {
                 if (stillCurrent()) this.playerState.loading = false;
                 return;
@@ -422,8 +428,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
 
     setMainAudioSource(path, context = {}) {
         if (context.trigger !== 'restore-playback') {
-            this.playbackRestoreGeneration = (this.playbackRestoreGeneration || 0) + 1;
-            this.restoringPlayback = false;
+            this.cancelPlaybackRestore();
         }
         this.pendingPlaybackSeek = false;
         if (context.crossfadeHandoff) this.crossfade?.beginHandoff(path);
@@ -678,6 +683,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         if (!this.specialPlayer || !data?.stream_id || !data?.audio_url) {
             throw new Error('Lecteur spécial indisponible');
         }
+        this.cancelPlaybackRestore();
         if (this.currentSpecialStream) {
             await this.stopSpecialPlayback('replaced');
         }
@@ -1032,13 +1038,13 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         return Boolean(success);
     },
 
-    async waitForTrackReady(trackId, timeoutMs = 90000, { silent = false } = {}) {
+    async waitForTrackReady(trackId, timeoutMs = 90000, { silent = false, isCurrent = () => true } = {}) {
         const startedAt = Date.now();
         let notified = false;
 
-        while (Date.now() - startedAt < timeoutMs) {
+        while (isCurrent() && Date.now() - startedAt < timeoutMs) {
             const status = await this.apiFetch(`/play_status/${encodeURIComponent(trackId)}`);
-            if (!status) return null;
+            if (!isCurrent() || !status) return null;
             if (status.status === 'ready') {
                 return status.path || `/play/${trackId}`;
             }
@@ -1055,7 +1061,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
-        if (!silent) {
+        if (isCurrent() && !silent) {
             this.showNotice('Le téléchargement de la musique a expiré.', true);
         }
         return null;
@@ -1086,6 +1092,11 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         if (this.currentSpecialStream) {
             if (!this.currentSpecialStream.nextEnabled && !['previous', 'select'].includes(reason)) return;
             void this.stopSpecialPlayback('next', { preserveAudio: true });
+        }
+        this.cancelPlaybackRestore();
+        if (['manual', 'media-session', 'select', 'previous'].includes(reason)) {
+            this.accountPlaybackBlocked = false;
+            this.accountPlaybackClaimRequested = true;
         }
         this.nextSongLoading = true;
         this.clearNextTrackPrefetch();

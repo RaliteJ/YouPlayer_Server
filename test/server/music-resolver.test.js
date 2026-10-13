@@ -223,6 +223,7 @@ test('yt-dlp download arguments preserve the existing audio contract without a s
 		'--js-runtimes', 'node:/usr/bin/node', '--remote-components', 'ejs:github', '--extract-audio', '--audio-format'
 	]);
 	assert.equal(args.at(-1), 'https://www.youtube.com/watch?v=correct0001');
+	assert.ok(args.includes('--check-formats'), 'unavailable formats are skipped before downloading the resumed audio');
 	assert.match(args[args.indexOf('--output') + 1], /session-test\/track-test\.%\(ext\)s$/);
 });
 

@@ -1,6 +1,6 @@
 import test, { after, before, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable, Writable } from 'node:stream';
@@ -275,6 +275,30 @@ async function login(client, pseudo = 'user', password = 'password123') {
 	return response.body.user;
 }
 
+test('reopening retries a failed remote track without changing its private cache key', async () => {
+	const client = createClient();
+	const store = app.locals.youplayerStore;
+	const user = await store.createUser({ pseudo: 'retry-resume', password: 'synthetic-password123' });
+	await login(client, 'retry-resume', 'synthetic-password123');
+	await store.saveAccountPlayback(user.id, {
+		current: { type: 'youtube', id: 'synthetic01', title: 'Synthetic retry', url: 'https://www.youtube.com/watch?v=synthetic01' },
+		queue: [], position: 12, playing: false, repeat: false, random: false,
+		sessionId: 'former-session', updatedAt: '2026-10-12T00:00:00.000Z'
+	}, 'former-session', true);
+	const before = new Set(await readdir(path.join(tempRoot, 'musiq')).catch(() => []));
+	const restored = await client.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(restored.status, 200);
+	const [directory] = (await readdir(path.join(tempRoot, 'musiq'))).filter(name => !before.has(name));
+	const failedPath = path.join(tempRoot, 'musiq', directory, `queue-${restored.body.current.__queueId}.failed`);
+	await writeFile(failedPath, 'Synthetic unavailable audio');
+	assert.equal((await client.request('/play_status/0')).status, 502);
+	const downloadsBefore = downloadQueue.enqueue.mock.calls.length;
+	const retry = await client.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(retry.body.current.__queueId, restored.body.current.__queueId);
+	assert.equal(downloadQueue.enqueue.mock.calls.length, downloadsBefore + 1);
+	await assert.rejects(readFile(failedPath), { code: 'ENOENT' });
+});
+
 test('account playback moves between sessions with the full queue and isolated ownership', async () => {
 	const phone = createClient();
 	const computer = createClient();
@@ -310,6 +334,15 @@ test('account playback moves between sessions with the full queue and isolated o
 	assert.deepEqual(restored.body.resume.position, 42.75);
 	assert.equal(restored.body.resume.playing, true);
 	assert.equal(restored.body.resume.repeat, true);
+	const cacheDirectories = await readdir(path.join(tempRoot, 'musiq'));
+	for (const directory of cacheDirectories) {
+		await writeFile(path.join(tempRoot, 'musiq', directory, 'resume-cache-fixture.mp3'), 'synthetic cache');
+	}
+	const repeated = await computer.request('/account_playback/restore', { method: 'POST', body: {} });
+	assert.equal(repeated.body.current.__queueId, restored.body.current.__queueId, 'reopening keeps the private cache key');
+	for (const directory of cacheDirectories) {
+		assert.equal(await readFile(path.join(tempRoot, 'musiq', directory, 'resume-cache-fixture.mp3'), 'utf8'), 'synthetic cache');
+	}
 	assert.equal((await computer.request('/playlist')).body.length, 25, 'account snapshot keeps more than the 20 displayed upcoming tracks');
 	assert.equal((await computer.request('/play_status/0')).body.status, 'ready');
 	const stale = await phone.request('/account_playback', { method: 'POST', body: { ...checkpoint, claim: false, position: 99 } });

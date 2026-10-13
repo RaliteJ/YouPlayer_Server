@@ -34,9 +34,10 @@ test('same account resumes real audio in a separate browser session and pauses t
 	wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
 	wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
 	await writeFile(path.join(tempRoot, 'local_song', 'account-browser-resume.wav'), wav);
+	await writeFile(path.join(tempRoot, 'local_song', 'account-browser-next.wav'), wav);
 	await store.appendPlaylistItems(user.id, 'browser-resume', [
 		{ type: 'local', url: 'account-browser-resume.wav', title: 'Account resume fixture' },
-		{ type: 'local', url: 'account-browser-resume.wav', title: 'Upcoming fixture' }
+		{ type: 'local', url: 'account-browser-next.wav', title: 'Upcoming fixture' }
 	]);
 	const open = async (context, pseudo, password) => {
 		const page = await context.newPage();
@@ -93,6 +94,17 @@ test('same account resumes real audio in a separate browser session and pauses t
 		});
 		await second.reload({ waitUntil: 'networkidle0' });
 		await second.waitForFunction(() => document.getElementById('lecteur').currentTime >= 17.25);
+		await second.evaluate(async () => {
+			const { App } = await import(document.querySelector('script[type="module"]').src);
+			await App.nextSong('manual');
+			App.lecteur.currentTime = 9;
+			await new Promise(resolve => App.lecteur.addEventListener('seeked', resolve, { once: true }));
+			await App.savePlaybackPosition(true);
+		});
+		await second.reload({ waitUntil: 'networkidle0' });
+		await second.waitForFunction(() => document.getElementById('actual_song').innerText === 'Upcoming fixture'
+			&& document.getElementById('lecteur').currentTime >= 9
+			&& !document.getElementById('lecteur').paused);
 	} finally {
 		await Promise.all([phone.close(), computer.close(), other.close()]);
 	}
