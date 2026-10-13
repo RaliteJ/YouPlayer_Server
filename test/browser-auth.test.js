@@ -318,10 +318,10 @@ test('library shortcuts preserve filtered selection, pins and mobile layout; sle
 			const { App } = await import(document.querySelector('script[type="module"]').src);
 			window.fixtureApp = App;
 			App.currentUser = { id: 'synthetic-browser', role: 'user' };
-			App.showApp();
 			window.libraryFixture = { pinned: [], recent: [] };
 			window.librarySelections = [];
 			window.libraryStarts = 0;
+			// Install the API fixture before showApp starts account playback restoration.
 			App.apiFetch = async (endpoint, method, body) => {
 				if (endpoint === '/playlist_summaries') return [
 					{ name: 'ete.json', title: 'Été calme', count: 3 },
@@ -338,8 +338,10 @@ test('library shortcuts preserve filtered selection, pins and mobile layout; sle
 					return structuredClone(p);
 				}
 				if (endpoint === '/playlist_used') { window.librarySelections.push(body.arg); return 'OK'; }
+				if (endpoint === '/account_playback/restore') return null;
 				throw new Error(`Unexpected local request: ${endpoint}`);
 			};
+			App.showApp();
 			App.fetchPlaylist = async () => { window.libraryStarts++; };
 			App.nextSong = async () => { window.libraryStarts++; };
 			App.prefetchUpcomingTrack = async () => {};
@@ -559,7 +561,6 @@ test('controlled playback persists per account and plays complete Spotify playli
 			const { App } = await import(document.querySelector('script[type="module"]').src);
 			window.controlledApp = App;
 			App.currentUser = { id: 'controlled-fixture-a', role: 'user' };
-			App.showApp();
 			window.controlledRequests = [];
 			window.controlledStarts = [];
 			const tracks = Array.from({ length: 121 }, (_, index) => ({
@@ -582,6 +583,7 @@ test('controlled playback persists per account and plays complete Spotify playli
 				if (endpoint === '/add_song_ecoute') return { currentId: 0, queue: [], random: false };
 				return [];
 			};
+			App.showApp();
 			App.syncPrefetchedTransitions = async () => {};
 			App.prefetchUpcomingTrack = () => {};
 			App.nextSong = async reason => window.controlledStarts.push(reason);
@@ -661,7 +663,6 @@ test('Spotify playlist scrolling reveals the next 50 tracks on desktop and mobil
 		await page.evaluate(async () => {
 			const { App } = await import(document.querySelector('script[type="module"]').src);
 			App.currentUser = { id: 'synthetic-scroll', role: 'user' };
-			App.showApp();
 			document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === 'view-add_spotify'));
 			window.scrollRequests = [];
 			App.apiFetch = async (endpoint, method, body) => {
@@ -675,6 +676,7 @@ test('Spotify playlist scrolling reveals the next 50 tracks on desktop and mobil
 				}
 				return {};
 			};
+			App.showApp();
 		});
 		for (const width of [390, 1280]) {
 			await page.setViewport({ width, height: 844, isMobile: true, hasTouch: true });
@@ -1651,7 +1653,6 @@ test('playlist switch keeps actual audio playing until its natural end', { timeo
             const { App } = await import(document.querySelector('script[type="module"]').src);
             window.fixtureApp = App;
             App.currentUser = { id: 'synthetic-switch', role: 'user' };
-            App.showApp();
             if (App.crossfade) App.crossfade.enabled = false;
             App.prefetchUpcomingTrack = () => {};
             App.changeLibraryPreference = async () => {};
@@ -1665,6 +1666,7 @@ test('playlist switch keeps actual audio playing until its natural end', { timeo
                 };
                 return null;
             };
+            App.showApp();
             const rate = 8000, samples = rate * 4;
             const data = new Uint8Array(44 + samples * 2), view = new DataView(data.buffer);
             const text = (offset, value) => [...value].forEach((char, i) => view.setUint8(offset + i, char.charCodeAt(0)));
@@ -1718,7 +1720,6 @@ test('like buttons sync between playlist rows and expanded player on mobile', { 
             const track = { type: 'youtube', id: 'like-browser', title: 'Un titre synthétique suffisamment long pour vérifier les petits écrans', artist: 'Artiste', __sessionIndex: 0 };
             App.refreshLikes = async () => { App.likedKeys = new Set(window.likesFixture.map(trackLikeKey)); App.renderLikeButtons(); };
             App.currentUser = { id: 'likes-browser', role: 'user' };
-            App.showApp();
             App.richPlaylistDisplay = true;
             App.prefetchUpcomingTrack = () => {};
             App.nextSong = App.add_song_playlist = async () => { window.likePlaybackStarts++; };
@@ -1733,6 +1734,7 @@ test('like buttons sync between playlist rows and expanded player on mobile', { 
                 }
                 return null;
             };
+            App.showApp();
             await App.loadView('playlist');
         });
         await page.click('#playlist-list .song-like');
@@ -1857,7 +1859,6 @@ test('large Liked playlists render without waiting for likes, scroll in batches 
             App.refreshPlaybackState = async () => {};
             App.nextSong = async () => {};
             App.add_song_playlist = async index => { window.largeLikedSelection = index; };
-            App.showApp();
             App.playerBar.classList.add('visible');
             const tracks = Array.from({ length: 3000 }, (_, index) => ({
                 title: `Synthetic liked ${index}`, type: 'local', url: `fixture-${index}`,
@@ -1865,6 +1866,7 @@ test('large Liked playlists render without waiting for likes, scroll in batches 
             }));
             App.playlistTracks = tracks;
             App.apiFetch = async endpoint => endpoint === '/playlist' || endpoint.startsWith('/playlist_preview?') ? tracks : null;
+            App.showApp();
             void App.openPlaylistPreview({ name: 'liked Youplayer.json', title: 'Liked' });
         });
         await page.waitForSelector('#playlist-preview-list .playlist-preview-track', { timeout: 1500 });
@@ -1995,7 +1997,6 @@ test('YouTube playlist menu creates or appends an import, excludes Liked and kee
             window.libraryReloads = 0;
             const { LIKED_PLAYLIST } = await import('/client-utils.js');
             App.currentUser = { id: 'synthetic-import-user', role: 'user' };
-            App.showApp();
             App.loadView('add_youtube');
             App.currentId = 17;
             App.fetchAvailablePlaylists = async () => { window.libraryReloads++; };
@@ -2009,8 +2010,10 @@ test('YouTube playlist menu creates or appends an import, excludes Liked and kee
                     window.playlistImports.push(body);
                     return { playlist: body.playlist || 'Synthetic playlist.json', count: 2 };
                 }
+                if (path === '/account_playback/restore') return null;
                 throw new Error(`Unexpected request: ${path}`);
             };
+            App.showApp();
             document.getElementById('query_yt').value = 'synthetic';
             await App.searchYoutube();
         });
