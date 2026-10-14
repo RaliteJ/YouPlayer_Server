@@ -139,7 +139,10 @@ export function createFirstTrackStreamManager({
 		return streamId ? stopStream(streamId, reason) : false;
 	}
 
-	function createStream({ owner, track, nextEnabled = true }) {
+	function createStream({ owner, track, nextEnabled = true, startPosition = 0 }) {
+		if (!Number.isFinite(startPosition) || startPosition < 0 || startPosition > 86400) {
+			throw new TypeError("Position de streaming invalide");
+		}
 		const normalizedOwner = normalizePrincipal(owner);
 		if (!normalizedOwner.sessionId) {
 			throw new TypeError("sessionId est requis pour un flux spécial");
@@ -151,6 +154,7 @@ export function createFirstTrackStreamManager({
 			id,
 			owner: normalizedOwner,
 			track,
+			startPosition,
 			state: FIRST_TRACK_STREAM_STATES.STARTING,
 			reason: "",
 			createdAt: Date.now(),
@@ -235,6 +239,7 @@ export function createFirstTrackStreamManager({
 				"-hide_banner",
 				"-loglevel", "error",
 				"-i", "pipe:0",
+				...(record.startPosition > 0 ? ["-ss", String(record.startPosition)] : []),
 				"-map", "0:a:0",
 				"-vn",
 				"-c:a", "libmp3lame",

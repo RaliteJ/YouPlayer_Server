@@ -115,6 +115,7 @@ test('reopening the app restores real audio at the saved position and preserves 
 	const page = await browser.newPage();
 	page.setDefaultTimeout(6000);
 	const requests = [];
+	let streamResume = false;
 	const state = { currentId: 0, current: { type: 'local', url: 'resume-fixture.wav', title: 'Synthetic resume' }, queue: [] };
 	const samples = 8000 * 30;
 	const wav = Buffer.alloc(44 + samples * 2);
@@ -133,14 +134,22 @@ test('reopening the app restores real audio at the saved position and preserves 
 			if (route === '/playlist_summaries') return void json([]);
 			if (route === '/playlist_preferences') return void json({ pinned: [], recent: [] });
 			if (route === '/liked_tracks') return void json({ items: [] });
-			if (route === '/account_playback' || route === '/account_playback/restore') {
+			if (route === '/account_playback/restore' && streamResume) {
+                return void json({ ...state, mode: 'special_stream', stream_id: 'resume-stream',
+                    audio_url: '/audio/resume-stream', start_position: 42.5,
+                    resume: { position: 42.5, playing: true, repeat: false } });
+            }
+            if (route === '/account_playback' || route === '/account_playback/restore') {
 				return void request.respond({ status: 204 });
 			}
 			if (route === '/playback_state' || route === '/resume_playback') {
 				requests.push(route); return void json(state);
 			}
-			if (route === '/play_status/0') return void json({ status: 'ready', path: '/play/0' });
-			if (route === '/play/0') {
+			if (route === '/play_status/0') {
+                requests.push(route);
+                return void json(streamResume ? { status: 'pending' } : { status: 'ready', path: '/play/0' });
+            }
+			if (route === '/play/0' || route === '/audio/resume-stream') {
 				const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers().range || '');
 				const start = range ? Number(range[1]) : 0;
 				const end = range?.[2] ? Math.min(Number(range[2]), wav.length - 1) : wav.length - 1;
@@ -183,6 +192,18 @@ test('reopening the app restores real audio at the saved position and preserves 
 			const audio = document.getElementById('lecteur');
 			return !audio.paused && audio.currentTime > 12.5 && audio.currentTime < 18;
 		});
+        const polls = requests.filter(route => route === '/play_status/0').length;
+        streamResume = true;
+        await page.reload({ waitUntil: 'networkidle0' });
+        await page.waitForFunction(() => {
+            const audio = document.getElementById('lecteur');
+            const saved = JSON.parse(localStorage.getItem('playbackResume:resume-user'));
+            return audio.currentSrc.endsWith('/audio/resume-stream') && !audio.paused
+                && audio.currentTime > 0 && saved?.position > 42.5 && saved.position < 50;
+        });
+        assert.equal(requests.filter(route => route === '/play_status/0').length, polls);
+        assert.equal(await page.$$eval('audio', elements => elements.length), 1);
+
 	} catch (error) {
 		t.diagnostic(JSON.stringify(await page.evaluate(() => {
 			const audio = document.getElementById('lecteur');

@@ -230,3 +230,31 @@ test('a failed account restore cannot publish a stale local checkpoint', async (
     assert.equal(h.app.accountPlaybackReady, undefined);
     assert.equal(h.app.restoredState, undefined);
 });
+
+test('a resumed private stream plays immediately and checkpoints the absolute position', async () => {
+    const h = harness();
+    h.audio.currentSrc = '';
+    h.audio.currentTime = 0;
+    Object.assign(h.app, {
+        specialPlayer: h.audio, clearMainAudio: () => {},
+        logNextDiagnostic: () => {}, diagnosticInstanceId: () => 'synthetic', requestWakeLock: () => {},
+        updatePlayerProgress: () => {}, renderPlayerTransport: () => {}, updateMediaPositionState: () => {},
+        waitForTrackReady: () => { throw new Error('Must not wait for download'); },
+        apiFetch: async () => ({ ...h.state, mode: 'special_stream',
+            stream_id: 'resumed', audio_url: '/audio/resumed', start_position: 73.25,
+            resume: { position: 73.25, playing: true, repeat: false } })
+    });
+    await h.app.restorePlaybackPosition();
+    assert.equal(h.audio.src, 'https://player.test/audio/resumed');
+    assert.equal(h.app.playCalls, 1);
+    assert.equal(h.app.restoringPlayback, false);
+    h.audio.currentSrc = h.audio.src;
+    h.audio.currentTime = 3;
+    h.app.syncStateFromAudio = createPlayerController({ apiUrl: '' }).syncStateFromAudio;
+    h.app.syncStateFromAudio(true);
+    assert.equal(h.app.playerState.currentTime, 76.25);
+    assert.equal(JSON.parse(h.storage.get('playbackResume:alice')).position, 76.25);
+    h.audio.ended = true;
+    await h.app.savePlaybackPosition(true);
+    assert.equal(JSON.parse(h.storage.get('playbackResume:alice')).position, 0);
+});

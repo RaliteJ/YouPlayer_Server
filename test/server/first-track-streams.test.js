@@ -204,3 +204,21 @@ test("an unopened stream expires and shutdown stops every active stream", async 
 	assert.equal(manager.getStream(first.id), null);
 	assert.equal(manager.getStream(second.id), null);
 });
+
+test('resumed streams trim audio at the saved position without changing process ownership', async () => {
+    const { manager, children } = createHarness();
+    const owner = { userId: 'user-a', sessionId: 'session-a' };
+    const stream = manager.createStream({ owner, track: { id: 'youtube-id' }, startPosition: 42.5 });
+    try {
+        await manager.openStream(stream.id, owner, new PassThrough());
+        const args = children[1].args;
+        assert.deepEqual(args.slice(args.indexOf('-ss'), args.indexOf('-ss') + 2), ['-ss', '42.5']);
+        assert.ok(args.indexOf('-ss') > args.indexOf('-i'));
+        for (const startPosition of [-1, Infinity, NaN, '12', 86401]) {
+            assert.throws(() => manager.createStream({ owner, track: {}, startPosition }), /Position/);
+            assert.equal(manager.getStream(stream.id), stream);
+        }
+    } finally {
+        manager.stopAll('test_cleanup');
+    }
+});

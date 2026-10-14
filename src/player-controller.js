@@ -21,7 +21,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         if (!force && now - (this.lastPlaybackSave || 0) < 1000) return;
         const saved = {
                 version: 1, trackId: Number(this.currentId), trackKey,
-                position: audio.ended ? 0 : audio.currentTime,
+                position: audio.ended ? 0 : audio.currentTime + (nativeSnapshot ? 0 : this.currentSpecialStream?.startPosition || 0),
                 playing: !audio.paused && !audio.ended, repeat: this.repeatTrack === true
         };
         try {
@@ -115,7 +115,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 if (!state || !stillCurrent() || state.currentId !== saved.trackId
                     || trackLikeKey(state.current) !== saved.trackKey) return;
                 resumed = await this.apiFetch('/resume_playback', 'POST', {
-                    trackId: saved.trackId, trackKey: saved.trackKey
+                    trackId: saved.trackId, trackKey: saved.trackKey, position: saved.position, playing: saved.playing === true
                 });
             }
             if (!resumed || !stillCurrent()) return;
@@ -125,6 +125,10 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             this.setRepeatMode(saved.repeat === true);
             this.playerState.currentTime = saved.position;
             this.playerState.loading = true;
+            if (resumed.mode === 'special_stream') {
+                await this.startSpecialPlayback(resumed);
+                return;
+            }
             const path = await this.waitForTrackReady(saved.trackId, 90000, { isCurrent: stillCurrent });
             if (!path || !stillCurrent()) {
                 if (stillCurrent()) this.playerState.loading = false;
@@ -243,8 +247,9 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
     syncStateFromAudio(forcePositionUpdate = false) {
         const player = this.activeAudioPlayer();
         if (!player) return;
-        this.playerState.currentTime = Number.isFinite(player.currentTime) ? player.currentTime : 0;
-        this.playerState.duration = Number.isFinite(player.duration) ? player.duration : 0;
+        const offset = this.currentSpecialStream?.startPosition || 0;
+        this.playerState.currentTime = Number.isFinite(player.currentTime) ? player.currentTime + offset : offset;
+        this.playerState.duration = Number.isFinite(player.duration) ? player.duration + offset : 0;
         this.playerState.playing = !player.paused && !player.ended;
         this.updatePlayerProgress();
         this.renderPlayerTransport();
@@ -308,7 +313,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
 
     async previousTrack() {
         if (this.nextSongLoading || this.previousSongLoading) return;
-        const time = this.activeAudioPlayer()?.currentTime ?? this.playerState.currentTime;
+        const time = (this.activeAudioPlayer()?.currentTime ?? 0) + (this.currentSpecialStream?.startPosition || 0);
         if (time >= 4) return this.restartCurrentTrack();
         this.previousSongLoading = true;
         try {
@@ -325,6 +330,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
     },
 
     restartCurrentTrack() {
+        if (this.currentSpecialStream?.startPosition) return this.repeatCurrentTrack();
         this.crossfade?.cancel();
         const player = this.activeAudioPlayer();
         if (!player) return;
@@ -691,6 +697,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.clearMainAudio();
         this.currentSpecialStream = {
             id: data.stream_id,
+            startPosition: data.start_position || 0,
             audioUrl: data.audio_url,
             nextEnabled: data.first_track_next_enabled !== false
         };
@@ -1266,7 +1273,8 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             seekto: withDiagnosticLog('seekto', (details) => {
                 const player = this.activeAudioPlayer();
                 if (!player || !Number.isFinite(details.seekTime)) return;
-                player.currentTime = Math.max(0, Math.min(details.seekTime, player.duration || details.seekTime));
+                const time = Math.max(0, details.seekTime - (this.currentSpecialStream?.startPosition || 0));
+                player.currentTime = Math.min(time, player.duration || time);
             }),
             stop: withDiagnosticLog('stop', () => {
                 if (this.currentSpecialStream) {
@@ -1294,8 +1302,9 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
     updateMediaPositionState(player, force = false) {
         if (!('mediaSession' in navigator)
             || typeof navigator.mediaSession.setPositionState !== 'function') return;
-        const duration = player?.duration;
-        const position = player?.currentTime;
+        const offset = this.currentSpecialStream?.startPosition || 0;
+        const duration = player?.duration + offset;
+        const position = player?.currentTime + offset;
         if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
 
         const positionSecond = Math.floor(position);
