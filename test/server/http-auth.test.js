@@ -1457,3 +1457,51 @@ test('rejected uploads leave neither a playlist nor a temporary audio file', asy
         assert.deepEqual((await readdir(localRoot)).sort(), initialFiles);
     }
 });
+
+test('remote account resume streams before download, retaining position, queue and privacy', async () => {
+    const client = createClient();
+    const stranger = createClient();
+    const store = app.locals.youplayerStore;
+    const user = await store.createUser({ pseudo: 'stream-resume', password: 'synthetic-password123' });
+    await login(client, 'stream-resume', 'synthetic-password123');
+    await login(stranger);
+    const current = { type: 'youtube', id: 'synthetic01', title: 'Synthetic stream', url: 'https://www.youtube.com/watch?v=synthetic01' };
+    await store.saveAccountPlayback(user.id, {
+        current, queue: [{ ...current, id: 'synthetic02' }], position: 42.5,
+        playing: true, repeat: false, random: false,
+        sessionId: 'former-session', updatedAt: '2026-10-14T00:00:00.000Z'
+    }, 'former-session', true);
+    const before = new Set(await readdir(path.join(tempRoot, 'musiq')).catch(() => []));
+    const restored = await client.request('/account_playback/restore', { method: 'POST', body: {} });
+    assert.equal(restored.status, 200);
+    assert.equal(restored.body.mode, 'special_stream');
+    assert.equal(restored.body.start_position, 42.5);
+    assert.equal(restored.body.currentId, 0);
+    assert.equal(restored.body.queue.length, 1);
+    assert.equal(restored.body.first_track_next_enabled, true);
+    assert.equal(app.locals.firstTrackStreams.getStream(restored.body.stream_id).startPosition, 42.5);
+    assert.equal((await stranger.request(`${restored.body.audio_url}/status`)).status, 403);
+    const fallback = await client.request('/resume_playback', { method: 'POST', body: {
+        trackId: 0, trackKey: trackLikeKey(current), position: 44, playing: true
+    } });
+    assert.equal(fallback.body.mode, 'special_stream');
+    assert.equal(fallback.body.start_position, 44);
+    assert.equal(app.locals.firstTrackStreams.getStream(restored.body.stream_id), null);
+    for (const body of [{ position: -1 }, { position: 86401 }, { playing: 'true' }]) {
+        assert.equal((await client.request('/resume_playback', { method: 'POST', body: {
+            trackId: 0, trackKey: trackLikeKey(current), ...body
+        } })).status, 400);
+    }
+    const paused = await client.request('/resume_playback', { method: 'POST', body: {
+        trackId: 0, trackKey: trackLikeKey(current), position: 44, playing: false
+    } });
+    assert.equal(paused.body.mode, undefined);
+    assert.equal(app.locals.firstTrackStreams.getStream(fallback.body.stream_id), null);
+    const [directory] = (await readdir(path.join(tempRoot, 'musiq'))).filter(name => !before.has(name));
+    await writeFile(path.join(tempRoot, 'musiq', directory, `queue-${restored.body.current.__queueId}.mp3`), 'synthetic cached audio');
+    const cached = await client.request('/account_playback/restore', { method: 'POST', body: {} });
+    assert.equal(cached.status, 200);
+    assert.equal(cached.body.mode, undefined);
+    assert.equal(cached.body.resume.position, 42.5);
+    assert.equal(cached.body.current.__queueId, restored.body.current.__queueId);
+});

@@ -242,7 +242,7 @@ export const playerView = {
         this.crossfade?.cancel();
         const player = this.activeAudioPlayer();
         if (!player || !Number.isFinite(player.duration)) return;
-        player.currentTime = Math.max(0, Math.min(position, player.duration));
+        player.currentTime = Math.max(0, Math.min(position - (this.currentSpecialStream?.startPosition || 0), player.duration));
         this.syncStateFromAudio(true);
     },
 

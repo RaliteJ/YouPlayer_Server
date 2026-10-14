@@ -43,6 +43,7 @@ export function registerPlaybackRoutes(app, {
 			mode: "special_stream",
 			stream_id: record.id,
 			audio_url: `/audio/${record.id}`,
+			start_position: record.startPosition,
 			status: record.state,
 			first_track_next_enabled: record.nextEnabled !== false,
 			...playbackState(req)
@@ -451,12 +452,10 @@ export function registerPlaybackRoutes(app, {
 			}
 			req.session.account_playback_restored_at = snapshot.updatedAt;
 			req.session.first_track_special_pending = false;
-			const stream = firstTrackStreams.findForSession(req.sessionID);
-			if (stream) firstTrackStreams.stopStream(stream.id, 'resume_playback');
-			await retryResumedTrack(req);
+			const playback = await prepareResumedPlayback(req, snapshot.position, snapshot.playing);
 			req.session.save(error => {
 				if (error) return res.status(503).json({ error: 'Reprise non sauvegardée' });
-				res.json({ ...playbackState(req), resume: {
+				res.json({ ...playback, resume: {
 					position: snapshot.position, playing: snapshot.playing, repeat: snapshot.repeat,
 					updatedAt: snapshot.updatedAt
 				} });
@@ -468,20 +467,16 @@ export function registerPlaybackRoutes(app, {
 
 	app.post('/resume_playback', requireAuth, async (req, res) => {
 		try {
-			const { trackId, trackKey } = req.body || {};
-			if (!Number.isInteger(trackId) || trackId < 0 || typeof trackKey !== 'string') {
+			const { trackId, trackKey, position = 0, playing = false } = req.body || {};
+			if (!Number.isInteger(trackId) || trackId < 0 || typeof trackKey !== 'string'
+				|| !Number.isFinite(position) || position < 0 || position > 86400 || typeof playing !== 'boolean') {
 				throw new RequestValidationError('Reprise invalide');
 			}
 			const state = playbackState(req);
 			if (state.currentId !== trackId || trackLikeKey(state.current) !== trackKey) {
 				return res.status(409).json({ error: 'Le morceau en cours a changé' });
 			}
-			// A disconnected live stream cannot seek. Resume its downloaded file
-			// under the same session, without dequeuing another track.
-			const stream = firstTrackStreams.findForSession(req.sessionID);
-			if (stream) firstTrackStreams.stopStream(stream.id, 'resume_playback');
-			await retryResumedTrack(req);
-			res.json(state);
+			res.json(await prepareResumedPlayback(req, position, playing));
 		} catch (error) {
 			sendJsonError(res, error, 'Reprise impossible', 400);
 		}
@@ -698,6 +693,20 @@ export function registerPlaybackRoutes(app, {
 		listenAfterQueue(req, id,
 			trackId => isDownloadPendingOrDone(trackCacheId(req, trackId), req.sessionID),
 			(song, trackId) => chargement_video(song, trackCacheId(req, trackId), req.sessionID));
+	}
+
+	async function prepareResumedPlayback(req, position, playing) {
+		firstTrackStreams.stopForSession(req.sessionID, 'resume_playback');
+		await retryResumedTrack(req);
+		const id = req.session.ecoute_actuelle;
+		const readiness = await getTrackPlaybackReadiness(req, id);
+		if (playing && readiness.status === 'pending') {
+			return specialStreamResponse(req, firstTrackStreams.createStream({
+				owner: streamPrincipal(req), track: req.session.items[id],
+				startPosition: position, nextEnabled: true
+			}));
+		}
+		return playbackState(req);
 	}
 
 	async function retryResumedTrack(req) {
