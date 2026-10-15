@@ -35,15 +35,13 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Verifier le mecanisme de mise a jour
-        run: node --test --test-isolation=none test/server/update-control.test.js test/server/update-channel.test.js test/server/update-service.test.js test/server/update-deployment.test.js test/server/update-container-plan.test.js test/server/production-tools.test.js test/account-view.test.js test/spotify-explorer.test.js
       - name: Preparer Podman
         shell: bash
         run: |
-          if ! command -v podman >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y podman
-          fi
+          sudo apt-get update
+          sudo apt-get install -y podman podman-compose python3-yaml python3-dotenv
+      - name: Verifier le mecanisme de mise a jour
+        run: node --test --test-isolation=none test/server/install.test.js test/server/update-control.test.js test/server/update-channel.test.js test/server/update-service.test.js test/server/update-deployment.test.js test/server/update-container-plan.test.js test/server/production-tools.test.js test/account-view.test.js test/spotify-explorer.test.js
       - name: Construire et signer les images
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
@@ -83,6 +81,8 @@ jobs:
           assets=("$manifest")
           if [ -z "$REGISTRY_PREFIX" ]; then
             assets+=("releases/$RELEASE_TAG/update-assets/youplayer-images.tar")
+          else
+            assets+=("releases/$RELEASE_TAG/update-assets/youplayer-install.tar.gz")
           fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber

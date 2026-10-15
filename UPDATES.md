@@ -226,6 +226,13 @@ publie pas la release Git. Elle prepare uniquement `youplayer-update.json`
 dans `releases/v1.1.0/update-assets/`, sans archive d'images. Publier ce manifeste
 sur la release Git du meme tag apres validation. Les tags du registre sont
 informatifs : le client recupere exclusivement les digests signes.
+La preparation cree aussi `youplayer-install.tar.gz`, une petite distribution
+de premiere installation : Compose sans build derive du Compose courant,
+installateur, manifeste signe, cle publique du signataire et outils hote en
+liste explicite. Aucune configuration locale, cle privee, playlist ou musique
+n'y est incluse. Le workflow joint cette archive aux releases en mode registre.
+Voir [INSTALL.md](INSTALL.md) pour les prerequis et le parcours d'installation.
+La release reste monoplateforme ; l'installateur refuse une architecture differente.
 Conserver les images de retour arriere et les digests encore references par
 les manifests Git ; ne pas les supprimer par une retention trop courte.
 

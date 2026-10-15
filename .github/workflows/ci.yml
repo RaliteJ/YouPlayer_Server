@@ -63,6 +63,8 @@ jobs:
         run: printf 'PUPPETEER_CACHE_DIR=%s/youplayer-puppeteer\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Installer les dependances Node
         run: npm ci
+      - name: Installer les outils de validation de l'installateur
+        run: sudo apt-get update && sudo apt-get install -y python3-yaml python3-dotenv podman-compose
       - name: Installer Chrome et ses dependances systeme
         run: |
           sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" ./node_modules/.bin/puppeteer browsers install chrome --install-deps
