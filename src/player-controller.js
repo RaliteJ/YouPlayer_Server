@@ -231,6 +231,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         });
         this.lecteur.addEventListener('timeupdate', () => {
             this.sleepTimer?.check();
+            if (this.skipNonMusic?.()) return;
             this.syncStateFromAudio();
             this.crossfade?.tick(!this.repeatTrack && !this.currentSpecialStream
                 && !this.nextSongLoading && !this.queueEditPromise, this.nextTrackPrefetch?.path);

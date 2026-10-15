@@ -3,6 +3,7 @@ import { createPlayerController } from './player-controller.js?v=20261012-playba
 import { playerView } from './player-view.js';
 import { createAccountView } from './account-view.js?v=20261012-playback-resume';
 import { playlistView } from './playlist-view.js';
+import { sponsorBlockView } from './sponsorblock.js';
 import { libraryView } from './library-view.js';
 import { bindQueueSwipe } from './track-gestures.js';
 import {
@@ -35,6 +36,7 @@ const App = {
     ...createPlayerController({ apiUrl: API_URL }),
     ...createDiscoveryView({ apiUrl: API_URL }),
     ...libraryView,
+    ...sponsorBlockView,
     ...playlistView,
     ...createAccountView({ apiUrl: API_URL }),
     currentId: null,
@@ -109,6 +111,7 @@ const App = {
     async init() {
         this.cacheDOM();
         this.initLibraryControls();
+        this.initSponsorBlock();
         this.initAudioDiagnostics();
         this.bindEvents();
         await this.refreshAuthProviders();
@@ -242,9 +245,18 @@ const App = {
     },
 
     initLibraryControls() {
-        document.getElementById('library-search')?.addEventListener('input', () => this.renderLibrary());
+        document.getElementById('library-search')?.addEventListener('input', () => {
+            this.librarySearchRevision = (this.librarySearchRevision || 0) + 1;
+            this.renderLibrary();
+        });
+        document.getElementById('library-search')?.addEventListener('keydown', event => {
+            if (event.key === 'Enter') { event.preventDefault(); void this.searchLibraryTracks(); }
+        });
+        document.getElementById('library-search-tracks')?.addEventListener('click', () => this.searchLibraryTracks());
+        document.getElementById('library-multi-select')?.addEventListener('change', event => {
+            document.getElementById('playlist-selection-form').classList.toggle('is-multi-select', event.target.checked);
+        });
         document.getElementById('library-sort')?.addEventListener('change', () => this.renderLibrary());
-        document.getElementById('library-clear-recent')?.addEventListener('click', () => this.changeLibraryPreference({ action: 'clear_recent' }));
         document.getElementById('library-rediscover')?.addEventListener('click', () => {
             const playlist = rediscoverPlaylist(this.availablePlaylists, this.libraryPreferences.recent);
             if (playlist) void this.playLibraryPlaylist(playlist.name);
@@ -382,7 +394,10 @@ const App = {
         }
 
         // Recherches
-        document.getElementById('btn-search-yt').onclick = () => this.searchYoutube();
+        document.getElementById('youtube-search-form').onsubmit = (event) => {
+            event.preventDefault();
+            void this.searchYoutube();
+        };
         const legacySpotifySearchButton = document.getElementById('btn-search-spotify');
         if (legacySpotifySearchButton) {
             legacySpotifySearchButton.onclick = () => this.searchSpotify();
@@ -405,7 +420,10 @@ const App = {
                 playTrack: (track, context = {}) => this.enqueueNextSong(track, { playNow: true, ...context }),
                 playCollection: (collection, collectionIndex = 0) => this.enqueueNextSong(collection[collectionIndex], { playNow: true, collection, collectionIndex }),
                 isControlledPlayback: () => this.controlledPlayback,
-                queueTrack: (track) => this.enqueueNextSong(track),
+                openTrackMenu: (button, track) => this.openSongActionMenu(button, track, {
+                    discovered: true,
+                    onPlay: () => button.closest('.spotify-track-row').click()
+                }),
                 bindQueueSwipe: (row, track) => this.bindQueueSwipe(row, track),
                 toggleLike: (track) => this.toggleDiscoveredTrackLike(track),
                 likeButtonMarkup: (track) => this.likeButtonMarkup(track),
@@ -466,6 +484,7 @@ const App = {
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                if (this.songActionMenu) { this.closeSongActionMenu(); return; }
                 if (this.queueDrawerOpen) this.closeQueueDrawer();
                 else this.closeNowPlaying();
             }
@@ -612,6 +631,7 @@ const App = {
             viewName = 'accueil';
         }
 
+        this.closeSongActionMenu();
         this.views.forEach(v => v.classList.remove('active'));
         this.navLinks.forEach(l => l.classList.remove('active'));
 

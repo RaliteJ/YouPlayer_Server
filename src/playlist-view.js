@@ -13,7 +13,7 @@ export const playlistView = {
             return `
                 <span class="song-title">${title}</span>
                 ${this.likeButtonMarkup(item)}
-                <button type="button" class="song-options" title="Options">⚙️</button>
+                <button type="button" class="song-options" aria-label="Options du morceau" title="Options">⋯</button>
             `;
         }
 
@@ -31,7 +31,7 @@ export const playlistView = {
                 </div>
             </div>
             ${this.likeButtonMarkup(item)}
-                <button type="button" class="song-options" title="Options">⚙️</button>
+                <button type="button" class="song-options" aria-label="Options du morceau" title="Options">⋯</button>
         `;
     },
 
@@ -66,7 +66,7 @@ export const playlistView = {
 
     playlistPreviewTrackMarkup(item, index) {
         const title = this.escapeHtml(item.title || item.name || 'Titre inconnu');
-        const metaParts = [item.artist, item.album].filter(Boolean);
+        const metaParts = [item.artist, item.album, item.__libraryPlaylist?.title].filter(Boolean);
         const meta = this.escapeHtml(metaParts.join(' • ') || item.type || '');
         const cover = this.escapeHtml(item.albumCoverURL || item.thumbnail || '');
         const coverMarkup = cover
@@ -82,7 +82,7 @@ export const playlistView = {
                 </div>
                 <div class="playlist-preview-actions">
                     ${this.likeButtonMarkup(item)}
-                    <button type="button" class="song-options" aria-label="Options pour ${title}" title="Options">⚙️</button>
+                    <button type="button" class="song-options" aria-label="Options pour ${title}" title="Options">⋯</button>
                 </div>
             </li>
         `;
@@ -107,8 +107,9 @@ export const playlistView = {
             const template = document.createElement('template');
             template.innerHTML = this.playlistPreviewTrackMarkup(track, index);
             const row = template.content.firstElementChild;
+            const sourcePlaylist = track.__libraryPlaylist || playlist;
             const previewRequest = {
-                previewPlaylist: playlist.name, previewIndex: track.__playlistIndex, key: trackLikeKey(track)
+                previewPlaylist: sourcePlaylist.name, previewIndex: track.__playlistIndex, key: trackLikeKey(track)
             };
             this.bindQueueSwipe(row, previewRequest);
             row.addEventListener('click', event => {
@@ -122,11 +123,11 @@ export const playlistView = {
             });
             row.querySelector('.song-like')?.addEventListener('click', event => {
                 event.stopPropagation();
-                void this.togglePreviewLike(playlist.name, track);
+                void this.togglePreviewLike(sourcePlaylist.name, track);
             });
             row.querySelector('.song-options')?.addEventListener('click', event => {
                 event.stopPropagation();
-                this.openSongActionMenu(event.currentTarget, track, { previewPlaylist: playlist });
+                this.openSongActionMenu(event.currentTarget, track, { previewPlaylist: sourcePlaylist });
             });
             return row;
         });
@@ -237,6 +238,7 @@ export const playlistView = {
         if (!Number.isInteger(track.__playlistIndex)) return;
         if (playlist.name === LIKED_PLAYLIST) {
             await this.togglePreviewLike(playlist.name, track, false);
+            if (track.__libraryPlaylist) await this.searchLibraryTracks();
             return;
         }
         if (!confirm(`Supprimer "${track.title || 'cette musique'}" de la playlist ?`)) return;
@@ -246,6 +248,7 @@ export const playlistView = {
         if (!result) return;
         if (this.previewedPlaylist === playlist.name) await this.openPlaylistPreview(playlist);
         await this.fetchAvailablePlaylists();
+        if (track.__libraryPlaylist) await this.searchLibraryTracks();
     },
 
     resetPlaylistPreview(countLabel = 'Aucune playlist ouverte') {
@@ -271,6 +274,7 @@ export const playlistView = {
     async openPlaylistPreview(playlist) {
         if (!playlist?.name || !this.playlistPreviewList) return;
 
+        this.librarySearchRevision = (this.librarySearchRevision || 0) + 1;
         this.previewedPlaylist = playlist.name;
         const title = playlist.title || playlist.name.replace(/\.json$/i, '');
         if (this.playlistPreviewTitle) this.playlistPreviewTitle.innerText = title;
@@ -283,7 +287,8 @@ export const playlistView = {
         if (this.previewedPlaylist !== playlist.name) return;
         if (!Array.isArray(tracks)) {
             if (this.playlistPreviewCount) this.playlistPreviewCount.innerText = 'Erreur';
-            this.playlistPreviewList.innerHTML = '<li class="playlist-preview-empty">Impossible de charger cette playlist</li>';
+            this.playlistPreviewList.innerHTML = '<li class="playlist-preview-empty">Impossible de charger cette playlist. <button type="button" class="btn-small">Réessayer</button></li>';
+            this.playlistPreviewList.querySelector('button').onclick = () => this.openPlaylistPreview(playlist);
             return;
         }
 
@@ -309,7 +314,8 @@ export const playlistView = {
         if (revision !== this.playlistLoadRevision) return;
 
         if (!data || !Array.isArray(data)) {
-            this.playlistContainer.innerHTML = "Erreur de chargement ou playlist vide.";
+            this.playlistContainer.innerHTML = '<li>Impossible de charger la lecture en cours. <button type="button" class="btn-small">Réessayer</button></li>';
+            this.playlistContainer.querySelector('button').onclick = () => this.fetchPlaylist();
             return;
         }
 
@@ -333,6 +339,15 @@ export const playlistView = {
         const search = (this.playlistSearchInput?.value || '').toLowerCase();
         const tracks = this.playlistTracks.filter(item => !search || [item.title, item.artist, item.album]
             .filter(Boolean).join(' ').toLowerCase().includes(search));
+        if (!tracks.length) {
+            this.clearTrackPageScrolling(this.playlistContainer);
+            this.playlistContainer.innerHTML = search
+                ? '<li>Aucun titre ne correspond à cette recherche.</li>'
+                : '<li>Aucun titre dans la file. <button type="button" class="btn-small">Choisir une playlist</button></li>';
+            const button = this.playlistContainer.querySelector('button');
+            if (button) button.onclick = () => this.loadView('accueil');
+            return;
+        }
         this.renderTrackPages(this.playlistContainer, tracks, item => {
             const index = item.__sessionIndex;
             const li = document.createElement('li');

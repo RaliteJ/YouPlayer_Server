@@ -10,7 +10,7 @@ WORKDIR /usr/share/nginx/html
 
 COPY src/index.html src/app.js src/audio-crossfade.js src/audio-diagnostics.js src/track-gestures.js src/library-view.js src/playlist-view.js src/discovery-view.js src/player-controller.js src/player-view.js src/account-view.js src/client-utils.js src/android-player.js src/spotify-browser-bridge.js src/spotify-explorer.js src/style.css ./
 COPY src/manifest.webmanifest ./manifest.webmanifest
-COPY src/library-tools.js ./library-tools.js
+COPY src/library-tools.js src/sponsorblock.js ./
 COPY src/icons/ ./icons/
 RUN mkdir -p downloads
 COPY src/downloads/ ./downloads/

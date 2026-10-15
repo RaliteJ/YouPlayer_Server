@@ -35,39 +35,37 @@
     <div class="logo">YouPlayer</div>
     <div class="session-box">
       <span id="session-user">Non connecte</span>
-      <button type="button" id="logout-button" class="btn-small">Sortir</button>
+      <button type="button" id="logout-button" class="btn-small">Se déconnecter</button>
     </div>
 
     <nav class="menu">
-      <a href="#" data-view="accueil" class="nav-link active">Accueil</a>
-      <a href="#" data-view="playlist" class="nav-link">Playlist</a>
+      <a href="#" data-view="accueil" class="nav-link active">Bibliothèque</a>
+      <a href="#" data-view="playlist" class="nav-link">Lecture en cours</a>
       <a href="#" data-view="parametres" class="nav-link">Paramètres</a>
       <a href="#" data-view="admin" class="nav-link nav-admin" hidden>Admin</a>
       </nav>
 
-    <div class="actions-add">
+    <nav class="actions-add" aria-label="Ajouter de la musique">
       <a href="#" data-view="add_youtube" class="nav-link btn-add" aria-label="Ajouter une musique YouTube">+ YouTube</a>
       <a href="#" data-view="add_spotify" class="nav-link btn-add" aria-label="Ajouter une musique Spotify">+ Spotify</a>
-      <a href="#" data-view="add_local" class="nav-link btn-add" aria-label="Ajouter une musique locale">+ Local</a>
-    </div>
+      <a href="#" data-view="add_local" class="nav-link btn-add" aria-label="Ajouter une musique locale">+ Mes fichiers</a>
+    </nav>
   </div>
 
   <main class="main">
     <div class="views-container">
       <section id="view-accueil" class="view active">
-        <h1>Mes Playlists</h1>
+        <h1>Ma bibliothèque</h1>
         <div class="library-toolbar">
-          <label>Rechercher une playlist<input id="library-search" type="search" placeholder="Nom de playlist…" autocomplete="off"></label>
-          <label>Trier<select id="library-sort"><option value="name">Nom</option><option value="recent">Dernières sélections</option><option value="count">Nombre de titres</option></select></label>
+          <label>Rechercher dans ma bibliothèque<input id="library-search" type="search" placeholder="Titre, artiste ou playlist…" autocomplete="off"></label>
+          <button id="library-search-tracks" type="button" class="btn-small">Chercher les titres</button>
+          <label>Trier<select id="library-sort"><option value="recent">Dernières écoutes</option><option value="name">Nom</option><option value="count">Nombre de titres</option></select></label>
           <button id="library-rediscover" type="button" class="btn-small">Surprends-moi</button>
         </div>
-        <p class="muted library-hint">Épingle tes playlists pour les retrouver en tête. « Surprends-moi » pioche dans ta bibliothèque.</p>
-        <section id="library-recent-section" class="library-recent" aria-label="Dernières sélections" hidden>
-          <div class="library-section-heading"><h2>Dernières sélections</h2><button id="library-clear-recent" type="button" class="btn-small">Effacer l’historique</button></div>
-          <div id="library-recent-list" class="library-recent-list"></div>
-        </section>
+        <p class="muted library-hint">Tes playlists jouées remontent en haut. Épingle tes favorites pour les garder en tête.</p>
         <div class="playlist-browser">
           <form id="playlist-selection-form">
+            <label class="library-multi-choice"><input id="library-multi-select" type="checkbox"> Choisir plusieurs playlists</label>
             <label class="playlist-shuffle-choice">
               <input type="checkbox" id="shuffle-mode">
               <span>
@@ -77,8 +75,8 @@
             </label>
             <div id="playlists-container">Chargement...</div>
             <div class="playlist-submit-row">
-              <button type="submit" class="btn-primary">Définir comme playlist active</button>
-              <p id="selection-message" class="success-msg" style="display:none">Playlist mise à jour !</p>
+              <button type="submit" class="btn-primary" id="library-play-selection">Écouter la sélection</button>
+              <p id="selection-message" class="success-msg" style="display:none">Sélection prête !</p>
             </div>
           </form>
           <aside class="playlist-preview-panel" aria-live="polite">
@@ -94,7 +92,7 @@
       </section>
 
       <section id="view-playlist" class="view">
-        <h1>Lecteur Audio</h1>
+        <h1>Lecture en cours</h1>
         <div class="playlist-view-layout">
           <div class="playlist-column">
             <div class="search-filter-container">
@@ -119,14 +117,14 @@
         <div id="spotify-explorer" class="spotify-explorer">
           <div class="spotify-topbar">
             <form class="spotify-search-form" data-spotify-search-form>
-              <input data-spotify-search-input type="search" placeholder="Artiste, titre, album ou playlist" autocomplete="off">
+              <input data-spotify-search-input type="search" aria-label="Rechercher sur Spotify" placeholder="Artiste, titre, album ou playlist" autocomplete="off">
               <button type="submit" class="btn-primary">Rechercher</button>
             </form>
-            <button type="button" class="btn-primary" data-spotify-import-current disabled>Importer</button>
           </div>
 
-          <div class="spotify-layout">
-            <aside class="spotify-sidebar-panel">
+          <details class="spotify-options">
+            <summary>Ouvrir un lien et options d’import</summary>
+            <div class="spotify-sidebar-panel">
               <form class="spotify-quick-form" data-spotify-playlist-open-form>
                 <label for="spotify-playlist-url">Playlist</label>
                 <input id="spotify-playlist-url" data-spotify-playlist-url type="text" placeholder="Lien ou ID Spotify">
@@ -140,7 +138,9 @@
               </div>
               <button type="button" class="btn-small" data-spotify-me hidden>Mes playlists Spotify</button>
               <button type="button" class="btn-small" data-spotify-library>Bibliothèque locale</button>
-            </aside>
+            </div>
+          </details>
+          <div class="spotify-layout">
 
             <section class="spotify-content-panel">
               <div class="spotify-status" data-spotify-status>Recherche une musique, un album, un artiste ou une playlist Spotify.</div>
@@ -155,12 +155,21 @@
       </section>
 
       <section id="view-add_youtube" class="view">
-        <h2>Recherche YouTube</h2>
-        <div class="search-box">
-          <input type="text" id="query_yt" placeholder="Artiste, titre...">
-          <button id="btn-search-yt">Rechercher</button>
+        <header class="youtube-header">
+          <span class="youtube-eyebrow">DÉCOUVRIR · YOUTUBE</span>
+          <h1>Trouve ton prochain morceau</h1>
+          <p>Un titre, un artiste, une envie. Écoute et garde tes trouvailles dans tes playlists.</p>
+          <form id="youtube-search-form" class="youtube-search" role="search">
+            <label for="query_yt">Rechercher sur YouTube</label>
+            <div class="youtube-search-field">
+              <input type="search" id="query_yt" placeholder="Un artiste, un titre…" autocomplete="off" required>
+              <button type="submit" id="btn-search-yt" class="btn-primary">Rechercher</button>
+            </div>
+          </form>
+        </header>
+        <div id="results-yt" class="results-grid" aria-live="polite">
+          <div class="youtube-empty"><span aria-hidden="true">♫</span><h2>La musique commence ici</h2><p>Recherche un morceau ou une playlist pour commencer.</p></div>
         </div>
-        <div id="results-yt" class="results-grid"></div>
       </section>
 
       <section id="view-add_local" class="view">
@@ -189,6 +198,11 @@
             <span>lecture controlé</span>
           </label>
           <p class="muted" id="controlled-playback-help">En choisissant un titre, continuer dans l'ordre de sa playlist puis revenir aux titres précédents, sans remettre le morceau en cours dans la file.</p>
+          <label class="setting-row">
+            <input type="checkbox" id="sponsorblock-enabled" aria-describedby="sponsorblock-help">
+            <span>Passer les passages sans musique sur YouTube</span>
+          </label>
+          <p class="muted" id="sponsorblock-help">Avec <a href="https://sponsor.ajay.app/" target="_blank" rel="noreferrer">SponsorBlock</a>. Désactivé par défaut, réglage pour ce compte dans ce navigateur. L’activation autorise le serveur à consulter les repères communautaires, sans envoyer le lien exact ni tes informations de compte. Disponible dans le lecteur web, lorsque le flux permet les sauts.</p>
           <form id="password-change-form" class="settings-panel">
             <h2>Mot de passe</h2>
             <label>
@@ -379,6 +393,10 @@
           </button>
         </div>
 
+        <div id="sponsorblock-track-control" hidden>
+          <label><input type="checkbox" id="sponsorblock-track-enabled" checked> Passer les passages sans musique pour ce titre</label>
+          <p class="muted" id="sponsorblock-status" role="status"></p>
+        </div>
         <div id="sleep-timer-controls" class="sleep-timer-controls">
           <label for="sleep-timer">Minuterie d’arrêt</label>
           <select id="sleep-timer"><option value="0">Désactivée</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="90">90 minutes</option></select>

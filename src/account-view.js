@@ -35,6 +35,7 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         renderAuthState() {
+            this.loadSponsorBlockPreference?.();
             const managementOnly = this.currentUser?.role === 'admin';
             document.body.classList.toggle('management-only', managementOnly);
             const preferenceUser = this.currentUser?.id ?? 'local';
