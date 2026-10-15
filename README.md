@@ -19,6 +19,7 @@ Un lecteur musical personnel pour réunir YouTube, le catalogue Spotify et vos f
 - [🚀 Prise en main pour écouter](#prise-en-main)
 - [🔐 Comptes, confidentialité et services musicaux](#comptes-et-confidentialite)
 - [👷 Contribuer](#contribuer)
+- [📦 Installation sans build](#installation-sans-build)
 - [🛠️ Installation et build — guide technique](#installation-et-build)
   - [Prérequis et architecture](#prerequis)
   - [Configurer une première installation](#configuration)
@@ -40,7 +41,8 @@ YouPlayer rassemble la recherche musicale, les playlists et la lecture audio dan
 
 L'application s'utilise depuis un navigateur. Elle fonctionne avec un serveur que vous installez et gérez vous-même : c'est le principe de l'**auto-hébergement**. Si quelqu'un a déjà installé YouPlayer pour vous, vous avez seulement besoin de l'adresse du site et d'un compte de lecture.
 
-Pour installer votre propre instance, rendez-vous au [guide technique en fin de page](#installation-et-build).
+Pour installer votre propre instance, consultez l’[installation sans build](#installation-sans-build)
+ou le [guide technique avec build](#installation-et-build).
 
 <a id="fonctionnalites"></a>
 
@@ -98,6 +100,26 @@ Les améliorations de l'interface, de la documentation et de la fiabilité du le
 Lisez [AGENTS.md](AGENTS.md) avant de modifier le projet. Utilisez des exemples fictifs et conservez les comptes, clés, playlists personnelles, médias, configurations locales et journaux hors des contributions.
 
 ---
+
+<a id="installation-sans-build"></a>
+
+## 📦 Installation sans build
+
+Les nouvelles releases publiées en mode registre fournissent `youplayer-install.tar.gz`.
+Cette petite archive contient un Compose sans build et un installateur interactif :
+les images backend/frontend sont téléchargées par digest après vérification de leur signature.
+Le serveur ne nécessite ni Git, ni `npm install`, ni Chromium.
+
+Après installation des outils hôte indiqués dans [INSTALL.md](INSTALL.md), télécharger
+l’archive depuis une release de confiance, l’extraire dans un dossier permanent,
+puis lancer `./install.sh`. Le script demande le compte admin, génère les secrets,
+prépare les dossiers et contrôle le démarrage sur le port HTTPS `8443`.
+Il conserve `.env` et refuse de remplacer une stack existante.
+
+Les releases historiques contenant seulement `youplayer-images.tar` ne fournissent
+pas cet installateur. Les mises à jour restent explicites depuis Admin ; le
+service hôte doit être lancé séparément, comme expliqué dans [INSTALL.md](INSTALL.md).
+Le guide complet avec build reste disponible ci-dessous.
 
 <a id="installation-et-build"></a>
 

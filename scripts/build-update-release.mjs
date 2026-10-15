@@ -3,10 +3,11 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createPrivateKey } from 'node:crypto';
+import { createPrivateKey, createPublicKey } from 'node:crypto';
 import { createRelease } from './production.mjs';
 import { imageArchiveHash, validateImageRepository } from './update-channel.mjs';
 import { prepareSignedUpdate } from './prepare-update.mjs';
+import { buildInstallBundle } from './build-install-bundle.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execute = promisify(execFile);
@@ -48,7 +49,9 @@ export async function buildUpdateRelease(version, privateKeyFile, { registryPref
 			registry[service] = `${repository}@${digest}`;
 		}
 		await fs.writeFile(path.join(release.directory, 'images.json'), JSON.stringify({ images, registry, platform }), { flag: 'wx', mode: 0o600 });
-		return prepareSignedUpdate({ releaseDirectory: release.directory, privateKeyFile, version });
+		const result = await prepareSignedUpdate({ releaseDirectory: release.directory, privateKeyFile, version });
+		await buildInstallBundle({ directory: result.directory, publicKey: createPublicKey(key).export({ type: 'spki', format: 'pem' }) });
+		return result;
 	}
 	const archive = path.join(release.directory, 'images.tar');
 	await fs.writeFile(archive, '', { flag: 'wx', mode: 0o600 });

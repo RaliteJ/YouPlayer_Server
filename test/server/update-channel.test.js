@@ -74,7 +74,7 @@ test('registry publisher signs pushed manifest digests separately from local ima
 	assert.equal(value.platform, 'linux/amd64');
 	assert.equal(calls.some(args => args[0] === 'save'), false);
 	assert.ok(calls.filter(args => args[0] === 'build').every(args => args.includes('--layers') && args.includes('--cache-from') && args.includes('--cache-to')));
-	assert.deepEqual(await fs.readdir(result.directory), ['youplayer-update.json']);
+	assert.deepEqual((await fs.readdir(result.directory)).sort(), ['youplayer-install.tar.gz', 'youplayer-server', 'youplayer-update.json']);
 });
 
 test('release verification rejects tampering, unknown schema and invalid images', () => {
