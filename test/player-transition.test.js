@@ -274,7 +274,7 @@ test('playlist selection leaves current audio and stream intact and replaces the
         document: { getElementById: () => ({ checked: false, style: {} }) },
         setTimeout: () => 0
     });
-    vm.runInContext(controllerSource + '\n' + discoverySource + '\n' + playerViewSource + '\n' + accountSource + '\n' + playlistSource + '\n' + librarySource + '\n' + diagnosticSource + '\n' + contextSource + '\nglobalThis.methods = App;', context);
+    vm.runInContext(sponsorSource + '\n' + controllerSource + '\n' + discoverySource + '\n' + playerViewSource + '\n' + accountSource + '\n' + playlistSource + '\n' + librarySource + '\n' + diagnosticSource + '\n' + contextSource + '\nglobalThis.methods = App;', context);
     app.applyLibraryPlaylists = context.methods.applyLibraryPlaylists;
     assert.equal(await app.selectLibraryPlaylists(['new.json']), true);
     assert.equal(app.lecteur, audio);

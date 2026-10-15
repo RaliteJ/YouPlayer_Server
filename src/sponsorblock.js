@@ -45,7 +45,7 @@ export const sponsorBlockView = {
             if (this.sponsorBlockTrackToggle) this.sponsorBlockTrackToggle.checked = true;
             this.sponsorBlockRequest = null;
         }
-        const eligible = this.sponsorBlockEnabled && track?.type === 'youtube' && Number.isInteger(this.currentId);
+        const eligible = this.sponsorBlockEnabled && track?.type === 'youtube' && /^\d+$/.test(this.currentId);
         if (this.sponsorBlockTrackControl) this.sponsorBlockTrackControl.hidden = !eligible;
         if (this.sponsorBlockRequest) return;
         this.sponsorBlockSegments = [];

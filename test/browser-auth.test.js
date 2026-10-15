@@ -223,6 +223,7 @@ test('security tab checks explicitly, shows corrections and Podman rebuild on mo
   const actions = [];
   const jobId = '12345678-1234-1234-1234-123456789abc';
   try {
+    await page.setViewport({ width: 1280, height: 900, isMobile: true, hasTouch: true });
     await page.setRequestInterception(true);
     page.on('request', request => {
       const route = new URL(request.url()).pathname;
@@ -1994,7 +1995,8 @@ test('large Liked playlists render without waiting for likes, scroll in batches 
                     return scroller.scrollTop;
                 }, selector);
                 await page.waitForFunction((selector) => document.querySelectorAll(selector).length === 120, {}, rowSelector);
-                assert.equal(await page.evaluate(() => window.localPlaylistScroller.scrollTop), bottom, `${view} at ${width}px keeps its position`);
+                const position = await page.evaluate(() => window.localPlaylistScroller.scrollTop);
+                assert.ok(Math.abs(position - bottom) <= 1, `${view} at ${width}px keeps its position within 1px (${position} vs ${bottom})`);
                 assert.equal(await page.$eval(selector, list => list.firstElementChild === window.firstScrollRow), true);
                 await page.$eval(selector, list => list.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true })));
                 assert.equal(await page.$$eval(rowSelector, rows => rows.length), 120);

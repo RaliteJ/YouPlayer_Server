@@ -148,3 +148,16 @@ test('SponsorBlock makes no requests when disabled and ignores a response after 
     await pending;
     assert.deepEqual(app.sponsorBlockSegments, []);
 });
+
+test('SponsorBlock accepts numeric and DOM string track IDs and rejects missing or invalid IDs', async () => {
+    for (const currentId of [0, '0', 42, '42', null, undefined, '', -1, 'invalid', 1.5]) {
+        const requests = [];
+        const app = { ...sponsorBlockView, sponsorBlockUser: 'user1', sponsorBlockEnabled: true, currentId,
+            playerState: { currentTrack: { id: 'abcdefghijk', type: 'youtube' } },
+            apiFetch: async endpoint => { requests.push(endpoint); return { available: true, key: 'youtube:abcdefghijk', segments: [] }; } };
+        await app.refreshSponsorBlock();
+        const eligible = [0, '0', 42, '42'].includes(currentId);
+        assert.equal(requests.length, eligible ? 1 : 0, `track ID ${String(currentId)}`);
+        if (eligible) assert.equal(requests[0], `/sponsorblock?trackId=${currentId}&key=youtube%3Aabcdefghijk`);
+    }
+});
