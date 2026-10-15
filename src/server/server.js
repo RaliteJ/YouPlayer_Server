@@ -1,4 +1,5 @@
 import { registerPlaybackRoutes } from './playback-routes.js';
+import { registerSponsorBlockRoutes } from './sponsorblock.js';
 import { registerYoutubeRoutes } from './youtube-routes.js';
 import { registerHealthRoutes, checkWritableDirectories } from './health-routes.js';
 import { registerSpotifyRoutes } from './spotify-routes.js';
@@ -207,6 +208,7 @@ const STATIC_FILE_ALLOWLIST = new Map([
 	["/android-player.js", "android-player.js"],
 	["/client-utils.js", "client-utils.js"],
 	["/library-tools.js", "library-tools.js"],
+	["/sponsorblock.js", "sponsorblock.js"],
 	["/audio-diagnostics.js", "audio-diagnostics.js"],
 	["/track-gestures.js", "track-gestures.js"],
 	["/library-view.js", "library-view.js"],
@@ -294,6 +296,7 @@ const playlistAccess = createPlaylistAccess({ authEnabled: AUTH_ENABLED, store: 
 const { validateSessionTrack, removeSongFromSessionQueue } = registerPlaybackRoutes(app, {
 	config, store: youplayerStore, firstTrackStreams, playlistAccess, requireAuth: requireListener, recordAction, sendJsonError
 });
+registerSponsorBlockRoutes(app, { requireAuth: requireListener, validateSessionTrack, sendJsonError });
 registerYoutubeRoutes(app, { requireAuth: requireListener, sendJsonError, youtubeApiKey: API_KEY });
 registerPlaylistRoutes(app, {
 	authEnabled: AUTH_ENABLED, store: youplayerStore, localSongDir: LOCAL_SONG_DIR,

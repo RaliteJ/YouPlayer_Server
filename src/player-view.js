@@ -144,6 +144,7 @@ export const playerView = {
         this.playerState.currentTrack = currentId == null
             ? null
             : (state.current || this.playerState.currentTrack);
+        void this.refreshSponsorBlock?.();
         this.playerState.queue = Array.isArray(state.queue) ? state.queue : [];
         this.playerState.currentIndex = currentId;
         this.playerState.nextTrack = this.playerState.queue[0] || null;

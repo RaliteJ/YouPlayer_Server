@@ -1,6 +1,6 @@
-const fold = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('fr');
+export const fold = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('fr');
 
-export function orderLibrary(playlists, { query = '', sort = 'name', pinned = [], recent = [] } = {}) {
+export function orderLibrary(playlists, { query = '', sort = 'recent', pinned = [], recent = [] } = {}) {
 	const needles = fold(query).trim().split(/\s+/).filter(Boolean);
 	const rank = (names, name) => names.includes(name) ? names.indexOf(name) : Number.MAX_SAFE_INTEGER;
 	return playlists.filter((playlist) => needles.every((word) => fold(playlist.title || playlist.name).includes(word)))

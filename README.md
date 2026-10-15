@@ -514,3 +514,13 @@ It is not affiliated with, endorsed by, or sponsored by Spotify, YouTube, or Goo
 Users are responsible for complying with applicable laws, copyright requirements,
 and the terms of service of any third-party platforms they access.
 This project does not grant permission to download, copy, or distribute copyrighted content.
+
+### Passages non musicaux (SponsorBlock)
+
+Dans **Paramètres**, activez **Passer les passages sans musique sur YouTube**. Cette option est désactivée par défaut et enregistrée séparément pour chaque compte dans le navigateur. Dans le lecteur agrandi, décochez la même option pour écouter le morceau en cours en entier ; elle se réactive au changement de morceau.
+
+Seule la catégorie `music_offtopic` est utilisée. Les repères communautaires sont filtrés et comparés à la durée du morceau. Le fichier audio reste intact et la progression conserve les temps de la vidéo originale, y compris pour la reprise de lecture. Sans repères, en cas de panne ou si le flux progressif ne permet pas de se déplacer, le morceau continue intégralement. Cette intégration concerne les titres YouTube du lecteur web ; elle ne pilote pas le service audio natif Android ni les correspondances YouTube des titres Spotify.
+
+Le serveur interroge l’API SponsorBlock uniquement après activation, à partir des quatre premiers caractères du SHA-256 de l’identifiant vidéo. Les réponses utiles sont gardées en mémoire pendant six heures (256 titres au maximum) ; les échecs sont gardés une minute. Aucun compte, média, historique d’écoute, vote ou signalement n’est envoyé. Le service externe reçoit néanmoins l’adresse IP du serveur et le préfixe demandé.
+
+Données de [SponsorBlock](https://sponsor.ajay.app/), sous licence [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Seuls les repères non musicaux valides sont conservés ; aucune base modifiée n’est publiée.

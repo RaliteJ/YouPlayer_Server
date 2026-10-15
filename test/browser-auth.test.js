@@ -263,7 +263,7 @@ test('security tab checks explicitly, shows corrections and Podman rebuild on mo
     assert.equal(await page.$eval('#admin-security-rebuild', el => el.hidden), false);
     assert.match(await page.$eval('#admin-security-rebuild code', el => el.textContent), /up -d --build/);
     for (const width of [320, 390, 768, 1280]) {
-      await page.setViewport({ width, height: 900 });
+      await page.setViewport({ width, height: 900, isMobile: true, hasTouch: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `security panel fits at ${width}`);
     }
     state = { ...state, rebuildRequired: false, installedMatchesAudit: true };
@@ -352,12 +352,12 @@ test('library shortcuts preserve filtered selection, pins and mobile layout; sle
 				if (endpoint === '/playlist_preferences') {
 					const p = window.libraryFixture;
 					if (method === 'POST') {
-						if (body.action === 'clear_recent') p.recent = [];
 						if (body.action === 'visit') p.recent = [body.playlist, ...p.recent.filter((name) => name !== body.playlist)].slice(0, 12);
 						if (body.action === 'pin') p.pinned = body.enabled ? [body.playlist, ...p.pinned.filter((name) => name !== body.playlist)] : p.pinned.filter((name) => name !== body.playlist);
 					}
 					return structuredClone(p);
 				}
+				if (endpoint.startsWith('/playlist_preview?')) return [{ title: 'Titre retrouvé', artist: 'Artiste test', type: 'youtube', url: 'https://www.youtube.com/watch?v=fixture1234', __playlistIndex: 7 }];
 				if (endpoint === '/playlist_used') { window.librarySelections.push(body.arg); return 'OK'; }
 				if (endpoint === '/account_playback/restore') return null;
 				throw new Error(`Unexpected local request: ${endpoint}`);
@@ -371,6 +371,7 @@ test('library shortcuts preserve filtered selection, pins and mobile layout; sle
 		await page.click('.library-pin[data-playlist="rock.json"]');
 		await page.waitForFunction(() => document.querySelector('.library-pin[data-playlist="rock.json"]').getAttribute('aria-pressed') === 'true');
 		assert.equal(await page.$eval('#playlists-container li', (element) => element.dataset.playlist), 'rock.json');
+		await page.click('#library-multi-select');
 		await page.click('input[value="rock.json"]');
 		await page.type('#library-search', 'ete');
 		assert.equal(await page.$$eval('#playlists-container li', (elements) => elements.length), 1);
@@ -378,20 +379,50 @@ test('library shortcuts preserve filtered selection, pins and mobile layout; sle
 		await page.click('#playlist-selection-form button[type="submit"]');
 		await page.waitForFunction(() => window.librarySelections.length === 1 && window.fixtureApp.libraryPreferences.recent.length === 2);
 		assert.deepEqual(await page.evaluate(() => window.librarySelections[0]), ['rock.json', 'ete.json']);
-		await page.evaluate(() => { document.getElementById('library-search').value = ''; window.fixtureApp.renderLibrary(); });
+		await page.evaluate(() => { document.getElementById('library-search').value = ''; window.fixtureApp.loadView('accueil'); });
+		await page.waitForSelector('.library-play[data-playlist="ete.json"]');
 		for (const width of [320, 390, 1280]) {
 			await page.setViewport({ width, height: 844 });
+			assert.equal(await page.$$eval('.actions-add a', links => links.filter(link => {
+				const rect = link.getBoundingClientRect();
+				return rect.width > 0 && rect.height > 0 && rect.left >= 0 && rect.right <= innerWidth
+					&& rect.top >= 0 && rect.bottom <= innerHeight
+					&& link.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
+			}).length), 3, `all music add buttons are visible and reachable at ${width}px`);
 			assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `no horizontal overflow at ${width}px`);
 			assert.ok(await page.$$eval('.library-row-actions button', (buttons) => buttons.every((button) => {
 				const rect = button.getBoundingClientRect();
 				return rect.left >= 0 && rect.right <= innerWidth + 1;
 			})), `playlist actions fit at ${width}px`);
 		}
-		await page.click('#library-clear-recent');
-		await page.waitForFunction(() => document.getElementById('library-recent-section').hidden);
+		await page.$eval('#library-search', input => { input.value = 'Artiste test'; });
+		await page.click('#library-search-tracks');
+		await page.waitForFunction(() => document.querySelectorAll('#playlist-preview-list .playlist-preview-track').length === 3);
+		assert.match(await page.$eval('#playlist-preview-list', list => list.textContent), /Été calme/);
+		await page.evaluate(() => {
+			window.savedEnqueue = window.fixtureApp.enqueueNextSong;
+			window.fixtureApp.enqueueNextSong = async (track, options) => { window.searchSelection = { track, options }; };
+		});
+		await page.click('#playlist-preview-list .song-options');
+		await page.click('.song-action-menu [data-action="next"]');
+		assert.deepEqual(await page.evaluate(() => [window.searchSelection.track.previewIndex, window.searchSelection.options.playNow]), [7, false]);
+		assert.ok(await page.evaluate(() => window.searchSelection.track.previewPlaylist.endsWith('.json')));
+		await page.evaluate(() => {
+			window.fixtureApp.enqueueNextSong = window.savedEnqueue;
+			document.getElementById('library-search').value = '';
+			window.fixtureApp.renderLibrary();
+		});
+		assert.equal(await page.$('#library-recent-section'), null);
+		await page.click('.library-pin[data-playlist="rock.json"]');
+		await page.waitForFunction(() => !window.fixtureApp.libraryPreferences.pinned.length);
 		await page.click('.library-play[data-playlist="ete.json"]');
-		await page.waitForFunction(() => window.libraryStarts === 1);
+		await page.waitForFunction(() => window.libraryStarts === 2);
 		assert.deepEqual(await page.evaluate(() => window.librarySelections.at(-1)), ['ete.json']);
+		await page.evaluate(async () => {
+			await window.fixtureApp.fetchAvailablePlaylists();
+			window.fixtureApp.loadView('accueil');
+		});
+		assert.equal(await page.$eval('#playlists-container li', el => el.dataset.playlist), 'ete.json', 'last played playlist moves to the top after reloading preferences');
 		await page.evaluate(async () => {
 			const App = window.fixtureApp;
 			const bytes = new Uint8Array(44 + 16000);
@@ -869,10 +900,14 @@ test('Spotify artist portraits render and navigation opens and imports an album'
 			window.spotifyApp.toggleDiscoveredTrackLike = async track => window.spotifyActions.push({ action: 'like', type: track.type });
 			window.spotifyApp.openAddModal = async track => window.spotifyActions.push({ action: 'playlist', type: track.type });
 		});
-		await page.$eval('.spotify-track-row', element => element.click());
-		await page.$eval('.spotify-track-row [data-queue-track]', element => element.click());
+		await page.$eval('.spotify-track-row [data-track-menu]', element => element.click());
+		await page.click('.song-action-menu [data-action="play"]');
+		await page.$eval('.spotify-track-row [data-track-menu]', element => element.click());
+		assert.equal(await page.$('.song-action-menu [data-action="delete"]'), null);
+		await page.click('.song-action-menu [data-action="next"]');
 		await page.$eval('.spotify-track-row .spotify-like', element => element.click());
-		await page.$eval('.spotify-track-row [data-add-track]', element => element.click());
+		await page.$eval('.spotify-track-row [data-track-menu]', element => element.click());
+		await page.click('.song-action-menu [data-action="add"]');
 		const row = await page.$('.spotify-track-row');
 		await row.evaluate(element => element.scrollIntoView({ block: 'center' }));
 		const bounds = await row.boundingBox();
@@ -970,6 +1005,35 @@ test('YouTube results play on click, queue on swipe and open the playlist form f
 			document.getElementById('query_yt').value = 'fixture';
 			await App.searchYoutube();
 		});
+		for (const width of [320, 390, 768, 800, 1280, 1860]) {
+			await page.setViewport({ width, height: 900, isMobile: true, hasTouch: true });
+			assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `YouTube fits at ${width}px`);
+			assert.equal(await page.$$eval('.video-card', cards => cards.length), 16);
+			assert.ok(await page.$$eval('.video-card', cards => cards.every((card, index) => {
+				const rect = card.getBoundingClientRect();
+				return cards.slice(index + 1).every(other => {
+					const next = other.getBoundingClientRect();
+					return next.left >= rect.right || next.right <= rect.left || next.top >= rect.bottom;
+				});
+			})), `YouTube cards do not overlap at ${width}px`);
+			assert.ok(await page.$$eval('.youtube-card-actions', rows => rows.every(row => {
+				const bounds = row.closest('.video-card').getBoundingClientRect();
+				return [...row.children].every(button => {
+					const rect = button.getBoundingClientRect();
+					return rect.height >= 44 && rect.left >= bounds.left && rect.right <= bounds.right;
+				});
+			})), `YouTube actions fit at ${width}px`);
+		}
+		await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+		await page.focus('#query_yt');
+		await page.keyboard.press('Enter');
+		await page.waitForSelector('.youtube-add');
+		await page.click('.video-card[data-id="youtube-test-0"] .youtube-add');
+		await page.waitForSelector('#playlist-modal', { visible: true });
+		assert.equal(await page.evaluate(() => window.fixtureApp.songPendingAdd.title), 'YouTube fixture 0 with a long title');
+		assert.deepEqual(await page.evaluate(() => window.played), [], 'adding does not start playback');
+		await page.click('#btn-modal-close');
+
 		await page.click('.video-card[data-id="youtube-test-0"] p');
 		await page.waitForFunction(() => window.played.length === 1 && !window.fixtureApp.lecteur.paused && !window.fixtureApp.nextSongLoading);
 		assert.equal(await page.evaluate(() => window.fixtureApp.lecteur === window.originalAudio), true);
@@ -989,6 +1053,7 @@ test('YouTube results play on click, queue on swipe and open the playlist form f
 		await page.waitForFunction(() => window.queued.length === 3 && !window.fixtureApp.queueEditPromise);
 		// Another card avoids the deliberate click suppression immediately after a swipe.
 		await page.click('.video-card[data-id="youtube-test-0"] .youtube-options');
+		await page.click('.song-action-menu [data-action="add"]');
 		await page.waitForSelector('#playlist-modal', { visible: true });
 		assert.equal(await page.$eval('#modal-playlist-select', el => el.options[0].textContent), 'Existing fixture');
 		assert.equal(await page.$eval('#modal-new-playlist', el => el.value), '');
@@ -1250,7 +1315,7 @@ test('admin account forms create a user and reset its password without exposing 
 	}
 });
 
-test('mobile playlist cards keep readable titles and separate actions without horizontal overflow', { timeout: 20000 }, async (t) => {
+test('playlist cards keep titles and actions on one compact row without horizontal overflow', { timeout: 20000 }, async (t) => {
 	if (browserSetupError) {
 		t.skip(`Browser test unavailable: ${browserSetupError.message}`);
 		return;
@@ -1275,7 +1340,16 @@ test('mobile playlist cards keep readable titles and separate actions without ho
 		}
 		await page.waitForSelector('.playlist-selection-item', { timeout: 5000 });
 
-		for (const width of [320, 390, 480]) {
+		await page.evaluate(async () => {
+			const { App } = await import(document.querySelector('script[type="module"]').src);
+			App.availablePlaylists = [
+				{ name: 'compact.json', title: 'Une playlist avec un titre très long qui doit rester lisible', count: 124 },
+				{ name: 'autre.json', title: 'Autre playlist', count: 5 }
+			];
+			App.renderLibrary();
+		});
+
+		for (const width of [320, 390, 768, 800, 1280, 1860]) {
 			await page.setViewport({
 				width,
 				height: 844,
@@ -1287,7 +1361,7 @@ test('mobile playlist cards keep readable titles and separate actions without ho
 				const card = document.querySelector('.playlist-selection-item');
 				const preview = card.querySelector('.playlist-preview-button').getBoundingClientRect();
 				const rowActions = card.querySelector('.library-row-actions');
-				const children = [...rowActions.children].filter((element) => !element.hidden);
+				const children = [...rowActions.children].filter((element) => !element.hidden && getComputedStyle(element).display !== 'none');
 				const cardRect = card?.getBoundingClientRect();
 				const childRects = children.map((element) => element.getBoundingClientRect());
 				const centers = childRects.map((rect) => rect.top + rect.height / 2);
@@ -1296,7 +1370,8 @@ test('mobile playlist cards keep readable titles and separate actions without ho
 				player.classList.add('visible');
 
 				return {
-					actionsBelowTitle: rowActions.getBoundingClientRect().top >= preview.bottom,
+					actionsBesideTitle: rowActions.getBoundingClientRect().left >= preview.right && rowActions.getBoundingClientRect().top < preview.bottom,
+					titleWidth: card.querySelector('.playlist-choice-title').getBoundingClientRect().width,
 					childrenContained: childRects.every((rect) =>
 						rect.left >= cardRect.left && rect.right <= cardRect.right
 					),
@@ -1309,7 +1384,8 @@ test('mobile playlist cards keep readable titles and separate actions without ho
 				};
 			});
 
-			assert.equal(layout.actionsBelowTitle, true, `${width}px actions must sit below the title`);
+			assert.equal(layout.actionsBesideTitle, true, `${width}px actions must sit beside the title`);
+			assert.ok(layout.titleWidth >= 48, `${width}px title must remain readable`);
 			assert.equal(layout.touchTargets, true, `${width}px actions must remain touchable`);
 			assert.equal(layout.childrenContained, true, `${width}px card children must stay contained`);
 			assert.equal(layout.sameLine, true, `${width}px card controls must stay on one line`);
@@ -2061,5 +2137,90 @@ test('YouTube playlist menu creates or appends an import, excludes Liked and kee
             source: window.fixtureApp.lecteur.getAttribute('src'),
             menuClosed: window.fixtureApp.songActionMenu === null
         })), { id: 17, sameAudio: true, source: null, menuClosed: true });
+    } finally { await page.close(); }
+});
+
+test('SponsorBlock is opt-in, skips real audio, can be disabled per track and preserves native ended', { timeout: 20000 }, async () => {
+    if (browserSetupError) throw browserSetupError;
+    const page = await browser.newPage();
+    page.setDefaultTimeout(6000);
+    const wav = Buffer.alloc(44 + 8000 * 8 * 2);
+    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4);
+    wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+    try {
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+            if (new URL(request.url()).pathname === '/play/42') {
+                const range = /bytes=(\d+)-(\d*)/.exec(request.headers().range || '');
+                const start = range ? Number(range[1]) : 0;
+                const end = range?.[2] ? Math.min(Number(range[2]), wav.length - 1) : wav.length - 1;
+                return void request.respond({ status: range ? 206 : 200, contentType: 'audio/wav',
+                    headers: { 'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1),
+                        ...(range ? { 'Content-Range': `bytes ${start}-${end}/${wav.length}` } : {}) },
+                    body: wav.subarray(start, end + 1) });
+            }
+            if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) void request.continue();
+            else void request.abort();
+        });
+        await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+        await page.evaluate(async () => {
+            const { App } = await import(document.querySelector('script[type="module"]').src);
+            window.sbApp = App;
+            window.sbRequests = 0;
+            window.sbEnded = [];
+            localStorage.removeItem('sponsorblock:sb-test');
+            App.currentUser = { id: 'sb-test', role: 'user' };
+            App.apiFetch = async endpoint => {
+                if (endpoint.startsWith('/sponsorblock?')) {
+                    window.sbRequests++;
+                    return { available: true, key: 'youtube:abcdefghijk', segments: [
+                        { start: 1, end: 3, duration: 8 }, { start: 5, end: 8, duration: 8 }
+                    ] };
+                }
+                return null;
+            };
+            App.showApp();
+            App.accountPlaybackReady = false;
+            App.crossfade?.setDuration(0);
+            App.advanceToNextSong = async reason => window.sbEnded.push(reason);
+            App.updatePlaybackUi({ currentId: 42, current: { id: 'abcdefghijk', type: 'youtube', title: 'Synthetic clip' }, queue: [] });
+            App.setMainAudioSource('/play/42');
+            await App.lecteur.play();
+            window.sbAudio = App.lecteur;
+            App.loadView('parametres');
+        });
+        assert.equal(await page.evaluate(() => window.sbRequests), 0);
+        await page.click('#sponsorblock-enabled');
+        await page.waitForFunction(() => window.sbApp.lecteur.currentTime >= 3);
+        assert.equal(await page.evaluate(() => window.sbRequests), 1);
+        assert.match(await page.$eval('#sponsorblock-status', el => el.textContent), /sauté/);
+        await page.evaluate(() => window.sbApp.openNowPlaying());
+        await page.click('#sponsorblock-track-enabled');
+        await page.evaluate(() => { window.sbApp.seekPlayer(1.1); });
+        await page.waitForFunction(() => !window.sbApp.lecteur.seeking && window.sbApp.lecteur.currentTime >= 1.3);
+        assert.ok(await page.evaluate(() => window.sbApp.lecteur.currentTime < 2.5));
+        await page.click('#sponsorblock-track-enabled');
+        await page.waitForFunction(() => window.sbApp.lecteur.currentTime >= 3);
+        await page.evaluate(() => window.sbApp.seekPlayer(5.1));
+        await page.waitForFunction(() => window.sbEnded.length === 1);
+        assert.deepEqual(await page.evaluate(() => window.sbEnded), ['ended']);
+        assert.equal(await page.evaluate(() => window.sbAudio === document.getElementById('lecteur')), true);
+        assert.equal(await page.$$eval('audio', items => items.length), 1);
+        const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('playbackResume:sb-test')));
+        assert.ok(saved.position === 0 || saved.position >= 5, 'checkpoints keep the original timeline');
+        await page.evaluate(() => {
+            window.sbApp.currentUser = { id: 'different-account', role: 'user' };
+            window.sbApp.renderAuthState();
+        });
+        assert.equal(await page.$eval('#sponsorblock-enabled', input => input.checked), false);
+        await page.evaluate(() => {
+            window.sbApp.currentUser = { id: 'sb-test', role: 'user' };
+            window.sbApp.renderAuthState();
+        });
+        assert.equal(await page.$eval('#sponsorblock-enabled', input => input.checked), true);
     } finally { await page.close(); }
 });

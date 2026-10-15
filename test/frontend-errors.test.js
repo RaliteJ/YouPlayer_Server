@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { publicErrorMessage } from '../src/client-utils.js';
 
+const sponsorSource = (await readFile(new URL('../src/sponsorblock.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export const', 'const');
 const source = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
 const controllerSource = (await readFile(new URL('../src/player-controller.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export function', 'function');
 const discoverySource = (await readFile(new URL('../src/discovery-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export function', 'function');
@@ -22,7 +23,7 @@ function harness(fetch) {
         console: { error() {} },
         window: { location: { origin: 'https://player.test' } }
     });
-    vm.runInContext(controllerSource + '\n' + discoverySource + '\n' + playerViewSource + '\n' + accountSource + '\n' + playlistSource + '\n' + librarySource + '\n' + diagnosticSource + '\n' + source.slice(source.indexOf('const API_URL'), source.indexOf('export { App }')) + '\nglobalThis.app = App;', context);
+    vm.runInContext(sponsorSource + '\n' + controllerSource + '\n' + discoverySource + '\n' + playerViewSource + '\n' + accountSource + '\n' + playlistSource + '\n' + librarySource + '\n' + diagnosticSource + '\n' + source.slice(source.indexOf('const API_URL'), source.indexOf('export { App }')) + '\nglobalThis.app = App;', context);
     const app = context.app;
     app.showNotice = message => notices.push(message);
     app.showAuth = message => notices.push(message);

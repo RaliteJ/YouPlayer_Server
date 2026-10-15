@@ -16,7 +16,7 @@ const nginxSource = await readFile(new URL('../nginx.conf', import.meta.url), 'u
 test('Nginx forwards account checkpoint and resume requests to the authenticated backend', () => {
 	const expression = nginxSource.match(/location ~ (\^\/\(auth\|[^\s]+) \{/)[1];
 	const apiRoutes = new RegExp(expression);
-	for (const route of ['/account_playback', '/account_playback/restore', '/resume_playback']) {
+	for (const route of ['/account_playback', '/account_playback/restore', '/resume_playback', '/sponsorblock']) {
 		assert.equal(apiRoutes.test(route), true, route);
 	}
 	for (const route of ['/server/server.js', '/playlists/private.json', '/account_playback_other']) {
@@ -80,4 +80,71 @@ test('background audio diagnostics are opt-in and cover the transition chain', (
 	assert.match(appSource, /'CALL_PLAY'/);
 	assert.match(appSource, /'PLAY_RESOLVED'/);
 	assert.match(appSource, /'PLAY_REJECTED'/);
+});
+
+const { sponsorBlockView } = await import('../src/sponsorblock.js');
+function sponsorFixture() {
+    const audio = { currentTime: 2, duration: 10, currentSrc: 'http://test/play/0', src: 'http://test/play/0',
+        seekable: { length: 1, start: () => 0, end: () => 10 }, paused: false, ended: false, seeking: false };
+    return { ...sponsorBlockView, currentId: 0, sponsorBlockEnabled: true,
+        sponsorBlockSegments: [{ start: 1, end: 4, duration: 10 }, { start: 3, end: 5, duration: 10 }],
+        activeAudioPlayer: () => audio, seekPlayer(target) { audio.currentTime = target; },
+        savePlaybackPosition() { this.saved = audio.currentTime; }, audio };
+}
+
+test('non-music skipping merges overlaps, saves original timestamps and leaves ending to the audio element', () => {
+    const app = sponsorFixture();
+    assert.equal(app.skipNonMusic(), true);
+    assert.equal(app.audio.currentTime, 5);
+    assert.equal(app.saved, 5);
+    assert.equal(app.skipNonMusic(), false);
+    app.sponsorBlockSegments = [{ start: 5, end: 10, duration: 10 }];
+    assert.equal(app.skipNonMusic(), true);
+    assert.equal(app.audio.currentTime, 10);
+});
+
+test('non-music skipping leaves paused, disabled, transitioning, mismatched and non-seekable audio untouched', () => {
+    for (const change of [
+        app => { app.sponsorBlockEnabled = false; }, app => { app.sponsorBlockTrackDisabled = true; },
+        app => { app.audio.paused = true; }, app => { app.audio.seeking = true; },
+        app => { app.nextSongLoading = true; }, app => { app.restoringPlayback = true; },
+        app => { app.queueEditPromise = Promise.resolve(); }, app => { app.currentId = 1; },
+        app => { app.audio.src = 'http://test/play/1'; }, app => { app.audio.duration = 20; },
+        app => { app.audio.duration = Infinity; }, app => { app.audio.seekable.length = 0; },
+        app => { app.audio.seekable.end = () => 3; }
+    ]) {
+        const app = sponsorFixture(); change(app);
+        assert.equal(app.skipNonMusic(), false);
+        assert.equal(app.audio.currentTime, 2);
+        assert.equal(app.saved, undefined);
+    }
+});
+
+test('non-music skipping accounts for a resumed stream offset', () => {
+    const app = sponsorFixture();
+    app.currentSpecialStream = { startPosition: 2, audioUrl: '/audio/stream' };
+    app.audio.src = app.audio.currentSrc = 'http://test/audio/stream';
+    app.audio.currentTime = 0;
+    app.audio.duration = 8;
+    app.seekPlayer = target => { app.audio.currentTime = target - 2; };
+    assert.equal(app.skipNonMusic(), true);
+    assert.equal(app.audio.currentTime, 3);
+});
+
+test('SponsorBlock makes no requests when disabled and ignores a response after the track changes', async () => {
+    let resolve, calls = 0;
+    const app = { ...sponsorBlockView, sponsorBlockUser: 'user1', currentId: 0,
+        playerState: { currentTrack: { id: 'abcdefghijk', type: 'youtube' } },
+        apiFetch: () => { calls++; return new Promise(done => { resolve = done; }); } };
+    await app.refreshSponsorBlock();
+    assert.equal(calls, 0);
+    app.sponsorBlockEnabled = true;
+    const pending = app.refreshSponsorBlock();
+    assert.equal(calls, 1);
+    app.currentId = 1;
+    app.playerState.currentTrack = { type: 'local', url: 'test.mp3' };
+    await app.refreshSponsorBlock();
+    resolve({ available: true, key: 'youtube:abcdefghijk', segments: [{ start: 0, end: 5, duration: 10 }] });
+    await pending;
+    assert.deepEqual(app.sponsorBlockSegments, []);
 });

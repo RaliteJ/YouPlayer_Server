@@ -8,10 +8,10 @@ export function createSpotifyExplorer({
 	escapeHtml,
 	playlistEntries,
 	openAddModal,
+	openTrackMenu = () => {},
 	playTrack = () => {},
 	playCollection = () => {},
 	isControlledPlayback = () => false,
-	queueTrack = () => {},
 	bindQueueSwipe = () => {},
 	toggleLike = () => {},
 	likeButtonMarkup = () => '',
@@ -42,7 +42,6 @@ export function createSpotifyExplorer({
 		playlistOpenForm: root.querySelector('[data-spotify-playlist-open-form]'),
 		playlistUrl: root.querySelector('[data-spotify-playlist-url]'),
 		targetPlaylist: root.querySelector('[data-spotify-target-playlist]'),
-		importCurrent: root.querySelector('[data-spotify-import-current]'),
 		meButton: root.querySelector('[data-spotify-me]'),
 		libraryButton: root.querySelector('[data-spotify-library]'),
 		status: root.querySelector('[data-spotify-status]'),
@@ -69,7 +68,6 @@ export function createSpotifyExplorer({
 			element.disabled = isBusy;
 		});
 		if (!isBusy) {
-			updateImportState();
 			updateAccountState();
 		}
 	}
@@ -219,7 +217,6 @@ export function createSpotifyExplorer({
 				${tracks.map((track, index) => {
 					rememberEntity("track", track);
 					const album = track.album?.name || "";
-					const url = track.external_urls?.spotify || spotifyUrl("track", track.id);
 					return `
 						<div class="spotify-track-row" role="button" tabindex="0" data-entity-type="track" data-entity-id="${escapeHtml(track.id)}" data-collection-index="${index}">
 							${trackCover(track)}
@@ -230,10 +227,8 @@ export function createSpotifyExplorer({
 							<span class="spotify-track-album">${escapeHtml(album)}</span>
 							<span class="spotify-track-time">${formatDuration(track.duration_ms)}</span>
 							<div class="spotify-track-actions">
-								<button class="btn-small" type="button" title="Ajouter à la file" aria-label="Ajouter à la file" data-queue-track="${escapeHtml(track.id)}">＋</button>
 								${likeButtonMarkup(trackPayload(track)).replace('class="song-like"', 'class="song-like spotify-like"')}
-								<button class="btn-small" type="button" title="Ajouter à une playlist" aria-label="Ajouter à une playlist" data-add-track="${escapeHtml(track.id)}">⚙</button>
-								<button class="btn-small spotify-open-track" type="button" title="Ouvrir Spotify" data-open-url="${escapeHtml(url)}">↗</button>
+								<button class="btn-small" type="button" aria-label="Options pour ${escapeHtml(track.name || 'ce titre')}" aria-haspopup="true" data-track-menu="${escapeHtml(track.id)}">⋯</button>
 							</div>
 						</div>
 					`;
@@ -282,7 +277,6 @@ export function createSpotifyExplorer({
 		state.currentPlaylist = null;
 		state.currentCollectionType = null;
 		state.currentPlaylistTracks = [];
-		updateImportState();
 
 		const tracks = (data.tracks?.items || []).filter(Boolean);
 		const playlists = (data.playlists?.items || []).filter(Boolean);
@@ -319,7 +313,6 @@ export function createSpotifyExplorer({
 				: page.next ? (page.offset || 0) + playlistItems.length : null;
 		}
 		const visibleTracks = state.currentPlaylistTracks.slice(0, state.playlistVisibleCount);
-		updateImportState();
 
 		const meta = [
 			playlist.owner?.display_name,
@@ -375,7 +368,6 @@ export function createSpotifyExplorer({
 	function renderAlbum(album) {
 		state.currentPlaylist = album;
 		state.currentCollectionType = "album";
-		updateImportState();
 
 		const tracks = (album.tracks?.items || []).map((track) => ({
 			...track,
@@ -405,7 +397,6 @@ export function createSpotifyExplorer({
 		state.currentPlaylist = null;
 		state.currentCollectionType = null;
 		state.currentPlaylistTracks = [];
-		updateImportState();
 
 		const artist = data.artist;
 		const meta = [
@@ -428,7 +419,7 @@ export function createSpotifyExplorer({
 	function renderLocalLibrary(playlists) {
 		state.currentPlaylist = null;
 		state.currentCollectionType = null;
-		updateImportState();
+
 		const values = playlistEntries(playlists).filter(item => item.name !== LIKED_PLAYLIST);
 		els.results.innerHTML = renderSection(
 			"Bibliothèque locale",
@@ -453,7 +444,7 @@ export function createSpotifyExplorer({
 		state.currentPlaylist = null;
 		state.currentCollectionType = null;
 		state.currentPlaylistTracks = [];
-		updateImportState();
+
 		const playlists = (data.items || []).filter(Boolean);
 		state.browserPlaylistIds = new Set(playlists.map((playlist) => playlist.id).filter(Boolean));
 		els.results.innerHTML = renderSection(
@@ -489,11 +480,6 @@ export function createSpotifyExplorer({
 				</div>
 			</div>
 		`;
-	}
-
-	function updateImportState() {
-		if (!els.importCurrent) return;
-		els.importCurrent.disabled = !state.currentPlaylist?.external_urls?.spotify;
 	}
 
 	function updateAccountState() {
@@ -785,14 +771,6 @@ export function createSpotifyExplorer({
 			}
 		});
 
-		els.importCurrent?.addEventListener("click", async () => {
-			try {
-				await importCurrentPlaylist();
-			} catch (err) {
-				setStatus("Spotify est momentanément indisponible. Réessaie dans un instant.", true);
-			}
-		});
-
 		els.libraryButton?.addEventListener("click", async () => {
 			try {
 				const playlists = await loadExistingPlaylists();
@@ -835,17 +813,11 @@ export function createSpotifyExplorer({
 					return;
 				}
 
-				const addButton = event.target.closest("[data-add-track]");
-				if (addButton) {
+				const menuButton = event.target.closest('[data-track-menu]');
+				if (menuButton) {
 					event.stopPropagation();
-					addTrackById(addButton.dataset.addTrack);
-					return;
-				}
-				const queueButton = event.target.closest('[data-queue-track]');
-				if (queueButton) {
-					event.stopPropagation();
-					const track = state.entities.get(`track:${queueButton.dataset.queueTrack}`);
-					if (track) await queueTrack(trackPayload(track));
+					const track = state.entities.get(`track:${menuButton.dataset.trackMenu}`);
+					if (track) openTrackMenu(menuButton, trackPayload(track));
 					return;
 				}
 				const likeButton = event.target.closest('.spotify-like');
@@ -854,13 +826,6 @@ export function createSpotifyExplorer({
 					const row = likeButton.closest('.spotify-track-row');
 					const track = state.entities.get(`track:${row?.dataset.entityId}`);
 					if (track) await toggleLike(trackPayload(track));
-					return;
-				}
-
-				const openButton = event.target.closest("[data-open-url]");
-				if (openButton) {
-					event.stopPropagation();
-					window.open(openButton.dataset.openUrl, "_blank", "noreferrer");
 					return;
 				}
 
@@ -914,7 +879,7 @@ export function createSpotifyExplorer({
 			if (state.initialized) return;
 			state.initialized = true;
 			bindEvents();
-			updateImportState();
+
 			updateAccountState();
 			renderBrowserBridgeStatus({ installed: false });
 		},

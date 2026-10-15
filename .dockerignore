@@ -24,6 +24,7 @@
 !src/style.css
 !src/manifest.webmanifest
 !src/library-tools.js
+!src/sponsorblock.js
 
 !src/icons/
 !src/icons/**

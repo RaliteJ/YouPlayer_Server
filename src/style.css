@@ -763,7 +763,7 @@ li:hover {
 
 .spotify-layout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) 280px;
   gap: 16px;
   flex: 1;
   min-height: 0;
@@ -1068,16 +1068,19 @@ li:hover {
 
 .results-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-auto-rows: max-content;
   gap: 20px;
   overflow-y: auto;
-  flex-grow: 1;
+  align-content: start;
+  align-items: start;
   padding-bottom: 20px;
 }
 
 .video-card {
   background-color: var(--bg-hover);
-  border-radius: 8px;
+  border: 1px solid #363636;
+  border-radius: 14px;
   overflow: hidden;
   cursor: pointer;
   transition: 0.2s;
@@ -1095,12 +1098,23 @@ li:hover {
   object-fit: cover;
 }
 
-.video-card p {
-  padding: 10px;
-  margin: 0;
-  font-size: 14px;
-  color: var(--text-main);
-}
+.youtube-card-copy { padding: 14px; min-width: 0; }
+.video-card p { margin: 0 0 6px; font-size: 15px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.youtube-channel { display: block; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.video-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.youtube-header { margin-bottom: 24px; padding: clamp(16px, 3vw, 32px); border: 1px solid #3c3030; border-radius: 18px; background: linear-gradient(120deg, #332020, var(--bg-secondary) 70%); }
+.youtube-eyebrow { color: #ff9191; font-size: 11px; font-weight: 700; letter-spacing: 2px; }
+.youtube-header h1 { margin: 12px 0; font-size: clamp(24px, 3vw, 36px); }
+.youtube-header p { color: var(--text-muted); line-height: 1.6; max-width: 580px; }
+.youtube-search { margin-top: 22px; }
+.youtube-search label { display: block; margin-bottom: 8px; font-size: 13px; }
+.youtube-search-field { display: flex; gap: 10px; }
+.youtube-search-field input { flex: 1; min-width: 0; width: 100%; padding: 14px 16px; color: var(--text-main); background: var(--bg-main); border: 1px solid #555; border-radius: 10px; font: inherit; }
+.youtube-search-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.youtube-search-field button { min-height: 46px; }
+.youtube-empty { grid-column: 1 / -1; padding: 40px 16px; text-align: center; color: var(--text-muted); line-height: 1.7; }
+.youtube-empty > span { display: block; font-size: 40px; color: #ff9191; margin-bottom: 12px; }
+.youtube-empty h2 { color: var(--text-main); font-size: 20px; margin-bottom: 8px; }
 
 .result-badge {
   position: absolute;
@@ -1118,17 +1132,16 @@ li:hover {
   width: calc(100% - 20px);
 }
 
-.video-card[data-kind="video"] p {
-  padding-right: 90px;
-}
-
 .youtube-card-actions {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 12px;
 }
+.youtube-add { margin-right: auto; min-height: 44px; }
+.video-card .youtube-card-actions > button { flex-shrink: 0; }
+.video-card .youtube-card-actions .song-like,
+.video-card .youtube-options { width: 44px; height: 44px; }
 
 .youtube-card-actions .song-like,
 .youtube-options {
@@ -1992,11 +2005,11 @@ li:hover {
 
 @media (min-width: 769px) and (max-width: 1100px) {
   .spotify-layout {
-    grid-template-columns: 180px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .spotify-detail-panel {
-    grid-column: 2;
+    grid-column: 1;
   }
 
   .spotify-track-row {
@@ -2447,71 +2460,22 @@ li:hover {
     width: var(--mobile-touch);
     height: var(--mobile-touch);
   }
-  /* --- Optimisation de la recherche YouTube / Spotify pour Mobile --- */
-  .results-grid {
-    grid-template-columns: 1fr; /* Force une seule colonne qui prend toute la largeur */
+  .results-grid { grid-template-columns: 1fr; flex-shrink: 0; overflow: visible; }
+  .video-card {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    align-items: start;
+    padding: 12px;
     gap: 12px;
   }
+  .video-card img { border-radius: 8px; }
+  .video-card .youtube-card-copy { padding: 0; }
+  .video-card .youtube-card-actions,
+  .video-card .import-youtube-playlist { grid-column: 1 / -1; margin: 0; width: 100%; }
+  .video-card .result-badge { top: 16px; left: 16px; }
+  .youtube-search-field { flex-wrap: wrap; }
+  .youtube-search-field button { flex: 1; }
 
-/* --- Optimisation de la recherche YouTube / Spotify pour Mobile --- */
-  .results-grid {
-    grid-template-columns: 1fr !important; /* Force une seule colonne */
-    gap: 15px !important;
-    align-content: start;
-  }
-
-  .video-card {
-    display: flex !important;
-    flex-direction: row !important; /* Force l'alignement de gauche à droite */
-    align-items: center !important;
-    height: 80px !important; /* Hauteur fixe pour uniformiser la liste */
-    padding: 5px !important;
-  }
-
-  .video-card img {
-    width: 100px !important;
-    height: 70px !important; /* On force une petite taille */
-    aspect-ratio: auto !important; /* On annule le format géant du PC */
-    object-fit: cover !important;
-    flex-shrink: 0 !important; /* Interdit à l'image de s'écraser */
-    border-radius: 6px !important;
-  }
-
-  .video-card .youtube-card-actions {
-    position: static;
-    margin-left: auto;
-  }
-
-  .video-card.queue-swipe-row p {
-    overflow: hidden !important;
-    text-overflow: ellipsis;
-  }
-
-/* On cible p ET span pour faire défiler le titre au doigt */
-  .video-card p,
-  .video-card span {
-    font-size: 13px !important;
-    padding: 0 10px !important;
-    margin: 0 !important;
-    color: var(--text-main) !important;
-
-    /* Astuce Flexbox cruciale pour que le défilement marche */
-    flex: 1 !important;
-    min-width: 0 !important;
-
-    /* Le secret du défilement */
-    white-space: nowrap !important; /* Force le texte sur 1 seule ligne */
-    overflow-x: auto !important;    /* Active le scroll horizontal */
-
-    /* On masque la petite barre de défilement grise (plus esthétique) */
-    scrollbar-width: none !important; /* Firefox */
-  }
-
-  /* Masque la barre sur Chrome, Safari et Android */
-  .video-card p::-webkit-scrollbar,
-  .video-card span::-webkit-scrollbar {
-    display: none !important;
-  }
 }
 
 .search-filter-container {
@@ -2555,26 +2519,23 @@ li:hover {
   color: #fff;
 }
 .library-hint { font-size: 0.85rem; margin-bottom: 12px; line-height: 1.5; }
-.library-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.library-section-heading h2 { font-size: 1rem; margin: 0; }
-.library-recent { margin: 4px 0 20px; padding: 14px 16px; border: 1px solid #333; border-radius: 12px; }
-.library-section-heading { margin-bottom: 10px; }
-.library-recent-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.library-recent-list button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 44px; }
-#playlists-container .playlist-selection-item { flex-direction: column; align-items: stretch; padding: 14px; gap: 12px; border: 1px solid #383838; border-radius: 12px; }
-#playlists-container .playlist-preview-button { flex: none; width: 100%; font: inherit; }
-#playlists-container .playlist-choice-title { white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
-.library-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding-top: 10px; border-top: 1px solid #393939; }
+#playlists-container .playlist-selection-item { flex-direction: row; align-items: center; padding: 10px 12px; gap: 12px; border: 1px solid #383838; border-radius: 12px; }
+#playlists-container .playlist-preview-button { flex: 1; font: inherit; }
+#playlists-container .playlist-choice-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+.library-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .library-row-actions .delete-playlist { margin-left: auto; background: transparent; color: #ff929f; border: 1px solid #684048; min-height: 44px; }
 .library-row-actions .delete-playlist:hover { background: #492a30; }
-.library-row-actions .library-pin, #library-clear-recent, .library-recent-list button { background: #303030; border: 1px solid #484848; }
-.library-row-actions .library-pin:hover, #library-clear-recent:hover, .library-recent-list button:hover { background: #3b3b3b; }
+.library-row-actions .delete-playlist { width: 44px; padding: 0; font-size: 25px; }
+.library-row-actions .delete-playlist-label { display: none; }
+.library-row-actions .delete-playlist-icon { display: inline; }
+.library-row-actions .library-pin { background: #303030; border: 1px solid #484848; }
+.library-row-actions .library-pin:hover { background: #3b3b3b; }
 .library-toolbar > button { min-height: 44px; }
 .playlist-preview-header { flex-wrap: wrap; }
 .playlist-preview-empty { justify-content: center; padding: 28px 18px; color: var(--text-muted); text-align: center; line-height: 1.5; border: 1px dashed #444; border-radius: 12px; }
 .library-row-actions .library-pin, .library-row-actions .library-play { min-width: 44px; min-height: 44px; padding: 8px; }
 .library-pin[aria-pressed="true"] { color: #1ed760; border-color: #1ed760; }
-.library-toolbar button:focus-visible, .library-row-actions button:focus-visible, .library-recent button:focus-visible { outline: 2px solid #1ed760; outline-offset: 3px; }
+.library-toolbar button:focus-visible, .library-row-actions button:focus-visible { outline: 2px solid #1ed760; outline-offset: 3px; }
 .sleep-timer-controls { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 8px; margin-top: 12px; font-size: 0.85rem; }
 #sleep-timer-status { grid-column: 1 / -1; color: #aaa; text-align: center; min-height: 1.2em; }
 @media (min-width: 769px) and (max-width: 1100px) {
@@ -2585,14 +2546,17 @@ li:hover {
   .library-toolbar label:first-child { grid-column: 1 / -1; }
 }
 @media (max-width: 600px) {
-  #playlists-container .playlist-selection-item { flex-wrap: wrap; }
-  #playlists-container .playlist-preview-button { flex-basis: 100%; }
-  .library-row-actions { width: 100%; justify-content: flex-end; gap: 8px; }
+  #playlists-container .playlist-selection-item { gap: 8px; padding: 8px; }
+  #playlists-container .playlist-preview-button { gap: 8px; }
+  #playlists-container .playlist-cover { width: 36px; height: 36px; }
+  .library-row-actions { gap: 4px; }
+  #playlist-selection-form.is-multi-select .playlist-selection-item { flex-wrap: wrap; }
+  #playlist-selection-form.is-multi-select .playlist-preview-button { flex-basis: 100%; }
+  #playlist-selection-form.is-multi-select .library-row-actions { width: 100%; }
   .library-toolbar > button { width: 100%; min-height: 44px; }
   .library-toolbar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .library-toolbar label:first-child { grid-column: 1 / -1; }
   .library-toolbar label { font-size: 0.85rem; }
-  .library-section-heading { flex-wrap: wrap; }
 }
 
 /* Likes share one state between the track list and the expanded player. */
@@ -2648,3 +2612,21 @@ li:hover {
 }
 .security-rebuild code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 #admin-security-counts { overflow-wrap: anywhere; }
+
+/* Secondary Spotify controls stay available without crowding search results. */
+.spotify-options summary {
+  cursor: pointer;
+  padding: 12px;
+}
+.spotify-options .spotify-sidebar-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  align-items: end;
+}
+.spotify-detail-panel:has(.spotify-detail-empty) { display: none; }
+.spotify-layout:has(.spotify-detail-empty) { grid-template-columns: minmax(0, 1fr); }
+
+.library-multi-choice { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+#playlist-selection-form:not(.is-multi-select) .playlist-active-toggle,
+#playlist-selection-form:not(.is-multi-select) .playlist-submit-row,
+#playlist-selection-form:not(.is-multi-select) .playlist-shuffle-choice { display: none; }

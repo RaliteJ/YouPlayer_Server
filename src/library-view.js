@@ -1,5 +1,5 @@
 import { LIKED_PLAYLIST } from './client-utils.js';
-import { orderLibrary } from './library-tools.js';
+import { fold, orderLibrary } from './library-tools.js';
 
 // Methods share the App receiver so library actions retain the persistent player and queue.
 export const libraryView = {
@@ -20,7 +20,8 @@ export const libraryView = {
             this.draftPlaylists = new Set([...(this.draftPlaylists || this.selectedPlaylists)].filter((name) => available.has(name)));
             this.renderLibrary();
         } catch {
-            container.textContent = 'Impossible de charger les playlists. Réouvre Accueil pour réessayer.';
+            container.innerHTML = '<p>Impossible de charger la bibliothèque.</p><button type="button" class="btn-small">Réessayer</button>';
+            container.querySelector('button').onclick = () => this.fetchAvailablePlaylists();
         } finally {
             this.libraryLoading = false;
         }
@@ -29,8 +30,8 @@ export const libraryView = {
     renderLibrary() {
         const container = document.getElementById('playlists-container');
         if (!container) return;
+        this.updateLibrarySelectionLabel();
         try {
-            this.renderRecentPlaylists();
             const playlists = orderLibrary(this.availablePlaylists, {
                 query: document.getElementById('library-search')?.value,
                 sort: document.getElementById('library-sort')?.value,
@@ -39,7 +40,10 @@ export const libraryView = {
             if (playlists.length === 0) {
                 container.innerHTML = this.availablePlaylists.length
                     ? '<p class="muted">Aucune playlist ne correspond à cette recherche.</p>'
-                    : '<p class="muted">Ta bibliothèque est vide. Ajoute des titres depuis YouTube, Spotify ou tes fichiers locaux pour commencer.</p>';
+                    : '<p class="muted">Ta bibliothèque est vide. Ajoute ton premier morceau.</p><button type="button" class="btn-primary" data-start-view="add_spotify">Chercher un morceau</button> <button type="button" class="btn-small" data-start-view="add_local">Importer mes fichiers</button>';
+                container.querySelectorAll('[data-start-view]').forEach(button => {
+                    button.onclick = () => this.loadView(button.dataset.startView);
+                });
                 if (!this.availablePlaylists.length) this.resetPlaylistPreview('Aucune playlist');
                 return;
             }
@@ -101,6 +105,7 @@ export const libraryView = {
                     this.draftPlaylists ||= new Set(this.selectedPlaylists);
                     if (e.currentTarget.checked) this.draftPlaylists.add(e.currentTarget.value);
                     else this.draftPlaylists.delete(e.currentTarget.value);
+                    this.updateLibrarySelectionLabel();
                     e.currentTarget
                         .closest('.playlist-selection-item')
                         ?.classList.toggle('is-selected', e.currentTarget.checked);
@@ -135,24 +140,51 @@ export const libraryView = {
         }
     },
 
-    renderRecentPlaylists() {
-        const section = document.getElementById('library-recent-section');
-        const list = document.getElementById('library-recent-list');
-        if (!section || !list) return;
-        list.replaceChildren();
-        for (const name of this.libraryPreferences.recent) {
-            const playlist = this.availablePlaylists.find((item) => item.name === name);
-            if (!playlist) continue;
-            const button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'btn-small';
-            button.textContent = `▶ ${playlist.title}`;
-            button.setAttribute('aria-label', `Relancer ${playlist.title}`);
-            button.disabled = playlist.count === 0;
-            button.onclick = () => this.playLibraryPlaylist(name);
-            list.appendChild(button);
+    updateLibrarySelectionLabel() {
+        const button = document.getElementById('library-play-selection');
+        if (!button) return;
+        const count = (this.draftPlaylists || new Set(this.selectedPlaylists)).size;
+        button.textContent = `Écouter la sélection — ${count} playlist${count > 1 ? 's' : ''}`;
+        button.disabled = count === 0;
+    },
+
+    async searchLibraryTracks() {
+        const query = document.getElementById('library-search').value.trim();
+        if (!query) return;
+        const revision = this.librarySearchRevision = (this.librarySearchRevision || 0) + 1;
+        const userId = this.currentUser?.id;
+        const current = () => revision === this.librarySearchRevision && userId === this.currentUser?.id;
+        const needles = fold(query).split(/\s+/);
+        this.previewedPlaylist = null;
+        this.clearTrackPageScrolling(this.playlistPreviewList);
+        this.playlistPreviewTitle.textContent = 'Recherche dans la bibliothèque';
+        this.playlistPreviewCount.textContent = 'Recherche…';
+        this.playlistPreviewList.textContent = '';
+        const matches = [];
+        let failures = 0;
+        // shortcut: one authenticated request per playlist; use server search for very large libraries.
+        for (const playlist of this.availablePlaylists) {
+            const tracks = await this.apiFetch(`/playlist_preview?playlist=${encodeURIComponent(playlist.name)}`);
+            if (!current()) return;
+            if (!Array.isArray(tracks)) { failures++; continue; }
+            for (const track of tracks) {
+                const text = fold([track.title, track.artist, playlist.title].join(' '));
+                if (needles.every(word => text.includes(word))) {
+                    matches.push({ ...track, __libraryPlaylist: playlist });
+                }
+            }
         }
-        section.hidden = !list.childElementCount;
+        this.renderPlaylistPreview({ title: `Résultats pour « ${query} »` }, matches);
+        if (!matches.length) this.playlistPreviewList.textContent = 'Aucun titre trouvé.';
+        if (failures) {
+            this.playlistPreviewCount.textContent = `${matches.length} titres — recherche incomplète`;
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'btn-small';
+            retry.textContent = 'Réessayer';
+            retry.onclick = () => this.searchLibraryTracks();
+            this.playlistPreviewList.appendChild(retry);
+        }
     },
 
     async changeLibraryPreference(change) {
@@ -217,7 +249,7 @@ export const libraryView = {
         e.preventDefault();
         const selectedFiles = this.draftPlaylists ? [...this.draftPlaylists]
             : Array.from(e.target.querySelectorAll('input[name="selectedPlaylists"]:checked')).map(cb => cb.value);
-        await this.selectLibraryPlaylists(selectedFiles);
+        if (await this.selectLibraryPlaylists(selectedFiles)) await this.loadView('playlist');
     },
 
 };

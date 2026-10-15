@@ -1,31 +1,44 @@
-import { LIKED_PLAYLIST, publicErrorMessage } from './client-utils.js';
+import { LIKED_PLAYLIST, publicErrorMessage, trackLikeKey } from './client-utils.js';
 
 export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => fetch(...args) }) {
     return {
     closeSongActionMenu() {
         if (this.songActionMenu) {
+            const anchor = this.songActionMenu.anchor;
+            const hadFocus = this.songActionMenu.contains(document.activeElement);
             this.songActionMenu.remove();
+            if (hadFocus) anchor?.focus();
             this.songActionMenu = null;
         }
     },
 
-    openSongActionMenu(button, songData, { previewPlaylist = null } = {}) {
+    openSongActionMenu(button, songData, { previewPlaylist = null, discovered = false, onPlay = null } = {}) {
         this.closeSongActionMenu();
 
         const menu = document.createElement('div');
         menu.className = 'song-action-menu';
         menu.innerHTML = `
-            ${previewPlaylist ? '' : '<button type="button" data-action="next">Lire ensuite</button>'}
+            <button type="button" data-action="play">Lire maintenant</button>
+            <button type="button" data-action="next">Lire ensuite</button>
             <button type="button" data-action="add">Ajouter à une playlist</button>
-            ${previewPlaylist || !songData.__queueId ? '<button type="button" data-action="delete" class="danger">Supprimer</button>' : ''}
+            ${discovered && songData.type === 'spotify' ? '<button type="button" data-action="open">Ouvrir dans Spotify</button>' : ''}
+            ${!discovered && (previewPlaylist || !songData.__queueId) ? '<button type="button" data-action="delete" class="danger">Supprimer</button>' : ''}
         `;
 
+        const request = previewPlaylist
+            ? { previewPlaylist: previewPlaylist.name, previewIndex: songData.__playlistIndex, key: trackLikeKey(songData) }
+            : discovered ? songData : songData.__sessionIndex;
         menu.addEventListener('click', async (e) => {
             e.stopPropagation();
             const action = e.target.dataset.action;
-            if (action === 'next') {
+            if (action === 'play' || action === 'next') {
                 this.closeSongActionMenu();
-                await this.enqueueNextSong(songData.__sessionIndex);
+                if (action === 'play' && onPlay) await onPlay();
+                else await this.enqueueNextSong(request, { playNow: action === 'play' });
+            }
+            if (action === 'open') {
+                this.closeSongActionMenu();
+                window.open(songData.url, '_blank', 'noopener,noreferrer');
             }
             if (action === 'add') {
                 this.closeSongActionMenu();
@@ -45,7 +58,9 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
         const left = Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8);
         menu.style.top = `${Math.max(8, top)}px`;
         menu.style.left = `${Math.max(8, left)}px`;
+        menu.anchor = button;
         this.songActionMenu = menu;
+        menu.querySelector('button')?.focus();
     },
 
     closeSpotifyActionMenu() {
@@ -377,18 +392,17 @@ async confirmAddSong(playlistName) {
 	    },
 
     async searchYoutube() {
-        const query = document.getElementById('query_yt').value;
+        const query = document.getElementById('query_yt').value.trim();
         if (!query) return;
 
-        this.ytResults.innerHTML = "Recherche...";
+        this.ytResults.innerHTML = '<p class="youtube-empty">Recherche en cours…</p>';
         const data = await this.apiFetch('/send_search_youtube', 'POST', { arg: query });
         if (!data) {
-            this.ytResults.innerHTML = "";
+            this.ytResults.innerHTML = '<p class="youtube-empty">La recherche a échoué. Réessaie dans un instant.</p>';
             return;
         }
 
         const items = Array.isArray(data?.items) ? data.items : [];
-        const hasPlaylist = items.some(item => item.id.kind === 'youtube#playlist');
         this.ytResults.innerHTML = items.map(item => {
             const isPlaylist = item.id.kind === 'youtube#playlist';
             const id = isPlaylist ? item.id.playlistId : item.id.videoId;
@@ -397,17 +411,13 @@ async confirmAddSong(playlistName) {
 
             return `
                 <div class="video-card ${isPlaylist ? 'playlist-result-card' : ''}" data-id="${this.escapeHtml(id)}" data-kind="${isPlaylist ? 'playlist' : 'video'}">
-                    <img src="${this.escapeHtml(thumbnail)}" alt="">
+                    <img src="${this.escapeHtml(thumbnail)}" alt="" loading="lazy">
                     ${isPlaylist ? '<span class="result-badge">Playlist</span>' : ''}
-                    <p>${title}</p>
-                    ${isPlaylist ? '<button type="button" class="btn-small import-youtube-playlist">Importer playlist</button>' : `<div class="youtube-card-actions"><button type="button" class="song-like youtube-like" aria-label="Aimer ce morceau" title="Aimer ce morceau">♡</button><button type="button" class="youtube-options" aria-label="Ajouter à une playlist" title="Ajouter à une playlist" aria-haspopup="dialog">+</button></div>`}
+                    <div class="youtube-card-copy"><p>${title}</p><span class="youtube-channel">${this.escapeHtml(item.snippet.channelTitle || 'YouTube')}</span></div>
+                    ${isPlaylist ? '<button type="button" class="btn-small import-youtube-playlist">Importer playlist</button>' : `<div class="youtube-card-actions"><button type="button" class="btn-small youtube-add" aria-label="Ajouter à une playlist">+ Ajouter</button><button type="button" class="song-like youtube-like" aria-label="Aimer ce morceau" title="Aimer ce morceau">♡</button><button type="button" class="youtube-options" aria-label="Options du morceau" title="Options du morceau" aria-haspopup="true">⋯</button></div>`}
                 </div>
             `;
-        }).join('') || "Aucun résultat.";
-
-        if (!hasPlaylist) {
-            this.ytResults.insertAdjacentHTML('afterbegin', '<p class="results-message">Aucune playlist trouvée pour cette recherche.</p>');
-        }
+        }).join('') || '<div class="youtube-empty"><h2>Aucun résultat</h2><p>Essaie un autre titre ou le nom de l’artiste.</p></div>';
 
         this.ytResults.querySelectorAll('.video-card').forEach(card => {
             if (card.dataset.kind === 'playlist') return;
@@ -428,9 +438,13 @@ async confirmAddSong(playlistName) {
                 event.preventDefault();
                 card.click();
             };
-            card.querySelector('.youtube-options').onclick = event => {
+            card.querySelector('.youtube-add').onclick = event => {
                 event.stopPropagation();
                 void this.openAddModal(song);
+            };
+            card.querySelector('.youtube-options').onclick = event => {
+                event.stopPropagation();
+                this.openSongActionMenu(event.currentTarget, song, { discovered: true });
             };
             card.querySelector('.youtube-like').onclick = event => {
                 event.stopPropagation();
