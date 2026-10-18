@@ -227,7 +227,11 @@ test('security tab checks explicitly, shows corrections and Podman rebuild on mo
     await page.setRequestInterception(true);
     page.on('request', request => {
       const route = new URL(request.url()).pathname;
-      if (route.startsWith('/admin/security')) {
+      if (route === '/admin/releases') {
+        request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({
+          localCommit: null, state: 'local_unknown', latestRelease: null, checkedAt: null
+        }) });
+      } else if (route.startsWith('/admin/security')) {
         if (request.method() === 'POST') {
           const action = route.split('/').at(-1);
           actions.push(action);
