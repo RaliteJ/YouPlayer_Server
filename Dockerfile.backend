@@ -21,6 +21,9 @@ COPY --chown=node:node client-utils.js ./client-utils.js
 RUN mkdir -p musiq local_song playlists /var/lib/youplayer \
     && chown node:node musiq local_song playlists /var/lib/youplayer
 
+ARG YOUPLAYER_BUILD_COMMIT=unknown
+ENV YOUPLAYER_BUILD_COMMIT=$YOUPLAYER_BUILD_COMMIT
+
 USER node
 
 EXPOSE 3000

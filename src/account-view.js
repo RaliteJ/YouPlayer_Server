@@ -403,8 +403,8 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
 
             async fetchAdminData() {
                 if (this.currentUser?.role !== 'admin') return;
-            if (this.adminUpdateStatus) await this.fetchUpdateStatus();
             if (this.adminSecurityStatus) await this.fetchSecurityStatus();
+            if (this.adminReleaseStatus) await this.fetchReleaseStatus();
 
             const [users, events, logs, integrations] = await Promise.all([
                 this.apiFetch('/admin/users'),
@@ -425,6 +425,50 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 <strong>${this.escapeHtml(log.resourceType || '')}</strong>
             `);
             },
+
+        async fetchReleaseStatus(check = false) {
+            if (this.currentUser?.role !== 'admin' || !this.adminReleaseStatus || this.releaseChecking) return;
+            const userId = this.currentUser.id;
+            const isCurrentAdmin = () => this.currentUser?.id === userId && this.currentUser?.role === 'admin';
+            this.releaseChecking = true;
+            this.adminReleaseCheck.disabled = true;
+            this.adminReleaseStatus.textContent = check ? 'Vérification en cours…' : 'Chargement…';
+            try {
+                const response = await fetchImpl(`${API_URL}/admin/releases${check ? '/check' : ''}`, {
+                    method: check ? 'POST' : 'GET', credentials: 'include', signal: AbortSignal.timeout(20_000)
+                });
+                if (!isCurrentAdmin()) return;
+                if (response.status === 401) { this.currentUser = null; this.showAuth(); return; }
+                if (!response.ok) throw new Error('Release status unavailable');
+                const data = await response.json();
+                if (!isCurrentAdmin()) return;
+                const labels = {
+                    not_checked: 'Les nouvelles releases n’ont pas encore été vérifiées.',
+                    release_ahead: 'Une nouvelle release est disponible. La mise à jour se fait manuellement sur le serveur.',
+                    up_to_date: 'Le serveur est à jour avec la dernière release.',
+                    local_ahead: 'Le serveur est en avance sur la dernière release.',
+                    diverged: 'La version locale et la release ont divergé. Vérifiez les changements avant toute mise à jour.',
+                    local_unknown: 'Version locale inconnue : impossible de comparer ce serveur à la dernière release.',
+                    no_release: 'Aucune release publiée n’a été trouvée.',
+                    rate_limited: 'GitHub limite les vérifications. Réessayez dans quelques minutes.',
+                    unavailable: 'Vérification indisponible. Réessayez plus tard.'
+                };
+                const commit = /^[a-f0-9]{40}$/.test(data.localCommit || '') ? data.localCommit : null;
+                document.getElementById('admin-release-local').textContent = commit
+                    ? `Version installée : commit ${commit.slice(0, 12)}` : 'Version installée : inconnue';
+                document.getElementById('admin-release-latest').textContent = typeof data.latestRelease?.tag === 'string'
+                    ? `Dernière release : ${data.latestRelease.tag}` : 'Dernière release : non identifiée';
+                this.adminReleaseStatus.textContent = Object.hasOwn(labels, data.state) ? labels[data.state] : labels.unavailable;
+                const date = data.checkedAt ? new Date(data.checkedAt) : null;
+                document.getElementById('admin-release-date').textContent = date && Number.isFinite(date.getTime())
+                    ? `Dernière vérification : ${date.toLocaleString('fr-FR')}` : 'Aucune vérification effectuée.';
+            } catch {
+                if (isCurrentAdmin()) this.adminReleaseStatus.textContent = 'Vérification indisponible. Réessayez plus tard.';
+            } finally {
+                this.releaseChecking = false;
+                this.adminReleaseCheck.disabled = false;
+            }
+        },
 
         renderIntegrationStatus(data) {
             const labels = {
@@ -571,111 +615,5 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
             } finally { this.securityStarting = false; }
             if (this.currentUser?.id === userId && this.currentUser?.role === 'admin') await this.fetchSecurityStatus();
         },
-
-        async fetchUpdateStatus() {
-            clearTimeout(this.updatePollTimer);
-            if (this.currentUser?.role !== 'admin' || !this.adminUpdateStatus) return;
-            let keepPolling = false;
-            try {
-                const response = await fetchImpl(`${API_URL}/admin/updates`, { credentials: 'include', signal: AbortSignal.timeout(5000) });
-                if (response.status === 401 || response.status === 403) {
-                    this.adminUpdateCheck.disabled = this.adminUpdateInstall.disabled = true;
-                    this.updateRequestId = null;
-                    return;
-                }
-                if (!response.ok) throw new Error('Update service unavailable');
-                const status = await response.json();
-                const pending = this.updateRequestId && this.updateRequestId !== status.requestId;
-                const busy = ['checking', 'downloading', 'backing_up', 'restarting', 'rolling_back'].includes(status.phase);
-                const stages = {
-                    configuration: 'configuration', release: 'lecture de la release signée', preflight: 'contrôle de l’installation',
-                    download: 'récupération des images', backup: 'sauvegarde', recreate: 'remplacement des conteneurs',
-                    health: 'vérification du démarrage', commit: 'enregistrement de la version', rollback: 'retour à la version précédente'
-                };
-                const failures = {
-                    'release-not-found': 'Le dépôt ou la release est introuvable. Vérifiez l’adresse configurée et son accès public.',
-                    'release-unavailable': 'Le serveur de releases refuse la demande. Vérifiez sa disponibilité et les limites d’accès.',
-                    'signature-invalid': 'La signature de la release ne correspond pas à la clé publique configurée.',
-                    'release-invalid': 'La release est incomplète, incompatible ou a changé depuis la vérification.',
-                    'registry-refused': 'Le registre de cette release n’est pas autorisé dans la configuration.',
-                    network: 'Le service ne peut pas joindre le serveur de releases. Vérifiez la connexion réseau.',
-                    'environment-invalid': 'La configuration locale est absente ou invalide. Vérifiez le fichier .env sur l’hôte.',
-                    'project-mismatch': 'Le nom du projet configuré ne correspond pas aux conteneurs de l’installation.',
-                    'project-conflict': 'Une autre installation partage le port ou les données. Identifiez les deux installations avant de réessayer.',
-                    'containers-missing': 'Les conteneurs attendus sont absents. Vérifiez le projet Podman de cette installation.',
-                    'resources-mismatch': 'Les volumes, réseaux ou dossiers ne correspondent pas à l’installation attendue.',
-                    'image-mismatch': 'Les images démarrées ne correspondent pas aux images attendues.',
-                    'deployment-changed': 'L’installation a été modifiée pendant le contrôle. Relancez la vérification.',
-                    unhealthy: 'Les conteneurs n’ont pas atteint un état sain dans le délai prévu.',
-                    'command-missing': 'Podman ou Compose est introuvable pour le service de mise à jour.',
-                    'command-timeout': 'Une commande de déploiement a dépassé le délai prévu.',
-                    'command-failed': 'Une commande Podman ou Compose a échoué. Consultez son diagnostic sur l’hôte.',
-                    'port-conflict': 'Le port de l’application est déjà utilisé par un autre service.',
-                    'disk-full': 'L’espace disque disponible est insuffisant pour la mise à jour.',
-                    permissions: 'Le service n’a pas les permissions nécessaires sur l’installation.',
-                    'files-missing': 'Un fichier nécessaire au service est absent.',
-                    'recovery-required': 'La transaction interrompue nécessite une vérification sur l’hôte.'
-                };
-                const reason = Object.hasOwn(failures, status.failure?.code) ? failures[status.failure.code]
-                    : 'Consultez le diagnostic local du service de mise à jour.';
-                const step = Object.hasOwn(stages, status.failure?.stage) ? ` Étape : ${stages[status.failure.stage]}.` : '';
-                const labels = {
-                    idle: status.updateAvailable ? 'Une nouvelle version est disponible.' : 'Aucune mise à jour détectée.',
-                    checking: 'Recherche de la nouvelle version…', downloading: `Téléchargement : ${status.progress || 0} %`,
-                    backing_up: 'Sauvegarde des données…', restarting: status.stage === 'health'
-                        ? 'Vérification du démarrage des nouveaux conteneurs…' : status.stage === 'commit'
-                            ? 'Enregistrement de la version installée…' : 'Remplacement des conteneurs…',
-                    rolling_back: 'Retour à la version précédente…', succeeded: 'Mise à jour terminée.',
-                    failed: `${status.rolledBack ? 'Installation échouée. La version précédente a été rétablie. ' : 'Opération échouée. '}${reason}${step}`
-                };
-                this.adminUpdateStatus.textContent = status.recoveryRequired
-                    ? `Récupération nécessaire sur l’hôte. Les installations sont bloquées. ${reason}${step}`
-                    : status.phase === 'failed' && !pending ? labels.failed
-                    : !status.enabled ? 'Les mises à jour ne sont pas encore configurées.'
-                    : !status.online ? 'Le service de mise à jour est arrêté.'
-                        : pending ? 'Demande en attente…' : labels[status.phase] || 'Vérification…';
-                this.adminUpdateVersions.textContent = [status.currentVersion && `Version actuelle${status.versionVerified === false ? ' estimée' : ''} : ${status.currentVersion}`,
-                    status.latestVersion && `Dernière release : ${status.latestVersion}`].filter(Boolean).join(' · ');
-                this.adminUpdateCheck.disabled = status.recoveryRequired || !status.enabled || !status.online || busy || Boolean(pending);
-                this.adminUpdateInstall.disabled = this.adminUpdateCheck.disabled || !status.updateAvailable;
-                this.updateLatestVersion = status.latestVersion;
-                keepPolling = Boolean(pending || busy);
-                if (!pending && status.requestId === this.updateRequestId && !busy) {
-                    const reload = this.updateReloadRequested && status.phase === 'succeeded';
-                    this.updateRequestId = null;
-                    this.updateReloadRequested = false;
-                    if (reload) window.location.reload();
-                }
-            } catch {
-                this.adminUpdateStatus.textContent = 'Application momentanément indisponible. Reconnexion en cours…';
-                this.adminUpdateCheck.disabled = this.adminUpdateInstall.disabled = true;
-                keepPolling = Boolean(this.updateRequestId);
-                if (keepPolling && !this.updatePollUntil) this.updatePollUntil = Date.now() + 20 * 60_000;
-            }
-            if (keepPolling && Date.now() < (this.updatePollUntil || Infinity)) {
-                this.updatePollTimer = setTimeout(() => this.fetchUpdateStatus(), 2000);
-            }
-        },
-
-        async startAppUpdate(action) {
-            if (this.currentUser?.role !== 'admin' || !['check', 'install'].includes(action)) return;
-            this.adminUpdateCheck.disabled = this.adminUpdateInstall.disabled = true;
-            try {
-                const response = await fetchImpl(`${API_URL}/admin/updates/${action}`, {
-                    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(action === 'install' ? { version: this.updateLatestVersion } : {}),
-                    signal: AbortSignal.timeout(5000)
-                });
-                if (!response.ok) throw new Error('Update request rejected');
-                const result = await response.json();
-                this.updateRequestId = result.requestId;
-                this.updateReloadRequested = action === 'install';
-                this.updatePollUntil = Date.now() + 20 * 60_000;
-            } catch {
-                this.showNotice('Impossible de lancer cette opération. Réessaie dans un instant.', true);
-            }
-            await this.fetchUpdateStatus();
-        },
-
     };
 }

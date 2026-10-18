@@ -44,6 +44,61 @@ function form(values) {
 const event = form => ({ preventDefault() {}, currentTarget: form });
 const ok = data => ({ ok: true, json: async () => data });
 
+test('release display reads local status and checks only on demand, with safe unknown and failure states', async () => {
+    const requests = [];
+    let data = { localCommit: 'a'.repeat(40), state: 'not_checked', latestRelease: null, checkedAt: null };
+    const h = harness(async (url, options) => { requests.push({ url, options }); return ok(data); });
+    const elements = Object.fromEntries(['local', 'latest', 'date'].map(name => [`admin-release-${name}`, {}]));
+    h.document.getElementById = id => elements[id];
+    Object.assign(h.view, { currentUser: { id: 'manager', role: 'admin' }, adminReleaseStatus: {}, adminReleaseCheck: {} });
+    await h.view.fetchReleaseStatus();
+    assert.equal(requests[0].options.method, 'GET');
+    assert.ok(requests[0].url.endsWith('/admin/releases'));
+    assert.equal(elements['admin-release-local'].textContent, `Version installée : commit ${'a'.repeat(12)}`);
+    for (const [state, message] of [
+        ['release_ahead', /nouvelle release/], ['local_ahead', /en avance/], ['up_to_date', /à jour/],
+        ['diverged', /divergé/], ['local_unknown', /inconnue/], ['no_release', /Aucune release/],
+        ['rate_limited', /limite/], ['unavailable', /indisponible/], ['synthetic-private', /indisponible/]
+    ]) {
+        data = { ...data, state, latestRelease: { tag: '<synthetic-release>' }, checkedAt: '2026-10-18T12:00:00Z' };
+        await h.view.fetchReleaseStatus(true);
+        assert.match(h.view.adminReleaseStatus.textContent, message);
+        assert.equal(requests.at(-1).options.method, 'POST');
+        assert.equal(requests.at(-1).options.credentials, 'include');
+        assert.ok(requests.at(-1).url.endsWith('/admin/releases/check'));
+        assert.equal(elements['admin-release-latest'].textContent, 'Dernière release : <synthetic-release>');
+        assert.equal(h.view.adminReleaseCheck.disabled, false);
+    }
+    data = { state: 'local_unknown' };
+    await h.view.fetchReleaseStatus();
+    assert.equal(elements['admin-release-local'].textContent, 'Version installée : inconnue');
+    const count = requests.length;
+    h.view.currentUser.role = 'user';
+    await h.view.fetchReleaseStatus(true);
+    assert.equal(requests.length, count);
+});
+
+test('release requests deduplicate clicks, ignore late account results and hide network diagnostics', async () => {
+    let finish, calls = 0;
+    const h = harness(() => { calls++; return new Promise(resolve => { finish = resolve; }); });
+    Object.assign(h.view, { currentUser: { id: 'manager', role: 'admin' }, adminReleaseStatus: {}, adminReleaseCheck: {} });
+    const pending = h.view.fetchReleaseStatus(true);
+    await h.view.fetchReleaseStatus(true);
+    assert.equal(calls, 1);
+    assert.equal(h.view.adminReleaseCheck.disabled, true);
+    h.view.currentUser = { id: 'listener', role: 'user' };
+    h.view.adminReleaseStatus.textContent = 'untouched';
+    finish(ok({ state: 'release_ahead' }));
+    await pending;
+    assert.equal(h.view.adminReleaseStatus.textContent, 'untouched');
+    const failing = harness(async () => { throw new Error('synthetic-private-token'); });
+    Object.assign(failing.view, { currentUser: { id: 'manager', role: 'admin' }, adminReleaseStatus: {}, adminReleaseCheck: {} });
+    await failing.view.fetchReleaseStatus(true);
+    assert.match(failing.view.adminReleaseStatus.textContent, /indisponible/);
+    assert.doesNotMatch(failing.view.adminReleaseStatus.textContent, /synthetic-private/);
+    assert.equal(failing.view.adminReleaseCheck.disabled, false);
+});
+
 test('security panel shows counts and rebuild notice, requires explicit actions and rejects late account results', async () => {
   const state = { online: true, phase: 'finished', result: 'vulnerable', counts: { critical: 1, high: 0, moderate: 0, low: 0, info: 0 }, rebuildRequired: true };
   let finish;
@@ -77,50 +132,6 @@ test('security panel shows counts and rebuild notice, requires explicit actions 
   finish(ok(state));
   await pending;
   assert.equal(late.view.adminSecurityStatus.textContent, 'original');
-});
-
-test('admin update controls follow version availability without exposing technical configuration', async () => {
-	const state = { enabled: true, online: true, phase: 'idle', currentVersion: 'v1', latestVersion: 'v2', updateAvailable: true };
-	const requests = [];
-	const h = harness(async (url, options) => { requests.push({ url, options }); return ok(state); });
-	Object.assign(h.view, { currentUser: { role: 'admin' }, adminUpdateStatus: {}, adminUpdateVersions: {}, adminUpdateCheck: {}, adminUpdateInstall: {} });
-	await h.view.fetchUpdateStatus();
-	assert.equal(h.view.adminUpdateInstall.disabled, false);
-	assert.match(h.view.adminUpdateVersions.textContent, /v1.*v2/);
-	state.enabled = false;
-	await h.view.fetchUpdateStatus();
-	assert.equal(h.view.adminUpdateCheck.disabled, true); assert.equal(h.view.adminUpdateInstall.disabled, true);
-	h.view.currentUser.role = 'user';
-	await h.view.startAppUpdate('install');
-	assert.equal(requests.length, 2);
-});
-
-test('update panel distinguishes recreation, health, rollback and host recovery without private output', async () => {
-	const state = { enabled: true, online: true, phase: 'restarting', stage: 'recreate', currentVersion: 'v1', versionVerified: false };
-	const h = harness(async () => ok(state));
-	Object.assign(h.view, { currentUser: { role: 'admin' }, adminUpdateStatus: {}, adminUpdateVersions: {}, adminUpdateCheck: {}, adminUpdateInstall: {} });
-	await h.view.fetchUpdateStatus();
-	assert.match(h.view.adminUpdateStatus.textContent, /Remplacement des conteneurs/);
-	assert.match(h.view.adminUpdateVersions.textContent, /Version actuelle estimée/);
-	state.stage = 'health';
-	await h.view.fetchUpdateStatus();
-	assert.match(h.view.adminUpdateStatus.textContent, /Vérification du démarrage/);
-	state.phase = 'failed';
-	state.failure = { code: 'project-conflict', stage: 'preflight', output: 'synthetic-private' };
-	await h.view.fetchUpdateStatus();
-	assert.match(h.view.adminUpdateStatus.textContent, /autre installation.*port ou les données/);
-	assert.equal(h.view.adminUpdateStatus.textContent.includes('synthetic-private'), false);
-	state.rolledBack = true;
-	state.failure = { code: 'unhealthy', stage: 'health' };
-	await h.view.fetchUpdateStatus();
-	assert.match(h.view.adminUpdateStatus.textContent, /version précédente a été rétablie/);
-	state.enabled = false; state.rolledBack = false; state.recoveryRequired = true;
-	state.failure = { code: 'synthetic-private-code', stage: 'synthetic-private-stage' };
-	await h.view.fetchUpdateStatus();
-	assert.match(h.view.adminUpdateStatus.textContent, /Récupération nécessaire/);
-	assert.equal(h.view.adminUpdateStatus.textContent.includes('synthetic-private'), false);
-	assert.equal(h.view.adminUpdateCheck.disabled, true);
-	assert.equal(h.view.adminUpdateInstall.disabled, true);
 });
 
 test('integration controls show safe individual states and deduplicate explicit checks', async () => {
@@ -170,42 +181,6 @@ test('integration failures keep technical errors hidden and late results cannot 
 	late.resolve(ok({ connections: {} }));
 	await request;
 	assert.equal(rendered, 0);
-});
-
-test('admin install keeps polling through a backend restart and reloads only after its own successful job', async () => {
-	let offline = false, state = { enabled: true, online: true, phase: 'idle', requestId: 'old-job' };
-	const requests = [];
-	const h = harness(async (url, options) => {
-		requests.push({ url, options });
-		if (url.endsWith('/install')) return ok({ requestId: 'new-job' });
-		if (offline) throw new Error('synthetic-private');
-		return ok(state);
-	});
-	let reloads = 0; h.window.location.reload = () => { reloads++; };
-	Object.assign(h.view, { currentUser: { role: 'admin' }, adminUpdateStatus: {}, adminUpdateVersions: {}, adminUpdateCheck: {}, adminUpdateInstall: {}, updateLatestVersion: 'v2' });
-	await h.view.startAppUpdate('install');
-	assert.deepEqual(JSON.parse(requests[0].options.body), { version: 'v2' });
-	assert.equal(requests[0].options.credentials, 'include');
-	assert.match(h.view.adminUpdateStatus.textContent, /attente/);
-	offline = true;
-	await h.view.fetchUpdateStatus();
-	assert.equal(h.view.updateRequestId, 'new-job'); assert.equal(reloads, 0);
-	assert.doesNotMatch(h.view.adminUpdateStatus.textContent, /synthetic-private/);
-	offline = false; state = { ...state, phase: 'succeeded', requestId: 'new-job' };
-	await h.view.fetchUpdateStatus();
-	assert.equal(reloads, 1); assert.equal(h.view.updateRequestId, null);
-});
-
-test('an installation rollback and an expired session never trigger a successful-page reload', async () => {
-	let state = { enabled: true, online: true, phase: 'failed', requestId: 'job', rolledBack: true };
-	const h = harness(async () => state === null ? { status: 401 } : ok(state));
-	let reloads = 0; h.window.location.reload = () => { reloads++; };
-	Object.assign(h.view, { currentUser: { role: 'admin' }, adminUpdateStatus: {}, adminUpdateVersions: {}, adminUpdateCheck: {}, adminUpdateInstall: {}, updateRequestId: 'job', updateReloadRequested: true });
-	await h.view.fetchUpdateStatus();
-	assert.equal(reloads, 0); assert.match(h.view.adminUpdateStatus.textContent, /rétablie/);
-	state = null;
-	await h.view.fetchUpdateStatus();
-	assert.equal(h.view.adminUpdateInstall.disabled, true);
 });
 
 test('provider and session refresh preserve cookie credentials and local authentication mode', async () => {

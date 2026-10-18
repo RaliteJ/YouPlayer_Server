@@ -1108,12 +1108,6 @@ test('admin-only routes expose users, login events and audit logs only to role=a
 	}
 	assert.ok(logs.body.some((log) => log.action === 'auth.login'));
 	const stranger = createClient();
-	assert.equal((await stranger.request('/admin/updates')).status, 401);
-	assert.equal((await userClient.request('/admin/updates')).status, 403);
-	assert.equal((await adminClient.request('/admin/updates')).status, 200);
-	assert.equal((await userClient.request('/admin/updates/install', { method: 'POST', body: { version: 'v2' } })).status, 403);
-	assert.equal((await adminClient.request('/admin/updates/check', { method: 'POST', skipOrigin: true })).status, 403);
-	assert.equal((await adminClient.request('/admin/updates/install', { method: 'POST', body: { version: 'v2' } })).status, 503);
 	assert.equal((await stranger.request('/admin/security')).status, 401);
 	assert.equal((await userClient.request('/admin/security')).status, 403);
 	assert.equal((await adminClient.request('/admin/security')).status, 200);
@@ -1126,6 +1120,30 @@ test('admin-only routes expose users, login events and audit logs only to role=a
 	}
 });
 
+
+test('release checks require admin authentication and a trusted origin', async () => {
+  const stranger = createClient(), user = createClient(), admin = createClient();
+  await login(user, 'user');
+  await login(admin, 'admin');
+  for (const [url, options] of [['/admin/releases', {}], ['/admin/releases/check', { method: 'POST', body: {} }]]) {
+    assert.equal((await stranger.request(url, options)).status, 401);
+    assert.equal((await user.request(url, options)).status, 403);
+  }
+  assert.equal((await admin.request('/admin/releases/check', { method: 'POST', skipOrigin: true })).status, 403);
+  assert.equal((await admin.request('/admin/releases/check', { method: 'POST', headers: { origin: 'https://untrusted.test' } })).status, 403);
+  const status = await admin.request('/admin/releases');
+  assert.equal(status.status, 200);
+  assert.equal(status.body.checkedAt, null);
+});
+
+test('legacy application update endpoints are absent even for an administrator', async () => {
+  const adminClient = createClient();
+  await login(adminClient, 'admin');
+  assert.equal((await adminClient.request('/admin/updates')).status, 404);
+  for (const action of ['check', 'install']) {
+    assert.equal((await adminClient.request(`/admin/updates/${action}`, { method: 'POST', body: {} })).status, 404);
+  }
+});
 
 test('admins can reset another user password but regular users cannot', async () => {
 	const userClient = createClient();

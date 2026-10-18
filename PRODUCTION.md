@@ -47,7 +47,7 @@ Le manifeste conserve la provenance du nouveau depot Git. Inspecter toute
 distribution avant partage : des fichiers ajoutes ulterieurement peuvent etre
 prives meme s'ils ne portent pas un nom reserve.
 
-`scripts/build-update-release.mjs` construit une release signee (voir UPDATES.md).
+Les mises a jour sont manuelles depuis Git et Compose (voir [UPDATES.md](UPDATES.md)).
 L'outil avance `scripts/prepare-release.mjs VERSION` exige les images
 `localhost/youplayer-server-{backend,frontend}:production-check`, les conteneurs courants
 du projet `youplayer-server` et des images compatibles de retour arriere taguees

@@ -14,30 +14,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  updater:
-    name: Mise a jour et retour arriere Podman
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-      - name: Installer les outils de test isole
-        run: sudo apt-get update && sudo apt-get install -y podman podman-compose python3-yaml python3-dotenv
-      - name: Construire les images de test
-        run: |
-          podman build -t localhost/youplayer-server-backend:latest -f Dockerfile.backend src
-          podman build -t localhost/youplayer-server-frontend:latest -f Dockerfile.frontend .
-          redis_image=$(python3 -c 'import yaml; print(yaml.safe_load(open("docker-compose.yml"))["services"]["redis"]["image"])')
-          podman pull "$redis_image"
-          podman save --multi-image-archive -o /tmp/youplayer-update-base-images.tar localhost/youplayer-server-backend:latest localhost/youplayer-server-frontend:latest "$redis_image"
-          chmod 600 /tmp/youplayer-update-base-images.tar
-      - name: Verifier installation signee, retour arriere et reprise
-        run: node scripts/verify-update-stack.mjs /tmp/youplayer-update-base-images.tar
-
   tests:
     name: Tests Node et Chromium
     runs-on: ubuntu-24.04
@@ -63,6 +39,8 @@ jobs:
         run: printf 'PUPPETEER_CACHE_DIR=%s/youplayer-puppeteer\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Installer les dependances Node
         run: npm ci
+      - name: Installer les outils de validation de l'installateur
+        run: sudo apt-get update && sudo apt-get install -y python3-yaml python3-dotenv podman-compose
       - name: Installer Chrome et ses dependances systeme
         run: |
           sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" ./node_modules/.bin/puppeteer browsers install chrome --install-deps
