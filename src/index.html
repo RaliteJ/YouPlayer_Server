@@ -243,9 +243,17 @@
           <button id="admin-tab-accounts" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-accounts" aria-selected="false" tabindex="-1">Comptes</button>
           <button id="admin-tab-history" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-history" aria-selected="false" tabindex="-1">Historique</button>
           <button id="admin-tab-security" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-security" aria-selected="false" tabindex="-1">Sécurité</button>
-          <button id="admin-tab-updates" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-updates" aria-selected="false" tabindex="-1">Mises à jour</button>
         </div>
         <div id="admin-pane-integrations" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-integrations" tabindex="0">
+          <section class="admin-panel" aria-labelledby="admin-release-title">
+            <h2 id="admin-release-title">Version du serveur</h2>
+            <p id="admin-release-local">Version installée : chargement…</p>
+            <p id="admin-release-latest">Dernière release : non vérifiée.</p>
+            <p id="admin-release-status" role="status" aria-live="polite">Chargement…</p>
+            <p id="admin-release-date" class="muted"></p>
+            <button id="admin-release-check" type="button" class="btn-small">Vérifier les nouvelles releases</button>
+            <p class="muted">La vérification consulte GitHub uniquement sur demande. Les mises à jour restent manuelles.</p>
+          </section>
           <section class="admin-panel" aria-labelledby="admin-integrations-title">
             <h2 id="admin-integrations-title">Connexions aux services</h2>
             <div class="integration-row"><span>API YouTube</span><strong id="admin-youtube-status" class="integration-status">Chargement…</strong></div>
@@ -298,18 +306,6 @@
               <p>Exécutez cette commande dans le dossier d’installation, avec votre compte Podman. La lecture sera interrompue pendant le redémarrage.</p>
               <code>podman-compose -p youplayer-server up -d --build</code>
               <p>Rechargez ensuite cette page, puis vérifiez la connexion et la lecture.</p>
-            </div>
-          </section>
-        </div>
-        <div id="admin-pane-updates" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-updates" tabindex="0" hidden>
-          <section class="admin-panel" aria-labelledby="admin-update-title">
-            <h2 id="admin-update-title">Mises à jour</h2>
-            <p id="admin-update-versions" class="muted"></p>
-            <p id="admin-update-status" role="status" aria-live="polite">Vérification du service…</p>
-            <p class="muted">L’installation sauvegarde les données et redémarre l’application. La lecture sera interrompue, puis cette page se rechargera.</p>
-            <div class="admin-update-actions">
-              <button id="admin-update-check" type="button" class="btn-small" disabled>Vérifier les mises à jour</button>
-              <button id="admin-update-install" type="button" class="btn-primary" disabled>Installer et redémarrer</button>
             </div>
           </section>
         </div>

@@ -3,163 +3,108 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { generateKeyPairSync, sign } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildInstallBundle } from '../../scripts/build-install-bundle.mjs';
-import { installServer, installationManifest, prepareInstallationEnvironment } from '../../scripts/install.mjs';
-import { loadDotEnvFile } from '../../src/server/config.js';
-import { composeEnvironment } from '../../scripts/update-deployment.mjs';
-import { containerPlans } from '../../scripts/update-container-plan.mjs';
-import { installationContainers, installationCompose } from '../fixtures/update-deployment.mjs';
+import { installServer, prepareInstallationEnvironment, composeEnvironment, runInstallCommand } from '../../scripts/install.mjs';
 
 const execute = promisify(execFile);
-const projectRoot = fileURLToPath(new URL('../../', import.meta.url));
-const keys = generateKeyPairSync('ed25519');
-const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' });
-const manifest = { schema: 2, version: 'v1.2.3', sequence: 123, platform: 'linux/amd64',
-  images: { backend: 'a'.repeat(64), frontend: 'b'.repeat(64) }, registry: {
-    backend: `ghcr.io/synthetic/youplayer-backend@sha256:${'c'.repeat(64)}`,
-    frontend: `ghcr.io/synthetic/youplayer-frontend@sha256:${'d'.repeat(64)}`
-  } };
-const envelope = value => {
-  const payload = Buffer.from(JSON.stringify(value));
-  return JSON.stringify({ payload: payload.toString('base64'), signature: sign(null, payload, keys.privateKey).toString('base64') });
-};
-
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'youplayer-installer-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await fs.mkdir(path.join(root, 'keys'));
-  await fs.writeFile(path.join(root, 'keys/release-public-key.pem'), publicKey);
-  await fs.writeFile(path.join(root, 'youplayer-update.json'), envelope(manifest));
-  const compose = installationCompose();
-  compose.services.redis.image = `docker.io/library/redis@sha256:${'e'.repeat(64)}`;
-  await fs.writeFile(path.join(root, 'docker-compose.yml'), JSON.stringify(compose));
+  await fs.mkdir(path.join(root, '.git'));
   const calls = [], reports = [];
-  let started = false;
-  const containers = installationContainers(root, manifest.images);
   const run = async (program, args) => {
     calls.push([program, args]);
-    if (program === 'python3') return JSON.stringify(compose);
-    if (program === 'podman-compose') { if (args.includes('up')) started = true; return ''; }
-    if (program === 'flock' || program === 'tar') return '';
+    if (program === 'podman-compose') return '';
+    if (program === 'git') return args[0] === 'status' ? '' : 'a'.repeat(40);
     if (args[0] === 'info') return 'linux/amd64';
-    if (args[0] === 'ps') return started ? containers.map(c => c.Id).join('\n') : '';
-    if (args[0] === 'image') {
-      const service = args[2].includes('backend') ? 'backend' : 'frontend';
-      return JSON.stringify([{ Id: `sha256:${manifest.images[service]}`, Os: 'linux', Architecture: 'amd64', RepoDigests: [manifest.registry[service]] }]);
-    }
-    if (args[0] === 'inspect') return JSON.stringify(containers);
-    if (args[0] === 'pull' || args[0] === 'tag') return '';
+    if (args[0] === 'ps') return '';
+    if (args[0] === 'inspect') return JSON.stringify(Array.from({ length: 3 }, () => ({ State: { Status: 'running', Health: { Status: 'healthy' } } })));
     throw new Error('Unexpected simulated command');
   };
-  return { root, calls, reports, run, compose, options: { root, run, wait: async () => {},
+  return { root, calls, reports, run, options: { root, run, wait: async () => {},
     report: message => reports.push(message), pseudo: 'synthetic-admin', password: 'synthetic-password-123' } };
 }
 
-test('installer bundle contains only host tools, a buildless compatible Compose and the signed release', async t => {
-  const h = await fixture(t);
-  const archive = await buildInstallBundle({ root: projectRoot, directory: h.root, publicKey });
-  const files = (await execute('tar', ['-tzf', archive])).stdout.split('\n').filter(Boolean);
-  assert.ok(files.includes('youplayer-server/install.sh'));
-  assert.ok(files.includes('youplayer-server/scripts/update-service.mjs'));
-  assert.equal(files.some(file => /(?:^|\/)(?:\.env|\.git|\.updates|node_modules|graphify-out|\.vscode)(?:\/|$)/.test(file)), false);
-  assert.equal(files.some(file => /(?:private|signing).*\.pem$/.test(file)), false);
-  const extracted = path.join(h.root, 'extracted');
-  await fs.mkdir(extracted);
-  await execute('tar', ['-xzf', archive, '-C', extracted]);
-  const root = path.join(extracted, 'youplayer-server');
-  const imported = await import(pathToFileURL(path.join(root, 'scripts/install.mjs')));
-  assert.equal((await imported.installationManifest(root)).manifest.version, manifest.version);
-  assert.ok((await fs.stat(path.join(root, 'install.sh'))).mode & 0o100);
-  await prepareInstallationEnvironment(root, 'synthetic-admin', 'synthetic $${UNSET} # " password');
-  const { stdout } = await execute('python3', [path.join(root, 'scripts/update-compose-config.py'), root, 'youplayer-server'],
-    { cwd: root, env: composeEnvironment(root, 'youplayer-server') });
-  const compose = JSON.parse(stdout);
-  assert.equal(Object.values(compose.services).some(service => service.build), false);
-  assert.equal(compose.services.backend.environment.YOUPLAYER_ADMIN_PASSWORD, 'synthetic $${UNSET} # " password');
-  assert.equal(compose.services.backend.environment.YOUPLAYER_AUTH_ENABLED, 'true');
-  containerPlans(compose, { root, project: 'youplayer-server' });
-});
-
-test('installer creates private independent secrets and never replaces an existing .env', async t => {
-  const h = await fixture(t);
-  await prepareInstallationEnvironment(h.root, 'synthetic-admin', 'synthetic-password-123');
-  const file = path.join(h.root, '.env'), before = await fs.readFile(file);
-  assert.equal((await fs.stat(file)).mode & 0o777, 0o600);
-  const env = {}; loadDotEnvFile(file, env);
-  assert.match(env.YOUPLAYER_SESSION_SECRET, /^[a-f0-9]{96}$/);
-  assert.notEqual(env.YOUPLAYER_SESSION_SECRET, env.YOUPLAYER_SPOTIFY_TOKEN_SECRET);
-  await prepareInstallationEnvironment(h.root, 'different', 'different-password-123');
-  assert.deepEqual(await fs.readFile(file), before);
-});
-
-test('installer rejects unsafe credentials and symlinked configuration without overwriting files', async t => {
-  const h = await fixture(t);
-  for (const [pseudo, password] of [['admin\nOTHER=value', 'synthetic-password-123'], ['admin', 'too-short'],
-    ['admin', "synthetic'apostrophe"], ['admin', 'synthetic\\backslash'], ['admin', 'synthetic\nnewline']]) {
-    await assert.rejects(prepareInstallationEnvironment(h.root, pseudo, password));
-  }
-  const target = path.join(h.root, 'private');
-  await fs.writeFile(target, 'synthetic-private');
-  await fs.symlink(target, path.join(h.root, '.env'));
-  await assert.rejects(prepareInstallationEnvironment(h.root), /fichier régulier/);
-  assert.equal(await fs.readFile(target, 'utf8'), 'synthetic-private');
-});
-
-test('installer pulls signed digests, verifies image identity, starts without build and records only a healthy installation', async t => {
+test('first installation builds local sources before startup, keeps private config and never configures an updater', async t => {
   const h = await fixture(t);
   await installServer(h.options);
-  assert.deepEqual(h.calls.filter(([p, args]) => p === 'podman' && args[0] === 'pull').slice(0, 2).map(([, args]) => args.at(-1)), Object.values(manifest.registry));
-  assert.ok(h.calls.filter(([p, args]) => p === 'podman' && args[0] === 'pull').every(([, args]) => args.includes('--tls-verify=true')));
-  const start = h.calls.find(([p, args]) => p === 'podman-compose' && args.includes('up'));
-  assert.ok(start[1].includes('--no-build'));
-  const active = JSON.parse(await fs.readFile(path.join(h.root, '.updates/host/active.json')));
-  assert.deepEqual(active, { version: manifest.version, sequence: manifest.sequence, images: manifest.images });
-  const config = JSON.parse(await fs.readFile(path.join(h.root, '.updates/host/config.json')));
-  assert.deepEqual(config.allowedImageRepositories, Object.values(manifest.registry).map(ref => ref.split('@')[0]));
-  assert.equal(h.calls.some(([, args]) => args.some(arg => arg.includes(h.options.password))), false);
-  assert.equal(h.reports.some(message => message.includes(h.options.password)), false);
-  assert.equal(h.calls.some(([, args]) => ['rm', 'stop', 'build'].includes(args[0])), false);
+  const commands = h.calls.filter(([program]) => program === 'podman-compose');
+  assert.ok(commands[0][1].includes('--version'));
+  assert.ok(commands[1][1].includes('build'));
+  assert.ok(commands[1][1].includes(`YOUPLAYER_BUILD_COMMIT=${'a'.repeat(40)}`));
+  assert.equal(commands[2][1].at(-1), '--no-build');
+  for (const [, args] of commands.slice(1)) assert.equal(args[args.indexOf('--env-file') + 1], '/dev/null');
+  assert.equal((await fs.stat(path.join(h.root, '.env'))).mode & 0o777, 0o600);
+  await assert.rejects(fs.stat(path.join(h.root, '.updates/host/active.json')), { code: 'ENOENT' });
+  await assert.rejects(fs.stat(path.join(h.root, '.updates/host/config.json')), { code: 'ENOENT' });
+  assert.ok(!h.reports.join(' ').includes(h.options.password));
+  assert.ok(!h.calls.some(([program, args]) => program === 'git' && !['status', 'rev-parse'].includes(args[0]) || args.some(arg => ['rm', 'stop', 'down', 'tag', 'load'].includes(arg))));
 });
 
-test('installer precheck needs no .env, downloads nothing and does not configure automatic updates', async t => {
+test('an installation from modified sources marks its build as unknown instead of claiming the HEAD commit', async t => {
+  const h = await fixture(t);
+  await installServer({ ...h.options, run: async (program, args) => {
+    if (program === 'git' && args[0] === 'status') return ' M src/server/server.js';
+    return h.run(program, args);
+  } });
+  assert.ok(h.calls.some(([, args]) => args.includes('YOUPLAYER_BUILD_COMMIT=unknown')));
+  assert.ok(!h.calls.some(([program, args]) => program === 'git' && args[0] === 'rev-parse'));
+});
+
+test('precheck needs no env and makes no build, startup or data changes', async t => {
   const h = await fixture(t);
   await installServer({ ...h.options, checkOnly: true });
-  await assert.rejects(fs.stat(path.join(h.root, '.env')), { code: 'ENOENT' });
-  await assert.rejects(fs.stat(path.join(h.root, '.updates/host/config.json')), { code: 'ENOENT' });
-  assert.equal(h.calls.some(([, args]) => ['pull', 'tag', 'up'].includes(args[0]) || args.includes('up')), false);
+  assert.deepEqual(await fs.readdir(h.root), ['.git']);
+  assert.equal(h.calls.some(([, args]) => args.includes('build') || args.includes('up')), false);
 });
 
-for (const failure of ['signature', 'platform', 'existing', 'dependencies', 'image-id', 'image-digest', 'build', 'unhealthy']) {
-  test(`installer refuses ${failure} and does not record an installed version`, async t => {
+for (const failure of ['checkout', 'existing', 'dependencies', 'build', 'unhealthy']) {
+  test(`installation refuses ${failure} without deleting data`, async t => {
     const h = await fixture(t);
-    if (failure === 'signature') {
-      const value = JSON.parse(envelope(manifest)); value.payload = Buffer.from('{}').toString('base64');
-      await fs.writeFile(path.join(h.root, 'youplayer-update.json'), JSON.stringify(value));
-    }
-    if (failure === 'build') h.compose.services.backend.build = { context: './src' };
+    if (failure === 'checkout') await fs.rmdir(path.join(h.root, '.git'));
     const run = async (program, args) => {
       const result = await h.run(program, args);
-      if (failure === 'platform' && args[0] === 'info') return 'linux/arm64';
       if (failure === 'existing' && args[0] === 'ps') return 'youplayer-server_backend_1';
-      if (failure === 'dependencies' && program === 'flock') throw new Error('Missing prerequisite');
-      if (failure.startsWith('image-') && args[0] === 'image') {
-        const images = JSON.parse(result);
-        if (failure === 'image-id') images[0].Id = 'f'.repeat(64);
-        else images[0].RepoDigests = [];
-        return JSON.stringify(images);
-      }
+      if (failure === 'dependencies' && args.includes('--version')) throw new Error('Missing prerequisite');
+      if (failure === 'build' && args.includes('build')) throw new Error('Build failed');
       if (failure === 'unhealthy' && args[0] === 'inspect') return '[]';
       return result;
     };
     await assert.rejects(installServer({ ...h.options, run }));
-    await assert.rejects(fs.stat(path.join(h.root, '.updates/host/active.json')), { code: 'ENOENT' });
-    if (failure !== 'unhealthy') assert.equal(h.calls.some(([p, args]) => p === 'podman-compose' && args.includes('up')), false);
-    if (['signature', 'platform', 'existing', 'dependencies', 'build'].includes(failure)) {
-      assert.equal(h.calls.some(([, args]) => args[0] === 'pull'), false);
-    }
+    if (failure !== 'unhealthy') assert.equal(h.calls.some(([, args]) => args.includes('up')), false);
+    assert.equal(h.calls.some(([, args]) => args.some(arg => ['rm', 'down', 'stop'].includes(arg))), false);
   });
 }
+
+test('configuration preserves existing values and passes dollar signs literally without inherited production overrides', async t => {
+  const h = await fixture(t);
+  const password = 'synthetic $${UNSET} # " password';
+  await prepareInstallationEnvironment(h.root, 'synthetic-admin', password);
+  const before = await fs.readFile(path.join(h.root, '.env'));
+  await prepareInstallationEnvironment(h.root, 'other', 'other-password-123');
+  assert.deepEqual(await fs.readFile(path.join(h.root, '.env')), before);
+  const env = composeEnvironment(h.root, 'youplayer-server', { PATH: process.env.PATH, UNSET: 'must-not-be-expanded',
+    YOUPLAYER_ADMIN_PASSWORD: 'wrong', YOUPLAYER_SPOTIFY_CLIENT_SECRET: 'wrong', COMPOSE_FILE: 'wrong.yml' });
+  assert.equal(env.YOUPLAYER_ADMIN_PASSWORD, password);
+  assert.equal(env.YOUPLAYER_SPOTIFY_CLIENT_SECRET, '');
+  assert.equal(env.COMPOSE_FILE, undefined);
+  await assert.rejects(async () => composeEnvironment(h.root, 'another-project'), { updateCode: 'project-mismatch' });
+  // Exercise the installed Compose parser with synthetic credentials only.
+  await fs.writeFile(path.join(h.root, 'docker-compose.yml'), JSON.stringify({ services: { backend: {
+    image: 'synthetic', environment: { PASSWORD: '${YOUPLAYER_ADMIN_PASSWORD}' }
+  } } }));
+  const { stdout } = await execute('podman-compose', ['--env-file', '/dev/null', '-p', 'youplayer-server', 'config'], { cwd: h.root, env });
+  const parsed = await execute('python3', ['-c', 'import sys,yaml,json; print(json.dumps(yaml.safe_load(sys.argv[1])))', stdout]);
+  assert.equal(JSON.parse(parsed.stdout).services.backend.environment.PASSWORD, password);
+});
+
+test('command failures keep raw output in a private host log', async t => {
+  const h = await fixture(t);
+  await fs.mkdir(path.join(h.root, '.updates/host'), { recursive: true });
+  await assert.rejects(runInstallCommand(process.execPath, ['-e', 'console.error("synthetic-private");process.exit(1)'], h.root),
+    error => error.updateCode === 'command-failed' && !error.message.includes('synthetic-private'));
+  const log = path.join(h.root, '.updates/host/last-command.log');
+  assert.match(await fs.readFile(log, 'utf8'), /synthetic-private/);
+  assert.equal((await fs.stat(log)).mode & 0o777, 0o600);
+});

@@ -7,8 +7,8 @@ import { createPlaylistAccess } from './playlist-access.js';
 import { registerPlaylistRoutes } from './playlist-routes.js';
 import { registerImportRoutes } from './import-routes.js';
 import { registerAuthRoutes } from './auth-routes.js';
-import { registerUpdateRoutes } from './update-routes.js';
 import { registerSecurityRoutes } from './security-routes.js';
+import { registerReleaseRoutes } from './release-status.js';
 import { createSpotifyCatalog } from './spotify-catalog.js';
 import { createHttpSecurity } from './http-security.js';
 import { nativeSessionQueue } from './native-transitions.js';
@@ -314,8 +314,8 @@ registerAuthRoutes(app, {
 	config, store: youplayerStore, requireAuth, requireAdmin,
 	firstTrackStreams, recordAction, sendJsonError
 });
-registerUpdateRoutes(app, { requireAdmin, recordAction });
 registerSecurityRoutes(app, { requireAdmin, recordAction });
+registerReleaseRoutes(app, { requireAdmin });
 
 app.post("/spotify_add_song", requireAuth, (_req, res) => {
 	res.status(410).json({

@@ -134,11 +134,9 @@ const App = {
         this.logoutButton = document.getElementById('logout-button');
         this.adminNav = document.querySelector('.nav-admin');
         this.adminCreateUserForm = document.getElementById('admin-create-user');
-        this.adminUpdateStatus = document.getElementById('admin-update-status');
-        this.adminUpdateVersions = document.getElementById('admin-update-versions');
-        this.adminUpdateCheck = document.getElementById('admin-update-check');
-        this.adminUpdateInstall = document.getElementById('admin-update-install');
         this.adminIntegrationCheck = document.getElementById('admin-integrations-check');
+        this.adminReleaseStatus = document.getElementById('admin-release-status');
+        this.adminReleaseCheck = document.getElementById('admin-release-check');
         this.adminSecurityStatus = document.getElementById('admin-security-status');
         this.adminSecurityCheck = document.getElementById('admin-security-check');
         this.adminSecurityFix = document.getElementById('admin-security-fix');
@@ -316,11 +314,10 @@ const App = {
         if (this.adminCreateUserForm) {
             this.adminCreateUserForm.onsubmit = (e) => this.createAdminUser(e);
         }
-        if (this.adminUpdateCheck) this.adminUpdateCheck.onclick = () => this.startAppUpdate('check');
-        if (this.adminUpdateInstall) this.adminUpdateInstall.onclick = () => this.startAppUpdate('install');
         if (this.adminSecurityCheck) this.adminSecurityCheck.onclick = () => this.startSecurityAudit('check');
         if (this.adminSecurityFix) this.adminSecurityFix.onclick = () => this.startSecurityAudit('fix');
         if (this.adminIntegrationCheck) this.adminIntegrationCheck.onclick = () => this.checkIntegrations();
+        if (this.adminReleaseCheck) this.adminReleaseCheck.onclick = () => this.fetchReleaseStatus(true);
         if (this.passwordChangeForm) {
             this.passwordChangeForm.onsubmit = (e) => this.changeOwnPassword(e);
         }

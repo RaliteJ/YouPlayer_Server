@@ -770,61 +770,6 @@ test('Spotify playlist scrolling reveals the next 50 tracks on desktop and mobil
 	}
 });
 
-test('admin update panel follows installation progress and fits mobile and desktop', { timeout: 20000 }, async t => {
-	if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
-	const page = await browser.newPage();
-	let state = { enabled: true, online: true, phase: 'idle', currentVersion: 'v1', latestVersion: 'v2', updateAvailable: true };
-	let installRequests = 0;
-	try {
-		await page.setRequestInterception(true);
-		page.on('request', request => {
-			const route = new URL(request.url()).pathname;
-			if (route.startsWith('/admin/updates')) {
-				if (route.endsWith('/install')) {
-					installRequests++;
-					assert.deepEqual(JSON.parse(request.postData()), { version: 'v2' });
-					state = { ...state, requestId: 'synthetic-job', phase: 'downloading', progress: 25 };
-					request.respond({ status: 202, contentType: 'application/json', body: JSON.stringify({ requestId: 'synthetic-job' }) });
-				} else request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(state) });
-			} else if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) request.continue();
-			else request.abort();
-		});
-		await page.goto(baseUrl, { waitUntil: 'networkidle0' });
-		await page.evaluate(async () => {
-			const { App } = await import(document.querySelector('script[type="module"]').src);
-			window.updateFixtureApp = App;
-			App.currentUser = { id: 'synthetic-admin', role: 'admin', pseudo: 'Synthetic' };
-			App.apiFetch = async () => [];
-			document.body.classList.remove('auth-required');
-			document.querySelector('.auth-screen').hidden = true;
-			App.loadView('admin');
-			await App.fetchUpdateStatus();
-		});
-		await page.click('#admin-tab-updates');
-		await page.waitForFunction(() => !document.getElementById('admin-update-install').disabled);
-		for (const width of [320, 390, 768, 1280]) {
-			await page.setViewport({ width, height: 844 });
-			assert.equal(await page.evaluate(() => {
-				const button = document.getElementById('admin-update-install').getBoundingClientRect();
-				return button.width > 0 && button.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth;
-			}), true, `admin updater fits at ${width}px`);
-		}
-		await page.click('#admin-update-install');
-		await page.waitForFunction(() => document.getElementById('admin-update-status').textContent.includes('25 %'));
-		assert.equal(await page.$eval('#admin-update-install', button => button.disabled), true);
-		state = { ...state, phase: 'restarting', stage: 'recreate' };
-		await page.evaluate(() => window.updateFixtureApp.fetchUpdateStatus());
-		assert.match(await page.$eval('#admin-update-status', element => element.textContent), /Remplacement des conteneurs/);
-		state = { ...state, stage: 'health' };
-		await page.evaluate(() => window.updateFixtureApp.fetchUpdateStatus());
-		assert.match(await page.$eval('#admin-update-status', element => element.textContent), /Vérification du démarrage/);
-		state = { ...state, phase: 'failed', rolledBack: true };
-		await page.evaluate(() => window.updateFixtureApp.fetchUpdateStatus());
-		assert.match(await page.$eval('#admin-update-status', element => element.textContent), /rétablie/);
-		assert.equal(installRequests, 1);
-	} finally { await page.close(); }
-});
-
 test('Spotify artist portraits render and navigation opens and imports an album', { timeout: 15000 }, async (t) => {
 	if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
 	const page = await browser.newPage();
@@ -1190,11 +1135,24 @@ test('admin account forms create a user and reset its password without exposing 
 	const memberPseudo = `synthetic-member-ui-${process.pid}`;
 	await app.locals.youplayerStore.createUser({ pseudo: adminPseudo, password: 'synthetic-admin-password', role: 'admin' });
 	const page = await browser.newPage();
-	let integrationChecks = 0;
+	let integrationChecks = 0, releaseChecks = 0;
 	try {
 		await page.setViewport({ width: 1280, height: 844 });
 		await page.setRequestInterception(true);
 		page.on('request', async request => {
+			if (request.url().startsWith(`${baseUrl}/admin/releases`)) {
+                const checking = request.url().endsWith('/check');
+                if (checking) {
+                    releaseChecks++;
+                    assert.equal(request.method(), 'POST');
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                }
+                return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({
+                    localCommit: 'a'.repeat(40), state: checking ? 'release_ahead' : 'not_checked',
+                    latestRelease: checking ? { tag: 'v2.0.0-' + 'synthetic'.repeat(16) } : null,
+                    checkedAt: checking ? '2026-10-18T12:00:00Z' : null
+                }) });
+            }
 			if (request.url() === `${baseUrl}/admin/integrations/check`) {
 				integrationChecks++;
 				await new Promise(resolve => setTimeout(resolve, 150));
@@ -1236,22 +1194,36 @@ test('admin account forms create a user and reset its password without exposing 
 			assert.equal(state.overflow, false, `admin overflow at ${width}`);
 			assert.equal(state.spotify, 'Non vérifiée');
 		}
+		assert.equal(await page.$('#admin-tab-updates'), null);
+		assert.equal(await page.$('#admin-update-install'), null);
 		assert.equal(await page.$eval('#admin-tab-integrations', el => el.getAttribute('aria-selected')), 'true');
 		await page.focus('#admin-tab-integrations');
 		await page.keyboard.press('ArrowRight');
 		assert.equal(await page.$eval('#admin-tab-accounts', el => el.getAttribute('aria-selected')), 'true');
 		assert.equal(await page.$eval('#admin-pane-integrations', el => el.hidden), true);
 		await page.keyboard.press('End');
-		assert.equal(await page.$eval('#admin-tab-updates', el => el === document.activeElement), true);
+		assert.equal(await page.$eval('#admin-tab-security', el => el === document.activeElement), true);
 		await page.keyboard.press('Home');
 		for (const width of [320, 390, 768, 1280]) {
 			await page.setViewport({ width, height: 844 });
-			for (const name of ['accounts', 'history', 'security', 'updates', 'integrations']) {
+			for (const name of ['accounts', 'history', 'security', 'integrations']) {
 				await page.click(`#admin-tab-${name}`);
 				assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `${name} fits at ${width}`);
 				assert.equal(await page.$$eval('#view-admin [role="tabpanel"]', panels => panels.filter(panel => !panel.hidden).length), 1);
 			}
 		}
+        assert.equal(releaseChecks, 0, 'Opening Admin must not check GitHub');
+        assert.match(await page.$eval('#admin-release-local', el => el.textContent), /commit aaaaaaaaaaaa/);
+        await page.click('#admin-release-check');
+        await page.waitForFunction(() => document.getElementById('admin-release-check').disabled);
+        await page.waitForFunction(() => document.getElementById('admin-release-status').textContent.includes('nouvelle release'));
+        assert.equal(releaseChecks, 1);
+        assert.match(await page.$eval('#admin-release-latest', el => el.textContent), /v2.0.0/);
+        assert.equal(await page.$('#admin-update-install'), null);
+        for (const width of [320, 390, 768, 1280]) {
+            await page.setViewport({ width, height: 844 });
+            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `release fits at ${width}`);
+        }
 		assert.equal(integrationChecks, 0, 'Opening Admin must not start a live probe');
 		await page.click('#admin-integrations-check');
 		await page.waitForFunction(() => document.getElementById('admin-integrations-check').disabled);

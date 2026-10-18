@@ -2611,7 +2611,7 @@ li:hover {
   border-radius: 10px;
 }
 .security-rebuild code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
-#admin-security-counts { overflow-wrap: anywhere; }
+#admin-security-counts, #admin-release-latest { overflow-wrap: anywhere; }
 
 /* Secondary Spotify controls stay available without crowding search results. */
 .spotify-options summary {

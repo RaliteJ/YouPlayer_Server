@@ -153,3 +153,93 @@ test('admin check routes require a real admin session even in local mode and rat
     assert.equal((await request('POST', admin)).statusCode, 429);
     assert.equal(checks, 4);
 });
+
+import { createReleaseStatus, registerReleaseRoutes } from '../../src/server/release-status.js';
+
+const commit = 'a'.repeat(40);
+const release = { tag_name: 'v2.0.0', draft: false, prerelease: false };
+const json = data => Response.json(data);
+
+for (const [comparison, state, updateAvailable] of [
+  ['ahead', 'release_ahead', true], ['behind', 'local_ahead', false],
+  ['identical', 'up_to_date', false], ['diverged', 'diverged', null]
+]) test(`release comparison ${comparison} reports ${state} without installing anything`, async () => {
+  const calls = [];
+  const status = createReleaseStatus({ commit, fetchImpl: async (url, options) => {
+    calls.push(url);
+    assert.equal(options.redirect, 'error');
+    assert.ok(options.signal);
+    assert.equal(options.headers.Authorization, undefined);
+    if (url.endsWith('/releases/latest')) return json(release);
+    assert.equal(url, `https://api.github.com/repos/RaliteJ/YouPlayer_Server/compare/${commit}...v2.0.0?per_page=1`);
+    return json({ status: comparison, private: 'synthetic-private' });
+  } });
+  assert.equal(status.snapshot().state, 'not_checked');
+  assert.equal(calls.length, 0);
+  const value = await status.check();
+  assert.equal(value.state, state);
+  assert.equal(value.updateAvailable, updateAvailable);
+  assert.equal(value.latestRelease.tag, 'v2.0.0');
+  assert.doesNotMatch(JSON.stringify(value), /synthetic-private/);
+  assert.equal(calls.length, 2);
+});
+
+for (const commit of ['', 'unknown', 'v1.0.0', '../secret']) test(`unidentified local build ${commit} never claims to be current or contacts GitHub`, async () => {
+  const status = createReleaseStatus({ commit, fetchImpl: () => assert.fail('Unexpected network request') });
+  assert.equal((await status.check()).state, 'local_unknown');
+  assert.equal(status.snapshot().updateAvailable, null);
+});
+
+for (const [name, responses, expected] of [
+  ['no release', [() => new Response('', { status: 404 })], 'no_release'],
+  ['unknown commit', [() => json(release), () => new Response('', { status: 404 })], 'local_unknown'],
+  ['quota', [() => new Response('', { status: 403, headers: { 'x-ratelimit-remaining': '0' } })], 'rate_limited'],
+  ['unavailable', [() => new Response('synthetic-private', { status: 503 })], 'unavailable'],
+  ['prerelease', [() => json({ ...release, prerelease: true })], 'unavailable'],
+  ['invalid comparison', [() => json(release), () => json({ status: '__proto__' })], 'unavailable'],
+  ['malformed JSON', [() => new Response('synthetic-private')], 'unavailable'],
+  ['timeout', [() => { throw new DOMException('synthetic-private', 'TimeoutError'); }], 'unavailable']
+]) test(`release check handles ${name} without a false up-to-date result`, async () => {
+  let index = 0;
+  const status = createReleaseStatus({ commit, fetchImpl: async () => responses[index++]() });
+  const result = await status.check();
+  assert.equal(result.state, expected);
+  assert.equal(result.updateAvailable, null);
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-private/);
+});
+
+test('explicit checks deduplicate concurrent calls and cache results for five minutes, including failures', async () => {
+  let clock = 1_000_000, calls = 0, finish;
+  const status = createReleaseStatus({ commit, now: () => clock, fetchImpl: () => {
+    calls++;
+    return new Promise(resolve => { finish = resolve; });
+  } });
+  const first = status.check();
+  assert.equal(status.check(), first);
+  finish(new Response('', { status: 503 }));
+  await first;
+  await status.check();
+  assert.equal(calls, 1);
+  clock += 300_001;
+  const second = status.check();
+  assert.equal(calls, 2);
+  finish(new Response('', { status: 503 }));
+  await second;
+});
+
+test('release API never bypasses authentication even when the supplied global guard is disabled', async () => {
+  const routes = new Map();
+  let checks = 0;
+  registerReleaseRoutes({ get: (url, ...handlers) => routes.set(url, handlers), post: (url, ...handlers) => routes.set(url, handlers) }, {
+    requireAdmin: (_req, _res, next) => next(), status: { snapshot: () => ({}), check: async () => { checks++; return {}; } }
+  });
+  for (const session of [undefined, { userId: 'listener', role: 'user' }, { userId: 'manager', role: 'admin' }]) {
+    let code = 200, index = 0;
+    const handlers = routes.get('/admin/releases/check');
+    const response = { status(value) { code = value; return this; }, set() {}, json() {} };
+    const next = () => handlers[index++]?.({ session }, response, next);
+    await next();
+    assert.equal(code, !session ? 401 : session.role === 'user' ? 403 : 200);
+  }
+  assert.equal(checks, 1);
+});

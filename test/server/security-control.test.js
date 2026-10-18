@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createSecurityControl, dependencyLockHash } from '../../src/server/security-control.js';
+import { writeSecurityJson, createSecurityControl, dependencyLockHash } from '../../src/server/security-control.js';
 import { registerSecurityRoutes } from '../../src/server/security-routes.js';
-import { writeUpdateJson } from '../../src/server/update-control.js';
 import { createSecurityWorker } from '../../scripts/dependency-audit.mjs';
 
 test('security status hides private data, retains pending rebuild and detects installed corrections', async t => {
@@ -18,7 +17,7 @@ test('security status hides private data, retains pending rebuild and detects in
   const control = createSecurityControl({ requestsDirectory, statusDirectory, installedLock, now: () => 50_000 });
   const state = { heartbeat: 50_000, phase: 'finished', report: { status: 'vulnerable', checkedAt: '2026-10-11T12:00:00Z',
     before: { critical: 1 }, pendingLockHash: dependencyLockHash('new'), auditedLockHash: dependencyLockHash('new'), token: 'private-token' }, command: 'private-command' };
-  await writeUpdateJson(path.join(statusDirectory, 'security.json'), state);
+  await writeSecurityJson(path.join(statusDirectory, 'security.json'), state);
   assert.equal((await control.status()).rebuildRequired, true);
   assert.ok(!JSON.stringify(await control.status()).includes('private'));
   await fs.writeFile(installedLock, 'new');
@@ -28,9 +27,9 @@ test('security status hides private data, retains pending rebuild and detects in
   assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
   assert.equal(results.find(result => result.status === 'rejected').reason.statusCode, 409);
   await fs.rm(path.join(requestsDirectory, 'security.json'));
-  await writeUpdateJson(path.join(statusDirectory, 'security.json'), { ...state, phase: 'checking' });
+  await writeSecurityJson(path.join(statusDirectory, 'security.json'), { ...state, phase: 'checking' });
   await assert.rejects(control.request('check'), { statusCode: 409 });
-  await writeUpdateJson(path.join(statusDirectory, 'security.json'), { ...state, heartbeat: 0 });
+  await writeSecurityJson(path.join(statusDirectory, 'security.json'), { ...state, heartbeat: 0 });
   await assert.rejects(control.request('check'), { statusCode: 503 });
 });
 

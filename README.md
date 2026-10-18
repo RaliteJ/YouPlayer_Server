@@ -19,7 +19,7 @@ Un lecteur musical personnel pour réunir YouTube, le catalogue Spotify et vos f
 - [🚀 Prise en main pour écouter](#prise-en-main)
 - [🔐 Comptes, confidentialité et services musicaux](#comptes-et-confidentialite)
 - [👷 Contribuer](#contribuer)
-- [📦 Installation sans build](#installation-sans-build)
+- [📦 Installation depuis Git](#installation-sans-build)
 - [🛠️ Installation et build — guide technique](#installation-et-build)
   - [Prérequis et architecture](#prerequis)
   - [Configurer une première installation](#configuration)
@@ -41,7 +41,7 @@ YouPlayer rassemble la recherche musicale, les playlists et la lecture audio dan
 
 L'application s'utilise depuis un navigateur. Elle fonctionne avec un serveur que vous installez et gérez vous-même : c'est le principe de l'**auto-hébergement**. Si quelqu'un a déjà installé YouPlayer pour vous, vous avez seulement besoin de l'adresse du site et d'un compte de lecture.
 
-Pour installer votre propre instance, consultez l’[installation sans build](#installation-sans-build)
+Pour installer votre propre instance, consultez l’[installation depuis Git](#installation-sans-build)
 ou le [guide technique avec build](#installation-et-build).
 
 <a id="fonctionnalites"></a>
@@ -103,23 +103,17 @@ Lisez [AGENTS.md](AGENTS.md) avant de modifier le projet. Utilisez des exemples 
 
 <a id="installation-sans-build"></a>
 
-## 📦 Installation sans build
+## 📦 Installation depuis Git
 
-Les nouvelles releases publiées en mode registre fournissent `youplayer-install.tar.gz`.
-Cette petite archive contient un Compose sans build et un installateur interactif :
-les images backend/frontend sont téléchargées par digest après vérification de leur signature.
-Le serveur ne nécessite ni Git, ni `npm install`, ni Chromium.
+Clonez le dépôt puis lancez `./install.sh` avec le compte Podman utilisateur.
+L’installateur prépare la configuration et construit les images depuis les sources.
+Il conserve un `.env` existant et refuse de remplacer une stack déjà installée.
+Voir [INSTALL.md](INSTALL.md) pour les prérequis et le premier démarrage.
 
-Après installation des outils hôte indiqués dans [INSTALL.md](INSTALL.md), télécharger
-l’archive depuis une release de confiance, l’extraire dans un dossier permanent,
-puis lancer `./install.sh`. Le script demande le compte admin, génère les secrets,
-prépare les dossiers et contrôle le démarrage sur le port HTTPS `8443`.
-Il conserve `.env` et refuse de remplacer une stack existante.
-
-Les releases historiques contenant seulement `youplayer-images.tar` ne fournissent
-pas cet installateur. Les mises à jour restent explicites depuis Admin ; le
-service hôte doit être lancé séparément, comme expliqué dans [INSTALL.md](INSTALL.md).
-Le guide complet avec build reste disponible ci-dessous.
+Les mises à jour sont manuelles : `git pull --ff-only`, puis reconstruction et
+redémarrage avec Compose. Aucun bouton Admin ni service hôte ne met à jour
+l’application. Le backend propose seulement une vérification informative sur
+demande admin (`POST /admin/releases/check`). Voir [UPDATES.md](UPDATES.md).
 
 <a id="installation-et-build"></a>
 
@@ -179,14 +173,15 @@ Copiez le résultat dans `YOUPLAYER_SESSION_SECRET`, uniquement dans `.env`. Pou
 
 Laissez les clés YouTube et les variables Spotify facultatives vides si vous ne les utilisez pas. Les champs `YOUPLAYER_SPOTIFY_WEB_USERNAME` et `YOUPLAYER_SPOTIFY_WEB_PASSWORD` concernent uniquement un diagnostic navigateur facultatif ; ils ne sont pas nécessaires au catalogue public et ce diagnostic est désactivé dans l'image fournie.
 
-Préparez les dossiers locaux de communication des mises à jour, puis contrôlez la configuration initiale :
+Préparez les dossiers locaux utilisés par les médias et l’audit de sécurité, puis contrôlez la configuration initiale :
 
 ```bash
-node scripts/update-service.mjs init
+mkdir -p src/playlists src/local_song .updates/requests .updates/status
+chmod 700 .updates .updates/requests .updates/status
 node scripts/production.mjs preflight
 ```
 
-`init` ne configure ni dépôt distant ni clé de signature et ne démarre aucun service de mise à jour. Le contrôle `preflight` rapporte des booléens sans afficher les secrets ; il ne teste pas les services musicaux ou un certificat public. Corrigez les contrôles en échec avant le premier lancement.
+Le contrôle `preflight` rapporte des booléens sans afficher les secrets ; il ne teste pas les services musicaux ou un certificat public. Corrigez les contrôles en échec avant le premier lancement.
 
 <a id="build"></a>
 
@@ -286,7 +281,7 @@ Les contrôles utilisent des ressources publiques et les identifiants d'applicat
 - **Spotify public** : obtention d'une session invitée.
 - **Spotify OAuth** : obtention d'un [jeton d'application](https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow), sans vérifier l'URI de retour ou les autorisations d'un utilisateur.
 
-Les appels sont limités dans le temps et les résultats réutilisés pendant **30 secondes**. Le serveur limite aussi les contrôles répétés. Les clés, jetons et erreurs brutes ne sont pas renvoyés à l'interface. Une sonde réussie ne garantit pas toutes les recherches ou la lecture des médias. Les mises à jour ont leur propre état dans le panneau voisin.
+Les appels sont limités dans le temps et les résultats réutilisés pendant **30 secondes**. Le serveur limite aussi les contrôles répétés. Les clés, jetons et erreurs brutes ne sont pas renvoyés à l'interface. Une sonde réussie ne garantit pas toutes les recherches ou la lecture des médias. Les mises à jour du serveur se font manuellement depuis l’hôte.
 
 <a id="tests"></a>
 
@@ -334,7 +329,7 @@ Les dépendances, le navigateur et les images sont téléchargés pendant la CI.
 
 Après un push explicite sur GitHub, consultez les résultats dans **Actions** et dans les pull requests. Vous pouvez rendre les contrôles **Tests Node et Chromium** et **Stack Docker HTTPS** obligatoires dans les règles de protection de branche.
 
-Le workflow [release.yml](.github/workflows/release.yml) est distinct : il publie des releases sur les tags `v*` ou sur lancement manuel et nécessite une clé de signature dédiée. Voir [UPDATES.md](UPDATES.md) avant toute publication.
+Le workflow de publication des anciennes images signées a été retiré. Les mises à jour utilisent le dépôt Git.
 
 Documentation : [tests Node sur GitHub Actions](https://docs.github.com/en/actions/tutorials/build-and-test-code/nodejs) et [installation du navigateur Puppeteer](https://pptr.dev/browsers-api).
 
@@ -369,61 +364,25 @@ node scripts/production.mjs monitor
 
 Aucune supervision n'est installée automatiquement. Après installation ou mise à jour, vérifiez la connexion, la persistance des données et la lecture. Les sondes du serveur sont `/health/live` et `/health/ready`.
 
-Les mises à jour depuis Admin sont facultatives et non configurées au clonage. Leur service vérifie les signatures Ed25519 et les sommes SHA-256, conserve les volumes et tente un retour arrière si la vérification de santé échoue. L'installation d'une mise à jour est explicite et interrompt temporairement la lecture. Le backend ne reçoit pas de socket Podman.
-
-Les releases officielles sont disponibles sur [RaliteJ/YouPlayer_Server](https://github.com/RaliteJ/YouPlayer_Server/releases). [UPDATES.md](UPDATES.md) décrit la configuration du dépôt, la clé publique de confiance, le lancement du service et, pour le mainteneur, la construction et la publication des releases signées.
-
-#### Installer une mise à jour depuis Admin
-
-Depuis le dossier permanent de l'installation, initialisez puis configurez une
-fois le canal officiel. Ces commandes ne téléchargent et n'installent aucune
-mise à jour :
+Les mises à jour sont effectuées par l’utilisateur sur l’hôte. Après sauvegarde,
+depuis le dépôt de l’installation :
 
 ```bash
-node scripts/update-service.mjs init
-node scripts/update-service.mjs configure \
-  --repository https://github.com/RaliteJ/YouPlayer_Server \
-  --public-key keys/release-public-key.pem
+git status --short
+git pull --ff-only
+podman-compose --env-file .env -p youplayer-server build
+podman-compose --env-file .env -p youplayer-server up -d --no-build
 ```
 
-Lancez ensuite le worker avec le même utilisateur que celui qui possède la
-stack Podman et laissez ce terminal ouvert pendant toute l'opération :
+**Arrêtez-vous à la première erreur.** Ne lancez le redémarrage qu’après une
+construction réussie. Le code est intégré aux images : `git pull` seul ne change
+pas l’application en cours d’exécution. Le redémarrage interrompt la lecture.
+Conservez le même moteur, compte et projet Compose pour retrouver vos volumes.
 
-```bash
-node scripts/update-service.mjs run
-```
-
-Ce worker ne recherche et n'installe rien de sa propre initiative. Dans
-**Admin → Mises à jour**, cliquez d'abord sur **Vérifier les mises à jour**.
-Contrôlez la version proposée, puis cliquez explicitement sur
-**Installer et redémarrer**. Le service vérifie la signature et les images,
-sauvegarde les données, remplace uniquement backend/frontend, contrôle leur
-santé et tente un retour aux anciennes images en cas d'échec. Ne fermez pas le
-worker et ne lancez pas `podman-compose down` pendant cette opération.
-
-Après la fin de l'installation, vérifiez la stack et la disponibilité HTTPS :
-
-```bash
-podman-compose --env-file .env -p youplayer-server ps
-curl --fail --silent --show-error --insecure https://127.0.0.1:8443/health/ready
-```
-
-Utilisez toujours `--env-file .env -p youplayer-server` pour les commandes
-Compose. Sans `-p`, un dossier nommé `YouPlayer_Server` peut être normalisé en
-projet `youplayer_server`, qui ne correspond pas aux conteneurs
-`youplayer-server_*`. Pour démarrer ou arrêter manuellement la bonne stack :
-
-```bash
-podman-compose --env-file .env -p youplayer-server up -d
-podman-compose --env-file .env -p youplayer-server down
-```
-
-**N'ajoutez pas `-v` à `down`** : cette option supprime les volumes des comptes,
-sessions Redis et certificats. Une mise à jour Admin normale ne demande ni
-`down`, ni `down -v`, ni suppression manuelle d'un conteneur ou d'une
-transaction. Le lancement automatique du worker par systemd n'est pas encore
-installé par le projet ; tant qu'il ne l'est pas, relancez explicitement
-`node scripts/update-service.mjs run` après un redémarrage de l'hôte.
+[UPDATES.md](UPDATES.md) détaille les contrôles, le cas Docker Compose, la
+migration des anciennes installations et la préservation des valeurs `$` avec
+les anciennes versions de Podman Compose. Il n’y a plus de sauvegarde ou de
+retour arrière automatique, ni de worker à lancer. N’utilisez pas `down -v`.
 
 Ne partagez jamais `.env`, `.updates/`, les sauvegardes, journaux, médias ou données des utilisateurs. Toute distribution publique doit conserver uniquement des exemples descriptifs sans valeurs personnelles.
 

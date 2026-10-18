@@ -4,8 +4,7 @@ import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { writeUpdateJson } from '../src/server/update-control.js';
-import { dependencyLockHash, safeSecurityFailure } from '../src/server/security-control.js';
+import { writeSecurityJson, dependencyLockHash, safeSecurityFailure } from '../src/server/security-control.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const execute = promisify(execFile);
@@ -108,12 +107,12 @@ export async function auditDependencies({ root = ROOT, fix = false, runNpm = npm
       }
     }
     currentStage = 'save';
-    await writeUpdateJson(path.join(state, 'report.json'), report);
+    await writeSecurityJson(path.join(state, 'report.json'), report);
     await fs.rm(path.join(state, 'failure.json'), { force: true });
     return report;
   } catch (error) {
     const diagnostic = safeSecurityFailure(error, currentStage);
-    await writeUpdateJson(path.join(state, 'failure.json'), { ...diagnostic, failedAt: new Date().toISOString() }).catch(() => {});
+    await writeSecurityJson(path.join(state, 'failure.json'), { ...diagnostic, failedAt: new Date().toISOString() }).catch(() => {});
     throw Object.assign(error, { auditCode: diagnostic.code, stage: diagnostic.stage });
   } finally {
     try { if (stage) await fs.rm(stage, { recursive: true, force: true }); }
@@ -136,7 +135,7 @@ export async function createSecurityWorker({ root = ROOT, audit = options => aud
   let writing = Promise.resolve();
   function heartbeat() {
     const snapshot = { ...state, heartbeat: now() };
-    writing = writing.catch(() => {}).then(() => writeUpdateJson(statusFile, snapshot));
+    writing = writing.catch(() => {}).then(() => writeSecurityJson(statusFile, snapshot));
     return writing;
   }
   async function tick() {
@@ -177,7 +176,7 @@ export async function createSecurityWorker({ root = ROOT, audit = options => aud
   async function close() {
     await writing;
     await fs.rmdir(serviceLock);
-    await writeUpdateJson(statusFile, { ...state, heartbeat: 0 });
+    await writeSecurityJson(statusFile, { ...state, heartbeat: 0 });
   }
   try { await heartbeat(); } catch (error) { await fs.rmdir(serviceLock); throw error; }
   return { tick, heartbeat, close };
