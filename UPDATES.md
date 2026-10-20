@@ -56,24 +56,9 @@ podman-compose --env-file .env -p youplayer-server up -d --no-build
 podman-compose --env-file .env -p youplayer-server ps
 ```
 
-Certaines anciennes versions de Podman Compose réinterprètent les `$` des mots
-de passe. Dans ce cas, utiliser ce bloc à la place des deux premières commandes :
-il charge les valeurs littéralement et s’arrête si la construction échoue.
-
-```bash
-node --input-type=module <<'NODE'
-import { spawnSync, execFileSync } from 'node:child_process';
-import { composeEnvironment } from './scripts/install.mjs';
-const env = composeEnvironment(process.cwd(), 'youplayer-server');
-const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-for (const args of [['build', '--build-arg', `YOUPLAYER_BUILD_COMMIT=${commit}`], ['up', '-d', '--no-build']]) {
-  const result = spawnSync('podman-compose', [
-    '--env-file', '/dev/null', '-p', 'youplayer-server', ...args
-  ], { env, stdio: 'inherit' });
-  if (result.status !== 0) process.exit(result.status ?? 1);
-}
-NODE
-```
+Utiliser une version récente de Podman Compose qui respecte les valeurs entre
+apostrophes dans `.env`, notamment les `$` des mots de passe. Le script
+`install.sh` transmet ces valeurs littéralement lors de la première installation.
 
 Pour une installation **Docker Compose existante**, conserver son fichier
 Compose adapté à Docker (celui du dépôt contient des options Podman), son

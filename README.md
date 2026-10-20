@@ -105,10 +105,30 @@ Lisez [AGENTS.md](AGENTS.md) avant de modifier le projet. Utilisez des exemples 
 
 ## 📦 Installation depuis Git
 
-Clonez le dépôt puis lancez `./install.sh` avec le compte Podman utilisateur.
-L’installateur prépare la configuration et construit les images depuis les sources.
-Il conserve un `.env` existant et refuse de remplacer une stack déjà installée.
-Voir [INSTALL.md](INSTALL.md) pour les prérequis et le premier démarrage.
+Prérequis : **Linux, Git, Bash, OpenSSL, curl, Podman et podman-compose**.
+Utilisez votre compte Podman utilisateur, **sans sudo**. Node.js est fourni dans
+l’image backend ; il n’est pas nécessaire sur l’hôte pour lancer le script.
+
+```bash
+git clone https://github.com/RaliteJ/YouPlayer_Server.git
+cd YouPlayer_Server
+./install.sh
+```
+
+Ce seul script Bash demande le pseudo et le mot de passe du premier admin,
+génère les secrets dans un `.env` privé, construit les images et démarre les
+services. Il attend que la route HTTPS de disponibilité réponde.
+
+Ouvrez **https://localhost:8443** sur le serveur, ou
+**https://ADRESSE_DU_SERVEUR:8443** depuis un autre appareil. Le certificat initial
+est autosigné. Connectez-vous en admin, puis créez un compte **user** pour écouter
+la musique.
+
+Le script conserve un `.env` existant. Il refuse de remplacer des conteneurs
+YouPlayer déjà présents, **même arrêtés**. Supprimer `.env` ne supprime ni ces
+conteneurs ni les comptes stockés dans les volumes. Pour reprendre une
+installation, restaurez sa configuration et suivez [UPDATES.md](UPDATES.md).
+Voir [INSTALL.md](INSTALL.md) pour les détails du premier démarrage.
 
 Les mises à jour sont manuelles : `git pull --ff-only`, puis reconstruction et
 redémarrage avec Compose. Aucun bouton Admin ni service hôte ne met à jour
@@ -127,9 +147,9 @@ Toutes les commandes ci-dessous s'exécutent à la racine de ce dépôt, dans le
 
 ### 1. Prérequis et architecture
 
-- **Podman et podman-compose** pour construire et démarrer la stack documentée.
-- **Node.js ≥ 22.12** pour les outils locaux et les tests.
-- **Chromium local** pour les tests de l'interface dans un navigateur.
+- **Linux, Git, Bash, OpenSSL, curl, Podman et podman-compose** pour `./install.sh`.
+- **Node.js ≥ 22.12** sur l’hôte uniquement pour les outils Node locaux et les tests.
+- **Chromium local** uniquement pour les tests de l’interface dans un navigateur.
 - Un accès réseau pour télécharger les images, paquets et dépendances pendant la construction, puis pour les fonctions musicales externes utilisées.
 
 | Service | Rôle |
@@ -142,7 +162,10 @@ L'image backend contient **FFmpeg et yt-dlp**, mais **n'embarque pas Chromium**.
 
 <a id="configuration"></a>
 
-### 2. Configurer une première installation
+### 2. Configurer une première installation manuellement
+
+Avec `./install.sh`, la configuration et le démarrage sont déjà pris en charge.
+Les étapes 2 et 3 ci-dessous décrivent la procédure manuelle.
 
 Créez votre configuration locale sans écraser un fichier existant :
 
@@ -166,18 +189,23 @@ Configurez au minimum :
 Pour générer le secret de session :
 
 ```bash
-node -e "console.log(require('node:crypto').randomBytes(48).toString('hex'))"
+openssl rand -hex 48
 ```
 
 Copiez le résultat dans `YOUPLAYER_SESSION_SECRET`, uniquement dans `.env`. Pour l'OAuth Spotify, générez une deuxième valeur indépendante pour `YOUPLAYER_SPOTIFY_TOKEN_SECRET`.
 
 Laissez les clés YouTube et les variables Spotify facultatives vides si vous ne les utilisez pas. Les champs `YOUPLAYER_SPOTIFY_WEB_USERNAME` et `YOUPLAYER_SPOTIFY_WEB_PASSWORD` concernent uniquement un diagnostic navigateur facultatif ; ils ne sont pas nécessaires au catalogue public et ce diagnostic est désactivé dans l'image fournie.
 
-Préparez les dossiers locaux utilisés par les médias et l’audit de sécurité, puis contrôlez la configuration initiale :
+Préparez les dossiers locaux utilisés par les médias et l’audit de sécurité :
 
 ```bash
 mkdir -p src/playlists src/local_song .updates/requests .updates/status
 chmod 700 .updates .updates/requests .updates/status
+```
+
+Si Node.js ≥ 22.12 est installé sur l’hôte, vous pouvez aussi vérifier la configuration :
+
+```bash
 node scripts/production.mjs preflight
 ```
 
@@ -210,7 +238,12 @@ podman-compose -p youplayer-server ps
 
 Ouvrez **https://localhost:8443**. Le frontend génère un certificat autosigné pour `localhost` et `127.0.0.1` ; le navigateur peut demander de confirmer son utilisation pour cet essai local. Configurez un domaine et un certificat public avant un usage distant.
 
-Connectez-vous avec l'administrateur défini dans `.env`, puis créez un compte **user** depuis Admin pour écouter de la musique. Le bootstrap ne remplace pas un compte existant. Retirez les identifiants de bootstrap de `.env` après la création du premier administrateur.
+Au premier démarrage sans admin existant, connectez-vous avec les identifiants
+admin définis dans `.env`, puis créez un compte **user** depuis Admin pour écouter
+la musique. **Modifier `YOUPLAYER_ADMIN_PASSWORD` dans `.env` ne change pas le mot
+de passe d’un admin déjà enregistré**, même après recréation du backend.
+Conservez le mot de passe du compte existant ; une réinitialisation doit être
+faite explicitement, sans supprimer le volume des comptes.
 
 Les comptes, playlists enregistrées dans le store et connexions chiffrées sont conservés dans le volume privé `youplayer_data`. Les sessions utilisent `redis_data`. Les dossiers `src/playlists/` et `src/local_song/` sont également montés depuis l'hôte : préservez-les avec vos données.
 
@@ -223,6 +256,20 @@ podman-compose -p youplayer-server up -d --force-recreate backend
 ```
 
 Après modification du code, reconstruisez les images concernées avec `up -d --build`. Sauvegardez les données avant une mise à jour. **N'utilisez pas `down -v`** : cette commande supprime les volumes.
+
+**En cas de problème d’installation ou de connexion**
+
+- « Des conteneurs YouPlayer existent déjà » : vérifiez leur état avec
+  `podman ps -a`. Des conteneurs arrêtés bloquent aussi une nouvelle installation.
+- Mot de passe refusé : si vous réutilisez le volume des comptes, utilisez le mot
+  de passe de l’admin existant. Recréer `.env` ne réinitialise pas ce compte.
+- Plusieurs clones du dépôt : exécutez les commandes dans le dossier de
+  l’installation active, avec son `.env` et le même compte Podman. Un autre clone
+  ne constitue pas une installation indépendante avec le même nom de projet.
+- Échec du script pendant la construction ou le démarrage : consultez localement
+  `.updates/host/install.log`, puis `podman-compose -p youplayer-server ps` et
+  `podman-compose -p youplayer-server logs --tail=50`. Ne partagez pas les journaux
+  bruts ni le contenu de `.env`.
 
 <a id="api"></a>
 
