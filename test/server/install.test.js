@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { installServer, prepareInstallationEnvironment, composeEnvironment, runInstallCommand, serviceUnit } from '../../scripts/install-release.mjs';
 import { envelope, publicKey } from '../fixtures/release.mjs';
 
+const execute = promisify(execFile);
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'youplayer-installer-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
