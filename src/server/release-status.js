@@ -1,3 +1,5 @@
+import { createReleaseControl } from './release-control.js';
+
 const repository = 'RaliteJ/YouPlayer_Server';
 const api = `https://api.github.com/repos/${repository}`;
 
@@ -54,18 +56,26 @@ export function createReleaseStatus({ commit = process.env.YOUPLAYER_BUILD_COMMI
   return { snapshot, check };
 }
 
-export function registerReleaseRoutes(app, { requireAdmin, status = createReleaseStatus() }) {
+export function registerReleaseRoutes(app, { requireAdmin, status = createReleaseStatus(), control = createReleaseControl(), recordAction = async () => {} }) {
   function authenticatedAdmin(req, res, next) {
     if (!req.session?.userId) return res.status(401).json({ error: 'Authentification requise' });
     if (req.session.role !== 'admin') return res.status(403).json({ error: 'Acces admin requis' });
-    next();
+    return next();
   }
-  app.get('/admin/releases', requireAdmin, authenticatedAdmin, (_req, res) => {
+  app.get('/admin/releases', requireAdmin, authenticatedAdmin, async (_req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.json(status.snapshot());
+    res.json({ ...status.snapshot(), deployment: await control.status() });
   });
-  app.post('/admin/releases/check', requireAdmin, authenticatedAdmin, async (_req, res) => {
+  for (const action of ['check', 'install']) app.post(`/admin/releases/${action}`, requireAdmin, authenticatedAdmin, async (req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.json(await status.check());
+    try {
+      const deployment = await control.status();
+      if (!deployment && action === 'check') return res.json(await status.check());
+      const job = await control.request(action, req.body?.candidateId);
+      await recordAction(req, `admin.release.${action}`, 'release', job.id);
+      res.status(202).json({ requestId: job.id });
+    } catch (error) {
+      res.status(error.statusCode || 503).json({ error: 'Mise à jour indisponible ou vérification nécessaire.' });
+    }
   });
 }

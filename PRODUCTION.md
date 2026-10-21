@@ -1,8 +1,9 @@
 # Exploitation du serveur
 
 Les commandes s'executent depuis ce depot, avec le meme compte Podman utilisateur.
-Le nom Compose documente est `youplayer-server`. Aucun service de supervision
-ou de sauvegarde automatique n'est fourni ou active.
+Le nom Compose documente est `youplayer-server`. Ce guide concerne les outils
+de développement Podman. Pour la distribution préconstruite et son service de
+mise à jour, voir [INSTALL.md](INSTALL.md). Aucune sauvegarde automatique n'est activée.
 
 ## Validation et lancement
 
@@ -47,7 +48,8 @@ Le manifeste conserve la provenance du nouveau depot Git. Inspecter toute
 distribution avant partage : des fichiers ajoutes ulterieurement peuvent etre
 prives meme s'ils ne portent pas un nom reserve.
 
-Les mises a jour sont manuelles depuis Git et Compose (voir [UPDATES.md](UPDATES.md)).
+Les installations de développement se mettent à jour depuis Git et Compose ; les
+distributions préconstruites utilisent l'interface admin (voir [UPDATES.md](UPDATES.md)).
 L'outil avance `scripts/prepare-release.mjs VERSION` exige les images
 `localhost/youplayer-server-{backend,frontend}:production-check`, les conteneurs courants
 du projet `youplayer-server` et des images compatibles de retour arriere taguees

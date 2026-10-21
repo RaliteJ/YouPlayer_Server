@@ -216,66 +216,60 @@ test('reopening the app restores real audio at the saved position and preserves 
 	}
 });
 
-test('security tab checks explicitly, shows corrections and Podman rebuild on mobile and desktop', { timeout: 25000 }, async t => {
+test('admin installs a checked release explicitly and sees rollback on mobile and desktop', { timeout: 25000 }, async t => {
   if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
-  const page = await browser.newPage();
-  let state = { online: true, phase: 'idle', result: 'not-checked', rebuildRequired: false };
+  const context = await browser.createBrowserContext();
+  const page = await context.newPage();
+  const pseudo = `release-admin-${process.pid}`;
+  await app.locals.youplayerStore.createUser({ pseudo, password: 'synthetic-admin-password', role: 'admin' });
+  let state = { online: true, phase: 'idle', installedVersion: 'v1.0.0', canInstall: false };
   const actions = [];
-  const jobId = '12345678-1234-1234-1234-123456789abc';
   try {
-    await page.setViewport({ width: 1280, height: 900, isMobile: true, hasTouch: true });
     await page.setRequestInterception(true);
     page.on('request', request => {
       const route = new URL(request.url()).pathname;
-      if (route === '/admin/releases') {
-        request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({
-          localCommit: null, state: 'local_unknown', latestRelease: null, checkedAt: null
-        }) });
-      } else if (route.startsWith('/admin/security')) {
+      if (route.startsWith('/admin/releases')) {
         if (request.method() === 'POST') {
           const action = route.split('/').at(-1);
           actions.push(action);
-          state = { ...state, requestId: jobId, phase: action === 'fix' ? 'fixing' : 'checking' };
-          request.respond({ status: 202, contentType: 'application/json', body: JSON.stringify({ requestId: jobId }) });
-        } else request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify(state) });
-      } else if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) request.continue();
-      else request.abort();
+          if (action === 'install') assert.deepEqual(JSON.parse(request.postData()), { candidateId: 'a'.repeat(64) });
+          state = { ...state, phase: action === 'check' ? 'available' : 'installing', canInstall: action === 'check',
+            latestVersion: 'v2.0.0', candidateId: 'a'.repeat(64), requestId: action };
+          return void request.respond({ status: 202, contentType: 'application/json', body: JSON.stringify({ requestId: action }) });
+        }
+        return void request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ deployment: state }) });
+      }
+      if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) void request.continue();
+      else void request.abort();
     });
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
-    await page.evaluate(async () => {
-      const { App } = await import(document.querySelector('script[type="module"]').src);
-      window.securityFixtureApp = App;
-      App.currentUser = { id: 'synthetic-admin', role: 'admin', pseudo: 'Synthetic' };
-      App.apiFetch = async () => [];
-      document.body.classList.remove('auth-required');
-      document.querySelector('.auth-screen').hidden = true;
-      App.loadView('admin');
-      await App.fetchSecurityStatus();
-    });
-    await page.click('#admin-tab-security');
-    await page.waitForFunction(() => !document.getElementById('admin-security-check').disabled);
-    assert.deepEqual(actions, [], 'Opening the panel does not audit npm');
-    await page.click('#admin-security-check');
-    await page.waitForFunction(() => document.getElementById('admin-security-status').textContent.includes('en cours'));
-    assert.equal(await page.$eval('#admin-security-fix', el => el.disabled), true);
-    state = { ...state, phase: 'finished', result: 'vulnerable', checkedAt: '2026-10-11T12:00:00Z', counts: { critical: 1, high: 2, moderate: 0, low: 0, info: 0 } };
-    await page.evaluate(() => window.securityFixtureApp.fetchSecurityStatus());
-    assert.match(await page.$eval('#admin-security-counts', el => el.textContent), /Critiques : 1/);
-    await page.click('#admin-security-fix');
-    await page.waitForFunction(() => document.getElementById('admin-security-status').textContent.includes('validation'));
-    state = { ...state, phase: 'finished', result: 'updated-rebuild-required', rebuildRequired: true, counts: { critical: 0, high: 1, moderate: 0, low: 0, info: 0 } };
-    await page.evaluate(() => window.securityFixtureApp.fetchSecurityStatus());
-    assert.equal(await page.$eval('#admin-security-rebuild', el => el.hidden), false);
-    assert.match(await page.$eval('#admin-security-rebuild code', el => el.textContent), /up -d --build/);
+    await page.evaluate(async pseudo => {
+      await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pseudo, password: 'synthetic-admin-password' }) });
+    }, pseudo);
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.getElementById('admin-release-local').textContent.includes('v1.0.0'));
+    assert.deepEqual(actions, []);
+    assert.equal(await page.$eval('#admin-release-install', el => el.disabled), true);
+    await page.click('#admin-release-check');
+    await page.waitForFunction(() => !document.getElementById('admin-release-install').disabled);
+    page.once('dialog', dialog => void dialog.dismiss());
+    await page.click('#admin-release-install');
+    assert.deepEqual(actions, ['check']);
+    page.once('dialog', dialog => void dialog.accept());
+    await page.click('#admin-release-install');
+    await page.waitForFunction(() => document.getElementById('admin-release-status').textContent.includes('Installation en cours'));
+    assert.deepEqual(actions, ['check', 'install']);
+    state = { ...state, phase: 'rolled-back', installedVersion: 'v1.0.0' };
+    await page.waitForFunction(() => document.getElementById('admin-release-status').textContent.includes('version précédente a été rétablie'));
     for (const width of [320, 390, 768, 1280]) {
-      await page.setViewport({ width, height: 900, isMobile: true, hasTouch: true });
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `security panel fits at ${width}`);
+      await page.setViewport({ width, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `release panel fits ${width}`);
     }
-    state = { ...state, rebuildRequired: false, installedMatchesAudit: true };
-    await page.evaluate(() => window.securityFixtureApp.fetchSecurityStatus());
-    assert.equal(await page.$eval('#admin-security-rebuild', el => el.hidden), true);
-    assert.deepEqual(actions, ['check', 'fix']);
-  } finally { await page.close(); }
+    await page.click('#admin-tab-security');
+    assert.equal(await page.$('#admin-security-fix'), null);
+    assert.match(await page.$eval('#admin-pane-security', el => el.textContent), /chaque version de YouPlayer/);
+  } finally { await context.close(); }
 });
 
 async function closeServer() {

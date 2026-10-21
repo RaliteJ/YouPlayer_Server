@@ -14,7 +14,6 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 if (panel) panel.hidden = !selected;
             }
             if (focus) tab.focus();
-            if (tab.id === 'admin-tab-security') this.fetchSecurityStatus();
         },
 
         bindAdminTabs() {
@@ -126,9 +125,9 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         showAuth(message = '') {
-            clearTimeout(this.securityPollTimer);
-            this.securityRequestId = null;
-            this.securityPollUntil = null;
+            clearTimeout(this.releasePollTimer);
+            this.releaseRequestId = null;
+            this.releasePollUntil = null;
             this.playlistLoadRevision++;
             this.playlistTracks = [];
             this.clearTrackPageScrolling(this.playlistContainer);
@@ -260,9 +259,9 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
             this.pauseAudioWithDiagnostics(this.lecteur, 'logout');
             await checkpoint;
             this.clearPlaybackPosition?.();
-            clearTimeout(this.securityPollTimer);
-            this.securityRequestId = null;
-            this.securityPollUntil = null;
+            clearTimeout(this.releasePollTimer);
+            this.releaseRequestId = null;
+            this.releasePollUntil = null;
             this.playlistLoadRevision++;
             this.playlistTracks = [];
             this.playlistContainer?.replaceChildren();
@@ -403,7 +402,6 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
 
             async fetchAdminData() {
                 if (this.currentUser?.role !== 'admin') return;
-            if (this.adminSecurityStatus) await this.fetchSecurityStatus();
             if (this.adminReleaseStatus) await this.fetchReleaseStatus();
 
             const [users, events, logs, integrations] = await Promise.all([
@@ -430,7 +428,9 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
             if (this.currentUser?.role !== 'admin' || !this.adminReleaseStatus || this.releaseChecking) return;
             const userId = this.currentUser.id;
             const isCurrentAdmin = () => this.currentUser?.id === userId && this.currentUser?.role === 'admin';
+            clearTimeout(this.releasePollTimer);
             this.releaseChecking = true;
+            if (this.adminReleaseInstall) this.adminReleaseInstall.disabled = true;
             this.adminReleaseCheck.disabled = true;
             this.adminReleaseStatus.textContent = check ? 'Vérification en cours…' : 'Chargement…';
             try {
@@ -442,9 +442,22 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 if (!response.ok) throw new Error('Release status unavailable');
                 const data = await response.json();
                 if (!isCurrentAdmin()) return;
+                if (response.status === 202) {
+                    this.releaseRequestId = data.requestId;
+                    this.releasePollUntil = Date.now() + 30 * 60_000;
+                    this.adminReleaseStatus.textContent = 'Demande en attente…';
+                    this.releasePollTimer = setTimeout(() => this.fetchReleaseStatus(), 1500);
+                    return;
+                }
+                if (data.deployment) {
+                    this.renderReleaseDeployment(data.deployment);
+                    return;
+                }
+                this.releaseDeployment = null;
+                this.renderReleaseNotes(data.latestRelease?.tag);
                 const labels = {
                     not_checked: 'Les nouvelles releases n’ont pas encore été vérifiées.',
-                    release_ahead: 'Une nouvelle release est disponible. La mise à jour se fait manuellement sur le serveur.',
+                    release_ahead: 'Une nouvelle release est disponible. Cette installation depuis les sources se met à jour manuellement.',
                     up_to_date: 'Le serveur est à jour avec la dernière release.',
                     local_ahead: 'Le serveur est en avance sur la dernière release.',
                     diverged: 'La version locale et la release ont divergé. Vérifiez les changements avant toute mise à jour.',
@@ -463,11 +476,80 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 document.getElementById('admin-release-date').textContent = date && Number.isFinite(date.getTime())
                     ? `Dernière vérification : ${date.toLocaleString('fr-FR')}` : 'Aucune vérification effectuée.';
             } catch {
-                if (isCurrentAdmin()) this.adminReleaseStatus.textContent = 'Vérification indisponible. Réessayez plus tard.';
+                if (isCurrentAdmin()) {
+                    this.adminReleaseStatus.textContent = this.releasePollUntil ? 'Reconnexion au serveur en cours…' : 'Vérification indisponible. Réessayez plus tard.';
+                    if (this.releasePollUntil && Date.now() < this.releasePollUntil) this.releasePollTimer = setTimeout(() => this.fetchReleaseStatus(), 2000);
+                }
             } finally {
                 this.releaseChecking = false;
-                this.adminReleaseCheck.disabled = false;
+                this.adminReleaseCheck.disabled = Boolean(this.releaseRequestId || this.releaseDeployment &&
+                    (!this.releaseDeployment.online || this.releaseDeployment.busy || this.releaseDeployment.phase === 'recovery-required'));
             }
+        },
+
+        renderReleaseDeployment(data) {
+            const busy = ['checking', 'downloading', 'installing', 'verifying', 'rolling-back'].includes(data.phase);
+            const pending = Boolean(this.releaseRequestId && this.releaseRequestId !== data.requestId);
+            this.releaseDeployment = { ...data, busy };
+            this.renderReleaseNotes(data.latestVersion);
+            const labels = {
+                idle: 'Vérifiez les versions disponibles.', checking: 'Recherche d’une version validée…',
+                available: 'Une nouvelle version de YouPlayer est disponible.', 'up-to-date': 'YouPlayer est à jour.',
+                downloading: 'Téléchargement de la version…', installing: 'Installation en cours. La lecture est interrompue.',
+                verifying: 'Vérification du démarrage…', installed: 'La nouvelle version est installée. Rechargez la page.',
+                'rolling-back': 'Rétablissement de la version précédente…',
+                'rolled-back': 'La mise à jour a échoué. La version précédente a été rétablie.',
+                failed: 'La mise à jour n’a pas abouti. Vérifiez à nouveau ou consultez le diagnostic sur le serveur.',
+                'recovery-required': 'Le rétablissement a échoué. Une intervention sur le serveur est nécessaire.'
+            };
+            document.getElementById('admin-release-local').textContent = `Version installée : ${data.installedVersion || 'inconnue'}`;
+            document.getElementById('admin-release-latest').textContent = `Dernière release : ${data.latestVersion || 'non vérifiée'}`;
+            this.adminReleaseStatus.textContent = !data.online ? 'Le service de mise à jour est arrêté. Le dernier état reste affiché.'
+                : pending ? 'Demande en attente…' : labels[data.phase] || labels.failed;
+            const date = new Date(data.checkedAt);
+            document.getElementById('admin-release-date').textContent = data.checkedAt && Number.isFinite(date.getTime())
+                ? `Dernière vérification : ${date.toLocaleString('fr-FR')}` : 'Aucune vérification effectuée.';
+            if (this.adminReleaseInstall) {
+                this.adminReleaseInstall.disabled = !data.canInstall || pending || busy;
+                this.adminReleaseInstall.textContent = data.canInstall ? `Installer ${data.latestVersion}` : 'Installer la version';
+            }
+            this.adminReleaseCheck.disabled = !data.online || busy || pending || data.phase === 'recovery-required';
+            if (!pending && !busy) this.releaseRequestId = null;
+            if (pending || busy) {
+                this.releasePollUntil ||= Date.now() + 30 * 60_000;
+                if (Date.now() < this.releasePollUntil) this.releasePollTimer = setTimeout(() => this.fetchReleaseStatus(), 2000);
+                else { this.releaseRequestId = null; this.adminReleaseStatus.textContent = 'Opération toujours en cours. Rouvrez ce panneau pour actualiser.'; }
+            } else this.releasePollUntil = null;
+        },
+
+        renderReleaseNotes(version) {
+            const link = document.getElementById('admin-release-notes');
+            if (!link) return;
+            link.hidden = typeof version !== 'string' || !version;
+            if (!link.hidden) link.href = `https://github.com/RaliteJ/YouPlayer_Server/releases/tag/${encodeURIComponent(version)}`;
+        },
+
+        async installRelease() {
+            if (this.currentUser?.role !== 'admin' || !this.releaseDeployment?.canInstall || this.releaseStarting) return;
+            const data = this.releaseDeployment;
+            if (!window.confirm(`Installer YouPlayer ${data.latestVersion} ? La lecture sera interrompue pendant le redémarrage.`)) return;
+            const userId = this.currentUser.id;
+            this.releaseStarting = true;
+            this.adminReleaseInstall.disabled = this.adminReleaseCheck.disabled = true;
+            try {
+                const response = await fetchImpl(`${API_URL}/admin/releases/install`, {
+                    method: 'POST', credentials: 'include', signal: AbortSignal.timeout(5000),
+                    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ candidateId: data.candidateId })
+                });
+                if (!response.ok) throw new Error('Installation rejected');
+                const result = await response.json();
+                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
+                this.releaseRequestId = result.requestId;
+                this.releasePollUntil = Date.now() + 30 * 60_000;
+            } catch {
+                if (this.currentUser?.id === userId) this.showNotice('Installation non confirmée. Vérifiez l’état du serveur avant de réessayer.', true);
+            } finally { this.releaseStarting = false; }
+            if (this.currentUser?.id === userId && this.currentUser?.role === 'admin') await this.fetchReleaseStatus();
         },
 
         renderIntegrationStatus(data) {
@@ -521,99 +603,5 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
             }
         },
 
-        renderSecurityStatus(status) {
-            const pending = Boolean(this.securityRequestId && this.securityRequestId !== status.requestId);
-            const busy = ['checking', 'fixing'].includes(status.phase);
-            const labels = {
-                'not-checked': 'Aucune vérification effectuée.',
-                clean: 'Aucune vulnérabilité connue détectée dans les dépendances vérifiées.',
-                vulnerable: 'Des vulnérabilités ont été détectées.',
-                'manual-review': 'Certaines vulnérabilités demandent une intervention manuelle.',
-                'updated-rebuild-required': status.rebuildRequired
-                    ? 'Les corrections compatibles ont passé les tests.' : 'Les corrections ont été appliquées au serveur.'
-            };
-            const failureLabels = {
-                'npm-missing': 'npm est introuvable pour le service Sécurité. Vérifiez son installation sur l’hôte.',
-                'npm-timeout': 'La commande npm a dépassé le délai prévu ou a été interrompue. Vérifiez le service avant de réessayer.',
-                'npm-failed': 'npm n’a pas pu préparer les corrections. Consultez le diagnostic local du service.',
-                'audit-unavailable': 'Le registre npm n’a pas fourni d’audit valide. Vérifiez son accès réseau et réessayez.',
-                'audit-response': 'La réponse de npm est illisible. Vérifiez npm et son accès au registre.',
-                permissions: 'Le service ne peut pas lire ou écrire les fichiers nécessaires. Vérifiez les permissions du compte utilisateur.',
-                'files-missing': 'Des fichiers nécessaires sont absents. Vérifiez que le dossier d’installation contient les sources et les tests.',
-                'lock-busy': 'Un autre audit est actif ou un verrou subsiste après un arrêt brutal. Vérifiez le service avant de réessayer.',
-                'install-failed': 'L’installation des dépendances candidates a échoué. Les dépendances d’origine ont été conservées.',
-                'tests-failed': 'Les tests de validation des corrections ont échoué. Le verrou d’origine est conservé ; consultez le journal local de validation.',
-                'manifest-change': 'npm propose de modifier les contraintes du projet. Une intervention manuelle est nécessaire.',
-                'dependencies-changed': 'Les dépendances ont été modifiées pendant le contrôle. La correction a été annulée pour conserver ces changements.',
-                'invalid-request': 'La demande de contrôle est invalide. Relancez la vérification.',
-                interrupted: 'Le service a été interrompu pendant le contrôle. Relancez la vérification.'
-            };
-            const failureMessage = Object.hasOwn(failureLabels, status.failure?.code) ? failureLabels[status.failure.code]
-                : 'Le contrôle a échoué. Consultez le diagnostic local du service Sécurité.';
-            this.adminSecurityStatus.textContent = !status.online ? 'Le service Sécurité est arrêté. Le dernier résultat reste affiché ci-dessous.'
-                : pending ? 'Demande en attente…'
-                : status.phase === 'checking' ? 'Vérification des dépendances en cours…'
-                : status.phase === 'fixing' ? 'Préparation des corrections et validation par les tests…'
-                : status.phase === 'failed' ? failureMessage
-                : labels[status.result] || labels['not-checked'];
-            const date = document.getElementById('admin-security-date');
-            if (date) date.textContent = status.checkedAt
-                ? `Dernier résultat : ${new Date(status.checkedAt).toLocaleString('fr-FR')}${status.installedMatchesAudit ? '' : ' · dépendances du projet sur l’hôte'}` : '';
-            const counts = document.getElementById('admin-security-counts');
-            if (counts) counts.textContent = status.counts ? [
-                `Critiques : ${status.counts.critical}`, `Élevées : ${status.counts.high}`,
-                `Modérées : ${status.counts.moderate}`, `Faibles : ${status.counts.low}`, `Information : ${status.counts.info}`
-            ].join(' · ') : '';
-            const rebuild = document.getElementById('admin-security-rebuild');
-            if (rebuild) rebuild.hidden = !status.rebuildRequired;
-            this.adminSecurityCheck.disabled = !status.online || busy || pending;
-            this.adminSecurityFix.disabled = this.adminSecurityCheck.disabled || !['vulnerable', 'manual-review'].includes(status.result);
-            if (!pending && !busy && this.securityRequestId === status.requestId) this.securityRequestId = null;
-            return status.online && (pending || busy);
-        },
-
-        async fetchSecurityStatus() {
-            clearTimeout(this.securityPollTimer);
-            if (this.currentUser?.role !== 'admin' || !this.adminSecurityStatus) return;
-            const userId = this.currentUser.id;
-            let polling = false;
-            try {
-                const response = await fetchImpl(`${API_URL}/admin/security`, { credentials: 'include', signal: AbortSignal.timeout(5000) });
-                if (!response.ok) throw new Error('Security status unavailable');
-                const status = await response.json();
-                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
-                polling = this.renderSecurityStatus(status);
-            } catch {
-                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
-                this.adminSecurityStatus.textContent = 'État de sécurité indisponible. Réessayez dans un instant.';
-                this.adminSecurityCheck.disabled = this.adminSecurityFix.disabled = true;
-                polling = Boolean(this.securityRequestId);
-            }
-            if (polling) {
-                this.securityPollUntil ||= Date.now() + 30 * 60_000;
-                if (Date.now() < this.securityPollUntil) this.securityPollTimer = setTimeout(() => this.fetchSecurityStatus(), 2000);
-                else this.adminSecurityStatus.textContent = 'Le contrôle prend plus de temps que prévu. Rouvrez cet onglet pour actualiser son état.';
-            } else this.securityPollUntil = null;
-        },
-
-        async startSecurityAudit(action) {
-            if (this.currentUser?.role !== 'admin' || !['check', 'fix'].includes(action) || this.securityStarting) return;
-            const userId = this.currentUser.id;
-            this.securityStarting = true;
-            this.adminSecurityCheck.disabled = this.adminSecurityFix.disabled = true;
-            try {
-                const response = await fetchImpl(`${API_URL}/admin/security/${action}`, {
-                    method: 'POST', credentials: 'include', signal: AbortSignal.timeout(5000)
-                });
-                if (!response.ok) throw new Error('Security request rejected');
-                const result = await response.json();
-                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
-                this.securityRequestId = result.requestId;
-                this.securityPollUntil = Date.now() + 30 * 60_000;
-            } catch {
-                if (this.currentUser?.id === userId && this.currentUser?.role === 'admin') this.showNotice('Impossible de lancer le contrôle. Vérifiez que le service Sécurité est actif.', true);
-            } finally { this.securityStarting = false; }
-            if (this.currentUser?.id === userId && this.currentUser?.role === 'admin') await this.fetchSecurityStatus();
-        },
     };
 }

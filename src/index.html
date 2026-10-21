@@ -249,10 +249,13 @@
             <h2 id="admin-release-title">Version du serveur</h2>
             <p id="admin-release-local">Version installée : chargement…</p>
             <p id="admin-release-latest">Dernière release : non vérifiée.</p>
+            <a id="admin-release-notes" target="_blank" rel="noopener noreferrer" hidden>Voir les changements de cette version</a>
             <p id="admin-release-status" role="status" aria-live="polite">Chargement…</p>
             <p id="admin-release-date" class="muted"></p>
             <button id="admin-release-check" type="button" class="btn-small">Vérifier les nouvelles releases</button>
-            <p class="muted">La vérification consulte GitHub uniquement sur demande. Les mises à jour restent manuelles.</p>
+            <button id="admin-release-install" type="button" class="btn-primary" disabled>Installer la version</button>
+            <p class="muted">La mise à jour inclut les dépendances npm validées. L’installation interrompt brièvement la lecture. En cas d’échec du démarrage, le service tente de rétablir la version précédente.</p>
+            <p class="muted">La vérification consulte GitHub uniquement sur demande. Vous choisissez quand installer.</p>
           </section>
           <section class="admin-panel" aria-labelledby="admin-integrations-title">
             <h2 id="admin-integrations-title">Connexions aux services</h2>
@@ -293,20 +296,8 @@
         <div id="admin-pane-security" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-security" tabindex="0" hidden>
           <section class="admin-panel" aria-labelledby="admin-security-title">
             <h2 id="admin-security-title">Sécurité des dépendances</h2>
-            <p id="admin-security-status" role="status" aria-live="polite">Chargement du dernier contrôle…</p>
-            <p id="admin-security-date" class="muted"></p>
-            <p id="admin-security-counts"></p>
-            <div class="admin-update-actions">
-              <button id="admin-security-check" type="button" class="btn-small" disabled>Vérifier la sécurité des dépendances</button>
-              <button id="admin-security-fix" type="button" class="btn-primary" disabled>Appliquer les corrections compatibles</button>
-            </div>
-            <p class="muted">La vérification consulte le registre npm pour rechercher les vulnérabilités connues. Les corrections sont testées avant d’être retenues.</p>
-            <div id="admin-security-rebuild" class="security-rebuild" hidden>
-              <strong>Corrections prêtes : reconstruisez et relancez Podman pour les appliquer.</strong>
-              <p>Exécutez cette commande dans le dossier d’installation, avec votre compte Podman. La lecture sera interrompue pendant le redémarrage.</p>
-              <code>podman-compose -p youplayer-server up -d --build</code>
-              <p>Rechargez ensuite cette page, puis vérifiez la connexion et la lecture.</p>
-            </div>
+            <p>Les dépendances npm sont mises à jour et testées avec chaque version de YouPlayer.</p>
+            <p>Pour installer les correctifs disponibles, ouvrez Intégrations → Version du serveur. Aucune mise à jour n’est installée sans votre action.</p>
           </section>
         </div>
       </section>

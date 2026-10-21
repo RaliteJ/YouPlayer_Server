@@ -1,0 +1,132 @@
+name: Publier une version YouPlayer
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_compatible:
+        description: 'Cette version conserve le format des données et permet un retour à la version précédente'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youplayer-release
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Exiger un tag stable et la compatibilité des données
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          DATA_COMPATIBLE: ${{ inputs.data_compatible }}
+        run: |
+          test "$GITHUB_REPOSITORY" = 'RaliteJ/YouPlayer_Server'
+          test "$REF_TYPE" = tag
+          test "$DATA_COMPATIBLE" = true
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+  validation:
+    needs: gate
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    needs: validation
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Construire les images natives
+        run: |
+          docker build --build-arg "YOUPLAYER_BUILD_COMMIT=$GITHUB_SHA" -t localhost/youplayer-ci-backend:latest -f Dockerfile.backend src
+          docker build -t localhost/youplayer-ci-frontend:latest -f Dockerfile.frontend .
+      - name: Valider les images avant publication
+        run: |
+          node scripts/ci-stack.mjs init "$RUNNER_TEMP/youplayer-ci.env"
+          docker compose --env-file "$RUNNER_TEMP/youplayer-ci.env" -p youplayer-ci -f .github/compose.test.yml up -d --no-build --wait --wait-timeout 180
+          node scripts/ci-stack.mjs check "$RUNNER_TEMP/youplayer-ci.env"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publier les images validées et relever leurs empreintes
+        run: |
+          mkdir -p digests
+          for service in backend frontend; do
+            image="ghcr.io/ralitej/youplayer-server-$service:$RELEASE_TAG-$ARCH"
+            docker tag "localhost/youplayer-ci-$service:latest" "$image"
+            docker push "$image"
+            docker image inspect "$image" --format '{{index .RepoDigests 0}}' > "digests/$service.txt"
+            docker --config "$RUNNER_TEMP/anonymous-registry" manifest inspect "$image" >/dev/null
+          done
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const images = Object.fromEntries(['backend', 'frontend'].map(service => [service, readFileSync(`digests/${service}.txt`, 'utf8').trim()]));
+          writeFileSync(`digests/${process.env.ARCH}.json`, JSON.stringify(images));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}.json
+          retention-days: 2
+      - name: Nettoyer la stack temporaire
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/youplayer-ci.env" ]; then
+            docker compose --env-file "$RUNNER_TEMP/youplayer-ci.env" -p youplayer-ci -f .github/compose.test.yml down --volumes --remove-orphans
+          fi
+
+  release:
+    needs: images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: digests
+          merge-multiple: true
+      - name: Signer et préparer la distribution
+        env:
+          YOUPLAYER_RELEASE_PRIVATE_KEY: ${{ secrets.YOUPLAYER_RELEASE_PRIVATE_KEY }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_SEQUENCE: ${{ github.run_number }}
+          RELEASE_DATA_COMPATIBLE: ${{ inputs.data_compatible }}
+        run: node scripts/package-release.mjs digests dist
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" dist/youplayer-release.json dist/youplayer-install.tar.gz dist/SHA256SUMS --verify-tag --title "YouPlayer $RELEASE_TAG" --generate-notes --latest

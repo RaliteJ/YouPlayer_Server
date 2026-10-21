@@ -1,53 +1,80 @@
-# Installation depuis Git
+# Installer une version de YouPlayer
 
-Le serveur se construit depuis les sources. L’ancien installateur d’archives
-signées et le service de mise à jour ont été retirés.
+La distribution utilise des images préconstruites pour Linux AMD64 et ARM64
+(Raspberry Pi avec un système 64 bits). Les paquets npm sont déjà installés.
+Cette procédure concerne une **première installation**, dans un dossier permanent.
 
-## Première installation Podman
+## Prérequis
 
-Prérequis : Linux, Git, Bash, OpenSSL, curl, Podman et podman-compose.
-Node.js est fourni par les images ; il n’est pas nécessaire sur l’hôte.
-Utiliser le compte Podman utilisateur, sans sudo. Le build nécessite un accès
-réseau et de l’espace pour les images et les dépendances.
+- Linux avec systemd, Bash, `flock` et Node.js >= 22.12. npm n’est pas requis.
+- Soit Podman rootless et `podman-compose`, soit Docker Engine système et le plugin
+  `docker compose`, accessibles au compte utilisateur. Docker rootless n’est pas
+  pris en charge par cet installateur ; utiliser Podman pour une installation rootless.
+- Un accès à GitHub et aux images publiques GHCR pour l’installation et les mises à jour.
+- Assez d’espace pour conserver l’ancienne et la nouvelle paire d’images.
+
+Installer avec un compte utilisateur, sans lancer `install.sh` avec sudo. Pour que
+le service utilisateur reste actif après déconnexion et redémarrage, activer une
+fois sa persistance (cette commande demande les droits administrateur de l’hôte) :
 
 ```bash
-git clone https://github.com/RaliteJ/YouPlayer_Server.git
-cd YouPlayer_Server
-./install.sh
+sudo loginctl enable-linger "$USER"
 ```
 
-Le script vérifie les outils, demande un pseudo et un mot de passe admin,
-génère les secrets dans `.env` avec des permissions privées, construit les
-images et démarre backend, frontend et Redis. Il embarque le commit Git si les
-sources sont propres ; sinon la version est signalée comme inconnue. Il attend que la route HTTPS de disponibilité réponde.
-Les valeurs de `.env`, y compris les `$`, sont transmises littéralement à Compose.
-Un fichier `.env` existant est conservé et validé. Aucun compte existant n’est
-remplacé. Une stack déjà présente est refusée : ce script sert à l’installation,
-pas aux mises à jour.
+Le compte du service doit conserver son accès au moteur de conteneurs. L’accès au
+Docker système donne des droits élevés sur l’hôte ; réserver ce compte à l’exploitation.
 
-Ouvrir **https://ADRESSE_DU_SERVEUR:8443**, se connecter avec le compte admin,
-puis créer un compte **user** pour écouter la musique. Le certificat initial
-est autosigné ; configurer un certificat adapté avant un usage public.
+## Télécharger et démarrer
 
-En cas d’échec, les données sont conservées. Le diagnostic de construction et
-de démarrage reste privé dans `.updates/host/install.log`. Vérifier la stack avant de
-recommencer : si des conteneurs existent, utiliser les commandes manuelles de
-[UPDATES.md](UPDATES.md). Aucun nettoyage destructif n’est effectué.
+Depuis les releases officielles de `RaliteJ/YouPlayer_Server`, télécharger
+`youplayer-install.tar.gz` et `SHA256SUMS` d’une même version. Vérifier puis extraire
+l’archive dans un dossier vide et permanent :
 
-## Installation manuelle et données
+```bash
+sha256sum -c SHA256SUMS
+mkdir youplayer
+tar -xzf youplayer-install.tar.gz -C youplayer
+cd youplayer
+./install.sh podman
+# Ou, avec Docker Engine système : ./install.sh docker
+```
 
-Le [guide technique](README.md#installation-et-build) décrit la configuration
-et les commandes Compose manuelles. Le Compose fourni cible Podman ; pour une
-installation Docker existante, conserver son Compose adapté, son projet et ses
-montages. Ne pas changer de moteur pendant une mise à jour.
+L’archive provient de la release officielle par HTTPS. Le checksum détecte une
+corruption du téléchargement ; il ne remplace pas la confiance dans cette source.
+La clé publique incluse vérifie ensuite le manifeste et les versions suivantes.
 
-Conserver `.env`, `src/playlists/`, `src/local_song/` et les volumes des comptes,
-sessions Redis et certificats. `.updates/` reste utilisé par l’audit de sécurité
-facultatif ; il ne faut pas le supprimer lors de cette migration.
+L’installateur demande le pseudo et le mot de passe admin, génère les secrets
+privés dans `.env`, vérifie la signature, télécharge les images par leur empreinte,
+démarre les services et attend leurs sondes de santé. Il installe le service
+utilisateur `youplayer-updates.service` et l’active au démarrage. Un `.env` existant
+est conservé ; ses permissions doivent être `600`. Une stack, des volumes ou un
+service déjà présents sont refusés pour éviter une nouvelle installation sur des données existantes.
 
-## Mises à jour
+Ouvrir **https://ADRESSE_DU_SERVEUR:8443**, se connecter avec le compte admin puis
+créer un compte **user** pour la musique. Le certificat initial est autosigné ;
+configurer un certificat adapté avant un usage public.
 
-L’utilisateur exécute lui-même `git pull --ff-only`, puis construit et redémarre
-les conteneurs. Voir [UPDATES.md](UPDATES.md). Aucun service ni bouton Admin
-n’installe de nouvelle version. La vérification informative du backend reste
-explicite et indépendante de l’installation.
+La version et les mises à jour sont dans **Admin → Intégrations → Version du serveur**.
+Le service ne consulte pas GitHub au démarrage et n’installe rien spontanément.
+
+## Exploitation
+
+```bash
+systemctl --user status youplayer-updates.service
+systemctl --user restart youplayer-updates.service
+```
+
+Conserver `.env`, `.updates/host/`, `keys/`, `src/playlists/`, `src/local_song/`, les
+scripts de l’installation et les volumes des comptes, sessions et certificats.
+Ne pas déplacer le dossier sans adapter le service systemd. Le backend ne monte
+que les demandes et les statuts du service ; il n’a accès ni au socket Docker/Podman,
+ni à la configuration privée de l’updater.
+
+Si l’installation échoue après le démarrage, elle conserve les données. Ne pas
+supprimer les volumes pour la relancer. Examiner l’état et le diagnostic local
+`.updates/host/last-command.log` ; voir [UPDATES.md](UPDATES.md). Ces journaux sont privés.
+
+Les installations existantes depuis Git/Compose nécessitent une migration explicite
+conservant leurs montages et volumes. L’installateur ne les convertit pas automatiquement.
+Le dépôt Git reste utilisable pour développer et construire manuellement les images ;
+`install.sh` attend les fichiers d’une archive de release, notamment son manifeste signé.

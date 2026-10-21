@@ -2,12 +2,11 @@ import { promises as fs, constants } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { loadDotEnvFile, loadServerConfig } from '../src/server/config.js';
-import { preflight } from './production.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PROJECT = 'youplayer-server';
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const PROJECT = 'youplayer-server';
 const deploymentError = code => Object.assign(new Error('Installation refusée ; diagnostic privé masqué'), { updateCode: code });
 
 // Compose gets literal installation values, never exported production variables.
@@ -51,8 +50,9 @@ export async function prepareInstallationEnvironment(root, pseudo, password) {
     { flag: 'wx', mode: 0o600 });
 }
 
-export async function runInstallCommand(program, args, cwd, env = process.env, timeoutMs) {
-	const timeout = timeoutMs ?? (program === 'podman-compose' ? 5 * 60_000 : ['load', 'pull'].includes(args[0]) ? 10 * 60_000 : 30_000);
+export async function runHostCommand(program, args, cwd, env = process.env, timeoutMs) {
+	const compose = program === 'podman-compose' || program === 'docker' && args[0] === 'compose';
+	const timeout = timeoutMs ?? (compose ? 5 * 60_000 : ['load', 'pull'].includes(args[0]) ? 10 * 60_000 : 30_000);
 	try {
 		return await new Promise((resolve, reject) => {
 			// execFile does not forward detached; spawn gives Compose and its
@@ -105,68 +105,4 @@ export async function prepareHostDirectories(root = ROOT) {
 		await fs.mkdir(path.join(root, '.updates', directory), { recursive: true, mode: 0o700 });
 		await fs.chmod(path.join(root, '.updates', directory), 0o700);
 	}
-}
-
-export async function installServer({ root = ROOT, checkOnly = false, pseudo, password,
-  run = (program, args) => runInstallCommand(program, args, root,
-    program === 'podman-compose' && !args.includes('--version') ? composeEnvironment(root, PROJECT) : process.env,
-    args.includes('build') ? 30 * 60_000 : undefined),
-  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), report = console.log } = {}) {
-  await fs.access(path.join(root, '.git'));
-  await run('podman', ['info', '--format', '{{.Host.OS}}/{{.Host.Arch}}']);
-  const names = (await run('podman', ['ps', '-a', '--format', '{{.Names}}'])).split(/\s+/);
-  if (names.some(name => name.startsWith(`${PROJECT}_`))) {
-    throw new Error('Une stack YouPlayer existe déjà. Pour la mettre à jour manuellement, consulter UPDATES.md.');
-  }
-  await run('podman-compose', ['--version']);
-  if (checkOnly) return;
-  await prepareInstallationEnvironment(root, pseudo, password);
-  if (!(await preflight({ root })).ok) throw new Error('Configuration .env invalide ou permissions trop ouvertes. Consulter INSTALL.md.');
-  await prepareHostDirectories(root);
-  for (const folder of ['src/playlists', 'src/local_song']) await fs.mkdir(path.join(root, folder), { recursive: true, mode: 0o700 });
-  const args = ['--env-file', '/dev/null', '-p', PROJECT, '-f', path.join(root, 'docker-compose.yml')];
-  report('Construction des images depuis les sources locales…');
-  const dirty = (await run('git', ['status', '--porcelain'])).trim();
-  const commit = dirty ? 'unknown' : (await run('git', ['rev-parse', 'HEAD'])).trim();
-  if (commit !== 'unknown' && !/^[a-f0-9]{40}$/.test(commit)) throw new Error('Commit Git invalide.');
-  await run('podman-compose', [...args, 'build', '--build-arg', `YOUPLAYER_BUILD_COMMIT=${commit}`]);
-  report('Démarrage des services…');
-  await run('podman-compose', [...args, 'up', '-d', '--no-build']);
-  let healthy = false;
-  for (let attempt = 0; attempt < 90; attempt++) {
-    const containers = JSON.parse(await run('podman', ['inspect', ...['backend', 'frontend', 'redis'].map(service => `${PROJECT}_${service}_1`)]));
-    healthy = containers.length === 3 && containers.every(container => container.State?.Status === 'running'
-      && (container.State?.Health?.Status || container.State?.Healthcheck?.Status) === 'healthy');
-    if (healthy) break;
-    await wait(2000);
-  }
-  if (!healthy) throw new Error('Délai de démarrage dépassé. Configuration et données conservées ; vérifier les services.');
-  report('YouPlayer est prêt : https://ADRESSE_DU_SERVEUR:8443');
-  report('Connecte-toi avec le compte admin, puis crée un compte user pour écouter la musique.');
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  try {
-    const [major, minor] = process.versions.node.split('.').map(Number);
-    if (process.platform !== 'linux' || process.getuid?.() === 0) throw new Error('Utiliser Linux et le compte Podman utilisateur, sans sudo.');
-    if (major < 22 || major === 22 && minor < 12) throw new Error('Node.js >= 22.12 requis.');
-    const action = process.argv[2];
-    if (!['check', 'install'].includes(action)) throw new Error('Lancer ./install.sh depuis le dépôt Git.');
-    const parts = [];
-    if (action === 'install' && !(await fs.lstat(path.join(ROOT, '.env')).catch(() => null))) {
-      let length = 0;
-      for await (const part of process.stdin) {
-        length += part.length;
-        if (length > 4096) throw new Error('Identifiants trop longs.');
-        parts.push(part);
-      }
-    }
-    const [pseudo, password] = Buffer.concat(parts).toString('utf8').split('\0');
-    await installServer({ checkOnly: action === 'check', pseudo, password });
-  } catch (error) {
-    // Command stderr remains in the installer's private log, never on the terminal.
-    console.error(error.updateCode ? `Installation arrêtée (${error.updateCode}). Consulter .updates/host/last-command.log sur l’hôte.`
-      : error.code || error instanceof SyntaxError ? 'Installation arrêtée : fichier manquant, inaccessible ou invalide. Consulter INSTALL.md.' : error.message);
-    process.exitCode = 1;
-  }
 }
