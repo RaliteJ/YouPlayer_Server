@@ -137,9 +137,7 @@ const App = {
         this.adminIntegrationCheck = document.getElementById('admin-integrations-check');
         this.adminReleaseStatus = document.getElementById('admin-release-status');
         this.adminReleaseCheck = document.getElementById('admin-release-check');
-        this.adminSecurityStatus = document.getElementById('admin-security-status');
-        this.adminSecurityCheck = document.getElementById('admin-security-check');
-        this.adminSecurityFix = document.getElementById('admin-security-fix');
+        this.adminReleaseInstall = document.getElementById('admin-release-install');
         this.passwordChangeForm = document.getElementById('password-change-form');
         this.passwordChangeMessage = document.getElementById('password-change-message');
         this.spotifySettingsStatus = document.getElementById('spotify-settings-status');
@@ -314,10 +312,9 @@ const App = {
         if (this.adminCreateUserForm) {
             this.adminCreateUserForm.onsubmit = (e) => this.createAdminUser(e);
         }
-        if (this.adminSecurityCheck) this.adminSecurityCheck.onclick = () => this.startSecurityAudit('check');
-        if (this.adminSecurityFix) this.adminSecurityFix.onclick = () => this.startSecurityAudit('fix');
         if (this.adminIntegrationCheck) this.adminIntegrationCheck.onclick = () => this.checkIntegrations();
         if (this.adminReleaseCheck) this.adminReleaseCheck.onclick = () => this.fetchReleaseStatus(true);
+        if (this.adminReleaseInstall) this.adminReleaseInstall.onclick = () => this.installRelease();
         if (this.passwordChangeForm) {
             this.passwordChangeForm.onsubmit = (e) => this.changeOwnPassword(e);
         }

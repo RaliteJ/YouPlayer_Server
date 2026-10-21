@@ -19,7 +19,7 @@ Un lecteur musical personnel pour réunir YouTube, le catalogue Spotify et vos f
 - [🚀 Prise en main pour écouter](#prise-en-main)
 - [🔐 Comptes, confidentialité et services musicaux](#comptes-et-confidentialite)
 - [👷 Contribuer](#contribuer)
-- [📦 Installation depuis Git](#installation-sans-build)
+- [📦 Installation sans compilation](#installation-sans-build)
 - [🛠️ Installation et build — guide technique](#installation-et-build)
   - [Prérequis et architecture](#prerequis)
   - [Configurer une première installation](#configuration)
@@ -41,7 +41,7 @@ YouPlayer rassemble la recherche musicale, les playlists et la lecture audio dan
 
 L'application s'utilise depuis un navigateur. Elle fonctionne avec un serveur que vous installez et gérez vous-même : c'est le principe de l'**auto-hébergement**. Si quelqu'un a déjà installé YouPlayer pour vous, vous avez seulement besoin de l'adresse du site et d'un compte de lecture.
 
-Pour installer votre propre instance, consultez l’[installation depuis Git](#installation-sans-build)
+Pour installer votre propre instance, consultez l’[installation sans compilation](#installation-sans-build)
 ou le [guide technique avec build](#installation-et-build).
 
 <a id="fonctionnalites"></a>
@@ -85,7 +85,7 @@ Un compte **admin** ouvre les outils de gestion. Pour écouter, demandez un comp
 
 Les comptes admin sont réservés à la gestion du serveur et des utilisateurs. Les comptes user disposent de leur espace musical ; l'authentification et les contrôles d'accès protègent les données et les flux privés.
 
-Cette distribution ne contient ni données utilisateur, ni compte précréé, ni secret, ni configuration de mise à jour, ni extension signée. Le panneau Admin indique la configuration et les derniers contrôles de connexion YouTube/Spotify sans afficher les secrets.
+Cette distribution ne contient ni données utilisateur, ni compte précréé, ni secret, ni extension signée. Elle inclut la clé publique de vérification des versions officielles. Le panneau Admin indique la configuration et les derniers contrôles de connexion YouTube/Spotify sans afficher les secrets.
 
 Le catalogue public Spotify peut fonctionner sans compte Spotify personnel. L'OAuth Spotify est une configuration facultative ; les playlists personnelles du WebPlayer utilisent le pont d'extension. L'extension s'installe séparément et doit être associée à l'adresse HTTPS exacte de votre instance.
 
@@ -103,17 +103,20 @@ Lisez [AGENTS.md](AGENTS.md) avant de modifier le projet. Utilisez des exemples 
 
 <a id="installation-sans-build"></a>
 
-## 📦 Installation depuis Git
+## 📦 Installation sans compilation
 
-Clonez le dépôt puis lancez `./install.sh` avec le compte Podman utilisateur.
-L’installateur prépare la configuration et construit les images depuis les sources.
-Il conserve un `.env` existant et refuse de remplacer une stack déjà installée.
-Voir [INSTALL.md](INSTALL.md) pour les prérequis et le premier démarrage.
+Téléchargez l’archive `youplayer-install.tar.gz` d’une release officielle puis lancez
+`./install.sh podman` (ou `./install.sh docker`). Les images AMD64/ARM64 contiennent
+les dépendances npm validées : aucune compilation ni commande npm n’est nécessaire
+sur le serveur installé. Voir [INSTALL.md](INSTALL.md) pour les prérequis et la configuration.
 
-Les mises à jour sont manuelles : `git pull --ff-only`, puis reconstruction et
-redémarrage avec Compose. Aucun bouton Admin ni service hôte ne met à jour
-l’application. Le backend propose seulement une vérification informative sur
-demande admin (`POST /admin/releases/check`). Voir [UPDATES.md](UPDATES.md).
+Dans **Admin → Intégrations → Version du serveur**, cliquez sur **Vérifier les
+nouvelles releases**, puis **Installer la version**. Le service installé sur l’hôte
+vérifie la signature et les empreintes, remplace les images et contrôle leur santé.
+L’installation est toujours explicite. Voir [UPDATES.md](UPDATES.md).
+
+Les installations depuis les sources gardent le parcours manuel décrit dans
+[UPDATES.md](UPDATES.md#installations-existantes-et-developpement).
 
 <a id="installation-et-build"></a>
 
@@ -173,7 +176,7 @@ Copiez le résultat dans `YOUPLAYER_SESSION_SECRET`, uniquement dans `.env`. Pou
 
 Laissez les clés YouTube et les variables Spotify facultatives vides si vous ne les utilisez pas. Les champs `YOUPLAYER_SPOTIFY_WEB_USERNAME` et `YOUPLAYER_SPOTIFY_WEB_PASSWORD` concernent uniquement un diagnostic navigateur facultatif ; ils ne sont pas nécessaires au catalogue public et ce diagnostic est désactivé dans l'image fournie.
 
-Préparez les dossiers locaux utilisés par les médias et l’audit de sécurité, puis contrôlez la configuration initiale :
+Préparez les dossiers locaux utilisés par les médias et le statut des versions, puis contrôlez la configuration initiale :
 
 ```bash
 mkdir -p src/playlists src/local_song .updates/requests .updates/status
@@ -281,7 +284,7 @@ Les contrôles utilisent des ressources publiques et les identifiants d'applicat
 - **Spotify public** : obtention d'une session invitée.
 - **Spotify OAuth** : obtention d'un [jeton d'application](https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow), sans vérifier l'URI de retour ou les autorisations d'un utilisateur.
 
-Les appels sont limités dans le temps et les résultats réutilisés pendant **30 secondes**. Le serveur limite aussi les contrôles répétés. Les clés, jetons et erreurs brutes ne sont pas renvoyés à l'interface. Une sonde réussie ne garantit pas toutes les recherches ou la lecture des médias. Les mises à jour du serveur se font manuellement depuis l’hôte.
+Les appels sont limités dans le temps et les résultats réutilisés pendant **30 secondes**. Le serveur limite aussi les contrôles répétés. Les clés, jetons et erreurs brutes ne sont pas renvoyés à l'interface. Une sonde réussie ne garantit pas toutes les recherches ou la lecture des médias. Les distributions préconstruites se mettent à jour sur action explicite depuis Admin ; les installations de développement conservent les commandes sur l’hôte.
 
 <a id="tests"></a>
 
@@ -386,83 +389,16 @@ retour arrière automatique, ni de worker à lancer. N’utilisez pas `down -v`.
 
 Ne partagez jamais `.env`, `.updates/`, les sauvegardes, journaux, médias ou données des utilisateurs. Toute distribution publique doit conserver uniquement des exemples descriptifs sans valeurs personnelles.
 
-#### Contrôle automatique des dépendances npm
+#### Dépendances et mises à jour
 
-L'onglet **Admin → Sécurité** affiche le dernier contrôle, le nombre de
-vulnérabilités par gravité et deux actions explicites : **Vérifier la sécurité
-des dépendances**, puis **Appliquer les corrections compatibles**. L'ouverture
-de l'onglet ne lance aucun audit externe. Les résultats concernent les fichiers
-du projet sur l'hôte ; une correction attend une reconstruction des conteneurs
-avant d'être effective dans l'application.
+Les dépendances npm sont actualisées dans le projet, testées en CI et intégrées aux
+images de chaque release. L’onglet Sécurité explique ce fonctionnement ; les
+utilisateurs installent une version complète depuis **Admin → Intégrations**.
+L’ancien service de correction npm sur l’hôte n’est plus utilisé.
 
-Pour utiliser les boutons, démarrer ce service dans le dossier d'installation,
-avec le compte Podman utilisateur, sans sudo :
-
-```bash
-node scripts/dependency-audit.mjs --serve
-```
-
-Le processus reste actif et traite uniquement les demandes de l'Admin. Il est
-indépendant de la configuration du dépôt des releases. Il utilise les dossiers
-`requests` et `status` déjà montés par Compose ; aucun accès Podman n'est donné
-au backend. Aucun service de lancement automatique n'est installé. Node et npm
-sont nécessaires sur l'hôte pour valider les corrections. Après un arrêt
-brutal, vérifier qu'aucun service Sécurité ne tourne avant de retirer le dossier
-verrou `.updates/dependency-audit/service`.
-
-Après une correction validée, l'onglet demande de **reconstruire et relancer
-Podman**, avec la commande correspondante. Un simple redémarrage des anciens
-conteneurs ne met pas leurs dépendances à jour. L'avertissement persiste après
-un nouvel audit et disparaît lorsque le verrou embarqué dans le backend
-correspond aux corrections. Recharger la page après la reconstruction.
-
-Le mode terminal reste disponible, indépendamment de l'onglet :
-
-Depuis la racine, avec Node et npm, sans sudo :
-
-```bash
-# Vérification ponctuelle
-node scripts/dependency-audit.mjs
-# Vérification immédiate puis quotidienne, avec corrections compatibles
-node scripts/dependency-audit.mjs --fix --watch
-```
-
-Le processus doit rester actif ; Ctrl+C l'arrête. Lancer cette commande constitue
-une demande de contact avec le registre npm : l'audit lui transmet les noms et
-versions des dépendances. Il recherche les vulnérabilités connues des paquets,
-pas les failles propres au code, à l'OS ou aux images conteneurs.
-
-Les corrections utilisent `npm audit fix --package-lock-only --ignore-scripts`,
-sans `--force`, dans un dossier temporaire isolé. Le script exige une diminution
-du nombre de vulnérabilités sans augmentation dans une catégorie de gravité,
-installe les dépendances candidates puis lance `npm run test:security`, la suite
-de tests serveur sans navigateur. Chromium n'est pas requis pour ce service.
-La suite complète, avec les tests navigateur, reste exécutée dans la CI.
-Un échec conserve les fichiers originaux. Une correction incompatible ou sans
-amélioration est signalée par `manual-review`.
-
-Si les tests réussissent, seul `src/package-lock.json` est remplacé. Le rapport
-et le verrou précédent sont conservés dans `.updates/dependency-audit/`.
-Les dépendances installées et les conteneurs actifs conservent leur version :
-le statut `updated-rebuild-required` demande une reconstruction explicite avec
-`podman-compose -p youplayer-server up -d --build`, puis une vérification de la
-connexion et de la lecture. Un audit ultérieur porte sur le verrou du projet,
-pas sur les conteneurs encore en service. Aucune publication n'est effectuée.
-Après un arrêt brutal, vérifier qu'aucun audit ne tourne avant de retirer le
-dossier verrou `.updates/dependency-audit/running`.
-
-Si **Appliquer les corrections compatibles** échoue, l'onglet indique une cause
-précise : installation candidate impossible, tests serveur en échec,
-permissions ou accès au registre npm.
-
-Le service affiche seulement un code d'erreur et l'étape concernée. Le même
-diagnostic est conservé dans `.updates/dependency-audit/failure.json`. Le journal
-de la dernière commande npm en échec ou de validation est conservé dans
-`.updates/dependency-audit/last-command.log`, avec des permissions privées.
-Consulter ce fichier uniquement sur l'hôte ; il n'est jamais renvoyé dans
-l'interface. Ne pas le publier ni partager son contenu brut.
-
-<a id="organisation"></a>
+Pour contribuer, mettre à jour `src/package.json` et `src/package-lock.json`,
+exécuter les tests et préparer une release selon [UPDATES.md](UPDATES.md).
+Un audit npm sans vulnérabilité connue ne garantit pas l’absence de faille.
 
 ### 10. Organisation du projet
 

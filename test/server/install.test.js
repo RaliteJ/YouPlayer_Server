@@ -5,77 +5,62 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { installServer, prepareInstallationEnvironment, composeEnvironment, runInstallCommand } from '../../scripts/install.mjs';
+import { installServer, prepareInstallationEnvironment, composeEnvironment, runInstallCommand, serviceUnit } from '../../scripts/install-release.mjs';
+import { envelope, publicKey } from '../fixtures/release.mjs';
 
 const execute = promisify(execFile);
 async function fixture(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'youplayer-installer-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  await fs.mkdir(path.join(root, '.git'));
+  await fs.mkdir(path.join(root, 'keys'));
+  await fs.writeFile(path.join(root, 'keys/release-public-key.pem'), publicKey);
+  await fs.writeFile(path.join(root, 'youplayer-release.json'), JSON.stringify(envelope()));
   const calls = [], reports = [];
-  const run = async (program, args) => {
-    calls.push([program, args]);
-    if (program === 'podman-compose') return '';
-    if (program === 'git') return args[0] === 'status' ? '' : 'a'.repeat(40);
-    if (args[0] === 'info') return 'linux/amd64';
-    if (args[0] === 'ps') return '';
-    if (args[0] === 'inspect') return JSON.stringify(Array.from({ length: 3 }, () => ({ State: { Status: 'running', Health: { Status: 'healthy' } } })));
-    throw new Error('Unexpected simulated command');
-  };
-  return { root, calls, reports, run, options: { root, run, wait: async () => {},
-    report: message => reports.push(message), pseudo: 'synthetic-admin', password: 'synthetic-password-123' } };
+  const run = async (program, args) => { calls.push([program, args]); return program === 'loginctl' ? 'yes' : ''; };
+  const deployment = Object.fromEntries(['checkTools', 'assertFresh', 'pull', 'initializeData', 'activate', 'healthy'].map(name =>
+    [name, async (...args) => { calls.push([name, args]); }]));
+  return { root, calls, reports, run, deployment, options: { root, run, home: path.join(root, 'home'),
+    deploymentFactory: () => deployment, report: message => reports.push(message), pseudo: 'synthetic-admin', password: 'synthetic-password-123' } };
 }
 
-test('first installation builds local sources before startup, keeps private config and never configures an updater', async t => {
+test('first installation pulls signed images, verifies health and enables the persistent updater without building', async t => {
   const h = await fixture(t);
   await installServer(h.options);
-  const commands = h.calls.filter(([program]) => program === 'podman-compose');
-  assert.ok(commands[0][1].includes('--version'));
-  assert.ok(commands[1][1].includes('build'));
-  assert.ok(commands[1][1].includes(`YOUPLAYER_BUILD_COMMIT=${'a'.repeat(40)}`));
-  assert.equal(commands[2][1].at(-1), '--no-build');
-  for (const [, args] of commands.slice(1)) assert.equal(args[args.indexOf('--env-file') + 1], '/dev/null');
+  assert.ok(h.calls.findIndex(([name]) => name === 'pull') < h.calls.findIndex(([name]) => name === 'activate'));
+  assert.ok(h.calls.findIndex(([name]) => name === 'healthy') < h.calls.findIndex(([name, args]) => name === 'systemctl' && args.includes('enable')));
   assert.equal((await fs.stat(path.join(h.root, '.env'))).mode & 0o777, 0o600);
-  await assert.rejects(fs.stat(path.join(h.root, '.updates/host/active.json')), { code: 'ENOENT' });
-  await assert.rejects(fs.stat(path.join(h.root, '.updates/host/config.json')), { code: 'ENOENT' });
+  assert.equal(JSON.parse(await fs.readFile(path.join(h.root, '.updates/host/config.json'))).engine, 'podman');
   assert.ok(!h.reports.join(' ').includes(h.options.password));
-  assert.ok(!h.calls.some(([program, args]) => program === 'git' && !['status', 'rev-parse'].includes(args[0]) || args.some(arg => ['rm', 'stop', 'down', 'tag', 'load'].includes(arg))));
+  assert.ok(!h.calls.some(([program, args]) => ['npm', 'git'].includes(program) || args.some(arg => ['build', 'rm', 'down'].includes(arg))));
+  assert.match(await fs.readFile(path.join(h.options.home, '.config/systemd/user/youplayer-updates.service'), 'utf8'), /Restart=on-failure/);
 });
 
-test('an installation from modified sources marks its build as unknown instead of claiming the HEAD commit', async t => {
+test('precheck makes no installation changes and needs no env', async t => {
   const h = await fixture(t);
-  await installServer({ ...h.options, run: async (program, args) => {
-    if (program === 'git' && args[0] === 'status') return ' M src/server/server.js';
-    return h.run(program, args);
-  } });
-  assert.ok(h.calls.some(([, args]) => args.includes('YOUPLAYER_BUILD_COMMIT=unknown')));
-  assert.ok(!h.calls.some(([program, args]) => program === 'git' && args[0] === 'rev-parse'));
-});
-
-test('precheck needs no env and makes no build, startup or data changes', async t => {
-  const h = await fixture(t);
+  const before = await fs.readdir(h.root);
   await installServer({ ...h.options, checkOnly: true });
-  assert.deepEqual(await fs.readdir(h.root), ['.git']);
-  assert.equal(h.calls.some(([, args]) => args.includes('build') || args.includes('up')), false);
+  assert.deepEqual(await fs.readdir(h.root), before);
+  assert.ok(!h.calls.some(([name]) => ['pull', 'activate'].includes(name)));
 });
 
-for (const failure of ['checkout', 'existing', 'dependencies', 'build', 'unhealthy']) {
-  test(`installation refuses ${failure} without deleting data`, async t => {
-    const h = await fixture(t);
-    if (failure === 'checkout') await fs.rmdir(path.join(h.root, '.git'));
-    const run = async (program, args) => {
-      const result = await h.run(program, args);
-      if (failure === 'existing' && args[0] === 'ps') return 'youplayer-server_backend_1';
-      if (failure === 'dependencies' && args.includes('--version')) throw new Error('Missing prerequisite');
-      if (failure === 'build' && args.includes('build')) throw new Error('Build failed');
-      if (failure === 'unhealthy' && args[0] === 'inspect') return '[]';
-      return result;
-    };
-    await assert.rejects(installServer({ ...h.options, run }));
-    if (failure !== 'unhealthy') assert.equal(h.calls.some(([, args]) => args.includes('up')), false);
-    assert.equal(h.calls.some(([, args]) => args.some(arg => ['rm', 'down', 'stop'].includes(arg))), false);
-  });
-}
+for (const failure of ['checkTools', 'assertFresh', 'pull', 'healthy']) test(`installer refuses ${failure} without deleting data or enabling the service`, async t => {
+  const h = await fixture(t);
+  h.deployment[failure] = async () => { throw new Error('Synthetic failure'); };
+  await assert.rejects(installServer(h.options));
+  assert.ok(!h.calls.some(([, args]) => args.includes('enable') || args.includes('down')));
+});
+
+test('installer rejects a tampered bundle before invoking the container engine', async t => {
+  const h = await fixture(t);
+  await fs.writeFile(path.join(h.root, 'youplayer-release.json'), JSON.stringify({ payload: 'bad', signature: 'bad' }));
+  await assert.rejects(installServer(h.options), { updateCode: 'invalid-signature' });
+  assert.deepEqual(h.calls, []);
+});
+
+test('systemd paths are quoted and specifiers escaped', () => {
+  assert.match(serviceUnit('/tmp/installation space%'), /space%%/);
+  assert.throws(() => serviceUnit('/tmp/new\nline'));
+});
 
 test('configuration preserves existing values and passes dollar signs literally without inherited production overrides', async t => {
   const h = await fixture(t);

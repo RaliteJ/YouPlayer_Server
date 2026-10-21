@@ -99,39 +99,35 @@ test('release requests deduplicate clicks, ignore late account results and hide 
     assert.equal(failing.view.adminReleaseCheck.disabled, false);
 });
 
-test('security panel shows counts and rebuild notice, requires explicit actions and rejects late account results', async () => {
-  const state = { online: true, phase: 'finished', result: 'vulnerable', counts: { critical: 1, high: 0, moderate: 0, low: 0, info: 0 }, rebuildRequired: true };
-  let finish;
-  const h = harness(async () => ok(state));
-  const elements = Object.fromEntries(['admin-security-date', 'admin-security-counts', 'admin-security-rebuild'].map(id => [id, element()]));
+test('managed release display requires confirmation, binds the candidate and polls across restarts', async () => {
+  const requests = [];
+  let deployment = { online: true, phase: 'available', canInstall: true, installedVersion: 'v1.0.0', latestVersion: 'v2.0.0', candidateId: 'a'.repeat(64) };
+  const h = harness(async (url, options) => {
+    requests.push({ url, options });
+    if (url.endsWith('/install')) return { ...ok({ requestId: 'job' }), status: 202 };
+    return ok({ deployment });
+  });
+  const elements = Object.fromEntries(['local', 'latest', 'date'].map(name => [`admin-release-${name}`, {}]));
   h.document.getElementById = id => elements[id];
-  Object.assign(h.view, { currentUser: { id: 'manager', role: 'admin' }, adminSecurityStatus: {}, adminSecurityCheck: {}, adminSecurityFix: {} });
-  await h.view.fetchSecurityStatus();
-  assert.match(elements['admin-security-counts'].textContent, /Critiques : 1/);
-  assert.equal(elements['admin-security-rebuild'].hidden, false);
-  assert.equal(h.view.adminSecurityFix.disabled, false);
-  state.phase = 'failed';
-  state.failure = { code: 'tests-failed', output: 'synthetic-private-details' };
-  await h.view.fetchSecurityStatus();
-  assert.match(h.view.adminSecurityStatus.textContent, /tests de validation.*échoué/);
-  assert.equal(h.view.adminSecurityStatus.textContent.includes('synthetic-private'), false);
-  state.failure.code = 'synthetic-private-error';
-  await h.view.fetchSecurityStatus();
-  assert.match(h.view.adminSecurityStatus.textContent, /diagnostic local/);
-  assert.equal(h.view.adminSecurityStatus.textContent.includes('synthetic-private'), false);
-  state.online = false;
-  await h.view.fetchSecurityStatus();
-  assert.equal(h.view.adminSecurityCheck.disabled, true);
-  assert.equal(h.view.adminSecurityFix.disabled, true);
-  h.view.currentUser.role = 'user';
-  await h.view.startSecurityAudit('fix');
-  const late = harness(() => new Promise(resolve => { finish = resolve; }));
-  Object.assign(late.view, { currentUser: { id: 'manager', role: 'admin' }, adminSecurityStatus: { textContent: 'original' }, adminSecurityCheck: {}, adminSecurityFix: {} });
-  const pending = late.view.fetchSecurityStatus();
-  late.view.currentUser = { id: 'listener', role: 'user' };
-  finish(ok(state));
-  await pending;
-  assert.equal(late.view.adminSecurityStatus.textContent, 'original');
+  Object.assign(h.view, { currentUser: { id: 'manager', role: 'admin' }, adminReleaseStatus: {}, adminReleaseCheck: {}, adminReleaseInstall: {} });
+  await h.view.fetchReleaseStatus();
+  assert.equal(h.view.adminReleaseInstall.disabled, false);
+  h.window.confirm = () => false;
+  await h.view.installRelease();
+  assert.equal(requests.length, 1);
+  h.window.confirm = () => true;
+  await h.view.installRelease();
+  assert.deepEqual(JSON.parse(requests[1].options.body), { candidateId: 'a'.repeat(64) });
+  assert.equal(h.view.adminReleaseInstall.disabled, true);
+  assert.ok(h.timers.length);
+  deployment = { ...deployment, phase: 'rolled-back', canInstall: false, requestId: 'job' };
+  await h.view.fetchReleaseStatus();
+  assert.match(h.view.adminReleaseStatus.textContent, /version précédente.*rétablie/);
+  assert.equal(h.view.releaseRequestId, null);
+  deployment = { ...deployment, online: false };
+  await h.view.fetchReleaseStatus();
+  assert.equal(h.view.adminReleaseCheck.disabled, true);
+  assert.equal(h.view.adminReleaseInstall.disabled, true);
 });
 
 test('integration controls show safe individual states and deduplicate explicit checks', async () => {

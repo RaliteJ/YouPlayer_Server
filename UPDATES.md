@@ -1,143 +1,123 @@
-# Mise à jour manuelle
+# Mises à jour de YouPlayer
 
-Les mises à jour de YouPlayer sont réalisées par l’utilisateur sur l’hôte.
-Il n’y a plus de scripts de mise à jour, de worker ni de commandes dans Admin.
-Le contrôle des dépendances dans **Admin → Sécurité** reste indépendant.
+## Depuis l’interface admin
 
-## Avant de commencer
+Pour une installation issue de l’archive de release :
 
-Utiliser le dossier de l’installation, le même compte, le même moteur de
-conteneurs et le même nom de projet Compose. Les exemples Podman utilisent
-`youplayer-server` ; conserver votre nom existant s’il est différent.
+1. Ouvrir **Admin → Intégrations → Version du serveur**.
+2. Cliquer sur **Vérifier les nouvelles releases**. L’ouverture du panneau ne contacte pas GitHub.
+3. Consulter la version proposée et ses notes sur la page des releases officielles.
+4. Cliquer sur **Installer la version**, puis confirmer l’interruption temporaire de la lecture.
+5. Attendre la vérification du démarrage, puis recharger la page et vérifier connexion et lecture.
 
-Sauvegarder `.env`, les dossiers médias et les volumes persistants selon
-[PRODUCTION.md](PRODUCTION.md). Les outils de sauvegarde fournis ciblent Podman ;
-sur Docker, utiliser votre procédure de sauvegarde habituelle et vérifier la
-restauration. Aucun backup ni rollback ne sera déclenché par la mise à jour.
+Les dépendances npm sont incluses dans les images validées. Il n’y a plus de
+correction npm locale depuis l’admin. Un paquet sans correctif automatique ou une
+mise à jour majeure se traite dans le projet avant publication d’une version.
 
-Arrêter l’ancien worker `node scripts/update-service.mjs run` s’il tourne encore.
-S’il avait été configuré dans systemd ou un autre superviseur, désactiver ce
-service explicitement avant de continuer. Ne pas supprimer `.updates/` : ce
-dossier peut contenir des sauvegardes de diagnostic et l’état de l’audit npm.
+## Installation et récupération
 
-## Récupérer les sources
+Le service utilisateur `youplayer-updates.service` reçoit uniquement les actions
+`check` et `install`, par fichiers partagés. Les routes sont réservées aux sessions
+admin et bénéficient du contrôle d’origine du serveur. Le navigateur ne choisit
+ni une commande, ni une URL, ni une image : il transmet l’identifiant de la version
+qui vient d’être vérifiée. Cette proposition expire après trente minutes.
+
+Le service vérifie le manifeste Ed25519 avec `keys/release-public-key.pem`, le tag,
+la séquence, la plateforme et les dépôts GHCR autorisés. Les images sont référencées
+par digest SHA-256. Il refuse les versions plus anciennes, les tags modifiés, les
+plateformes inconnues et les changements de contrat ou de format de données.
+Les installations de ce contrat utilisent le projet Compose `youplayer-server`.
+
+Les téléchargements précèdent le remplacement du backend et du frontend. Redis,
+les montages et les volumes restent en place. Avant le remplacement, un journal
+privé conserve l’état précédent. En cas d’échec d’activation ou de santé, le service
+rétablit les anciennes images et vérifie leur santé. Après un arrêt brutal, le même
+journal permet cette récupération au redémarrage du service. Si elle échoue, l’état
+`recovery-required` bloque toute nouvelle installation et demande une intervention.
+Les images précédentes ne sont pas supprimées automatiquement.
+
+Cette récupération ne restaure pas les données. Le contrat 1 accepte seulement des
+versions déclarées compatibles avec le format actuel et le retour arrière. Une
+migration incompatible nécessite une nouvelle procédure et une sauvegarde ; elle
+ne doit pas être publiée sous ce contrat. Les sondes vérifient le démarrage et la
+disponibilité du backend/Redis à travers le frontend, pas la lecture musicale réelle.
+
+État local : `.updates/host/config.json`, `release-state.json`, `images.json` et,
+pendant une transaction, `transaction.json`. Les statuts publics ne contiennent ni
+secrets ni sorties de commandes. Un diagnostic de commande reste dans
+`.updates/host/last-command.log`. Ne pas publier ces fichiers privés.
+
+Pour examiner ou relancer le service :
+
+```bash
+systemctl --user status youplayer-updates.service
+systemctl --user restart youplayer-updates.service
+```
+
+Ne pas lancer `down -v`, ne pas supprimer les volumes et ne pas effacer le journal
+pour forcer une installation. Si le retour automatique échoue, corriger le problème
+sur l’hôte puis redémarrer le service pour reprendre la récupération.
+
+Le Compose et le service de l’hôte ne sont pas remplacés par une mise à jour d’image.
+Redis reste à sa version épinglée. Les mises à jour de Redis, du service, du contrat,
+de la clé publique ou du Compose demandent une maintenance explicitement documentée.
+
+## Préparer et publier une version
+
+Le workflow `.github/workflows/release.yml` se lance **manuellement sur un tag stable**
+`vMAJEUR.MINEUR.CORRECTIF`. Il n’est pas lancé par un push ordinaire.
+
+Configuration préalable par le mainteneur :
+
+- Disposer de la clé privée Ed25519 correspondant à `keys/release-public-key.pem` et
+  la configurer dans le secret Actions `YOUPLAYER_RELEASE_PRIVATE_KEY`. Ne jamais la
+  committer. Une autre clé est refusée par le générateur d’archive.
+- Autoriser Actions à publier les packages `ghcr.io/ralitej/youplayer-server-backend`
+  et `ghcr.io/ralitej/youplayer-server-frontend` et les rendre **publics**. Le workflow
+  vérifie l’accès anonyme avant de publier la release ; la première exécution peut
+  s’arrêter tant que les packages nouvellement créés sont privés.
+- Protéger les tags/releases et conserver les digests déjà publiés dans GHCR.
+
+Mettre à jour les dépendances et leur verrou dans le projet, adapter le code si
+nécessaire, puis exécuter la suite de tests. Créer un nouveau tag sur le commit
+validé. Dans Actions, choisir **Publier une version YouPlayer**, sélectionner ce tag
+et confirmer que le format des données permet un retour à la version précédente.
+
+Le workflow exécute la CI Node/Chromium, construit sur des runners natifs AMD64 et
+ARM64, démarre chaque stack et teste HTTPS, connexion admin et session Redis avant
+publication des images. Il assemble les digests dans un manifeste signé, prépare
+une archive d’installation par liste d’autorisation et publie :
+
+- `youplayer-release.json` : manifeste signé, commun aux deux architectures ;
+- `youplayer-install.tar.gz` : installateur, Compose, clé publique et service ;
+- `SHA256SUMS` : checksum de l’archive.
+
+La distribution n’embarque ni `.env`, ni données, ni médias, ni clé privée, ni journaux.
+La première publication et l’installation sur une machine vierge doivent être
+vérifiées avant d’annoncer une version prête pour les utilisateurs. Un test local
+ou une simulation du moteur ne vaut pas validation GitHub/GHCR ou Raspberry Pi.
+
+## Installations existantes et développement
+
+Une ancienne installation Git/Compose n’a pas l’état signé nécessaire au service.
+Elle conserve la vérification informative des releases et sa mise à jour manuelle :
+examiner Git, sauvegarder les données, `git pull --ff-only`, construire les images
+puis recréer les services avec le **même moteur, compte, projet et fichier Compose**.
+Un pull ou un simple redémarrage ne change pas les dépendances embarquées.
+
+Pour le Compose de développement Podman de ce dépôt, après sauvegarde et avec des
+sources propres :
 
 ```bash
 git status --short
-git branch --show-current
-git rev-parse HEAD
 git pull --ff-only
-```
-
-Noter le commit courant pour permettre une récupération manuelle. Examiner les
-modifications locales avant le pull ; les sauvegarder ou les intégrer sans
-écraser `.env` ni les adaptations Compose. En cas de conflit, de divergence ou
-d’absence de branche distante suivie, s’arrêter et résoudre la situation : ne
-pas forcer, réinitialiser ou changer de branche automatiquement.
-
-## Construire puis redémarrer
-
-**Exécuter les commandes dans l’ordre et s’arrêter à la première erreur.**
-Le pull ne met à jour que les sources ; le code exécuté est dans les images.
-La construction précède le redémarrage pour laisser les anciens services en
-place si elle échoue.
-
-Pour identifier correctement la version installée, les commandes ci-dessous
-intègrent le commit Git à l’image. Les exécuter seulement avec des sources
-propres (`git status --short`). Si vous construisez des modifications non
-commitées, utiliser `YOUPLAYER_BUILD_COMMIT=unknown` à la place du SHA : un commit
-ne représente pas ces modifications.
-
-Pour Podman :
-
-```bash
 podman-compose --env-file .env -p youplayer-server build --build-arg "YOUPLAYER_BUILD_COMMIT=$(git rev-parse HEAD)"
 podman-compose --env-file .env -p youplayer-server up -d --no-build
-podman-compose --env-file .env -p youplayer-server ps
 ```
 
-Certaines anciennes versions de Podman Compose réinterprètent les `$` des mots
-de passe. Dans ce cas, utiliser ce bloc à la place des deux premières commandes :
-il charge les valeurs littéralement et s’arrête si la construction échoue.
-
-```bash
-node --input-type=module <<'NODE'
-import { spawnSync, execFileSync } from 'node:child_process';
-import { composeEnvironment } from './scripts/install.mjs';
-const env = composeEnvironment(process.cwd(), 'youplayer-server');
-const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-for (const args of [['build', '--build-arg', `YOUPLAYER_BUILD_COMMIT=${commit}`], ['up', '-d', '--no-build']]) {
-  const result = spawnSync('podman-compose', [
-    '--env-file', '/dev/null', '-p', 'youplayer-server', ...args
-  ], { env, stdio: 'inherit' });
-  if (result.status !== 0) process.exit(result.status ?? 1);
-}
-NODE
-```
-
-Pour une installation **Docker Compose existante**, conserver son fichier
-Compose adapté à Docker (celui du dépôt contient des options Podman), son
-projet, ses overrides et son mode d’accès au daemon :
-
-```bash
-docker compose --env-file .env -p NOM_DU_PROJET_EXISTANT build --build-arg "YOUPLAYER_BUILD_COMMIT=$(git rev-parse HEAD)"
-docker compose --env-file .env -p NOM_DU_PROJET_EXISTANT up -d --no-build
-docker compose --env-file .env -p NOM_DU_PROJET_EXISTANT ps
-```
-
-Le redémarrage interrompt momentanément la lecture. Ne pas utiliser `down -v`,
-`volume rm` ou supprimer les dossiers persistants : ces opérations ne sont pas
-nécessaires pour une mise à jour.
-
-## Vérifier et récupérer en cas d’échec
-
-```bash
-curl --fail --silent --show-error --insecure https://127.0.0.1:8443/health/ready
-```
-
-`--insecure` ne sert ici que pour la sonde locale avec le certificat autosigné.
-Vérifier ensuite la connexion, les comptes, les playlists et la lecture.
-Si la santé échoue, consulter les journaux localement et ne pas supprimer les
-volumes. Le retour au commit noté et la reconstruction sont manuels ; ils ne
-restaurent pas les données ni n’annulent une migration. Vérifier la compatibilité
-des données et utiliser la sauvegarde si nécessaire.
-
-## Anciennes installations sans Git
-
-Les anciennes archives `youplayer-install.tar.gz` n’ont ni historique Git ni
-sources complètes : on ne peut pas y lancer `git pull`. Sauvegarder l’installation
-et préparer un clone séparé. Avant toute activation, reporter la configuration
-et les médias de manière privée et contrôler les chemins de montage absolus,
-le projet et les volumes existants. Ne pas lancer une nouvelle stack en parallèle
-sur le même port ou les mêmes données. Cette migration est manuelle ; un clone
-ne doit pas être traité comme une installation neuve avec des volumes vides.
-
-## Afficher la version et vérifier les releases
-
-Dans **Admin → Intégrations**, le panneau **Version du serveur** affiche le
-commit installé et la dernière release connue. Le bouton **Vérifier les nouvelles
-releases** lance la comparaison. L’ouverture du panneau lit seulement le résultat
-local, sans contacter GitHub.
-
-### API du backend
-
-- `GET /admin/releases` renvoie l’état local et le dernier résultat en mémoire,
-  sans appel externe.
-- `POST /admin/releases/check` déclenche une vérification explicite auprès de
-  GitHub. Une session admin et une origine de confiance sont requises. Le corps
-  de la requête ne permet ni de choisir un dépôt ni de lancer une commande.
-
-Le backend compare le commit intégré à l’image à la dernière release stable de
-`RaliteJ/YouPlayer_Server`, via l’[API de comparaison GitHub](https://docs.github.com/en/rest/commits/commits#compare-two-commits).
-Il renvoie `localCommit`, `latestRelease` (tag et lien), `checkedAt`, `state` et
-`updateAvailable`. Les états de comparaison sont `release_ahead`, `up_to_date`,
-`local_ahead` et `diverged`. `updateAvailable` est vrai uniquement pour
-`release_ahead`, faux pour `up_to_date` ou `local_ahead`, et nul si la réponse
-ne permet pas de conclure (version inconnue, divergence, quota, réseau ou aucune
-release). Un ancien build sans commit embarqué reste `local_unknown`.
-
-Les appels concurrents sont regroupés et le résultat est conservé cinq minutes,
-y compris en cas d’erreur. Aucun appel n’a lieu au démarrage. Seuls le dépôt et
-le SHA local sont transmis à GitHub ; ni configuration, ni compte, ni média.
-Cette vérification n’installe rien et ne déclenche aucun pull ou redémarrage.
-L’interface ne dispose pas de bouton d’installation.
+Arrêter à la première erreur. Si les sources sont modifiées, utiliser
+`YOUPLAYER_BUILD_COMMIT=unknown`. Pour les anciennes versions de Podman Compose qui
+réinterprètent les `$`, utiliser `composeEnvironment()` de `scripts/release-host.mjs`
+et `--env-file /dev/null`, comme le service. Les installations Docker existantes
+conservent leur Compose adapté et leur projet. Ne jamais lancer une stack neuve
+sur leurs données pour tenter une migration.
