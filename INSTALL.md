@@ -74,6 +74,13 @@ Si l’installation échoue après le démarrage, elle conserve les données. Ne
 supprimer les volumes pour la relancer. Examiner l’état et le diagnostic local
 `.updates/host/last-command.log` ; voir [UPDATES.md](UPDATES.md). Ces journaux sont privés.
 
+Avec Podman, les services sont lancés avec `--in-pod false` : le mode utilisateur
+`keep-id` du backend est incompatible avec un pod partagé. Si une ancienne archive
+échoue avec `--userns and --pod cannot be set together`, appliquer le correctif
+aux scripts de l'installation puis recréer les conteneurs concernés hors du pod,
+en conservant leurs volumes et leur configuration. Un Redis resté dans l'ancien
+pod empêche également la création du backend hors pod.
+
 Les installations existantes depuis Git/Compose nécessitent une migration explicite
 conservant leurs montages et volumes. L’installateur ne les convertit pas automatiquement.
 Le dépôt Git reste utilisable pour développer et construire manuellement les images ;

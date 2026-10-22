@@ -110,6 +110,10 @@ Téléchargez l’archive `youplayer-install.tar.gz` d’une release officielle 
 les dépendances npm validées : aucune compilation ni commande npm n’est nécessaire
 sur le serveur installé. Voir [INSTALL.md](INSTALL.md) pour les prérequis et la configuration.
 
+`install.sh` doit être lancé depuis cette archive, dans un dossier permanent :
+un clone Git ne contient pas le manifeste signé `youplayer-release.json`.
+Ne conservez pas une installation active dans `/tmp`.
+
 Dans **Admin → Intégrations → Version du serveur**, cliquez sur **Vérifier les
 nouvelles releases**, puis **Installer la version**. Le service installé sur l’hôte
 vérifie la signature et les empreintes, remplace les images et contrôle leur santé.
@@ -130,7 +134,7 @@ Toutes les commandes ci-dessous s'exécutent à la racine de ce dépôt, dans le
 
 ### 1. Prérequis et architecture
 
-- **Linux, Git, Bash, OpenSSL, curl, Podman et podman-compose** pour `./install.sh`.
+- **Linux, Git, Bash, OpenSSL, curl, Podman et podman-compose** pour construire depuis les sources.
 - **Node.js ≥ 22.12** sur l’hôte uniquement pour les outils Node locaux et les tests.
 - **Chromium local** uniquement pour les tests de l’interface dans un navigateur.
 - Un accès réseau pour télécharger les images, paquets et dépendances pendant la construction, puis pour les fonctions musicales externes utilisées.
@@ -147,8 +151,8 @@ L'image backend contient **FFmpeg et yt-dlp**, mais **n'embarque pas Chromium**.
 
 ### 2. Configurer une première installation manuellement
 
-Avec `./install.sh`, la configuration et le démarrage sont déjà pris en charge.
-Les étapes 2 et 3 ci-dessous décrivent la procédure manuelle.
+Les étapes 2 et 3 ci-dessous concernent un clone Git. Pour une archive de release,
+`./install.sh` prend en charge la configuration et le démarrage selon [INSTALL.md](INSTALL.md).
 
 Créez votre configuration locale sans écraser un fichier existant :
 
@@ -242,15 +246,16 @@ Après modification du code, reconstruisez les images concernées avec `up -d --
 
 **En cas de problème d’installation ou de connexion**
 
-- « Des conteneurs YouPlayer existent déjà » : vérifiez leur état avec
-  `podman ps -a`. Des conteneurs arrêtés bloquent aussi une nouvelle installation.
+- `deployment-changed` lors d’une première installation : vérifiez les conteneurs avec
+  `podman ps -a`. Des conteneurs arrêtés, des volumes existants ou un service déjà installé
+  bloquent aussi une nouvelle installation.
 - Mot de passe refusé : si vous réutilisez le volume des comptes, utilisez le mot
   de passe de l’admin existant. Recréer `.env` ne réinitialise pas ce compte.
 - Plusieurs clones du dépôt : exécutez les commandes dans le dossier de
   l’installation active, avec son `.env` et le même compte Podman. Un autre clone
   ne constitue pas une installation indépendante avec le même nom de projet.
-- Échec du script pendant la construction ou le démarrage : consultez localement
-  `.updates/host/install.log`, puis `podman-compose -p youplayer-server ps` et
+- Échec de l’installateur de release : consultez localement
+  `.updates/host/last-command.log`. Pour une installation depuis les sources, utilisez `podman-compose -p youplayer-server ps` et
   `podman-compose -p youplayer-server logs --tail=50`. Ne partagez pas les journaux
   bruts ni le contenu de `.env`.
 

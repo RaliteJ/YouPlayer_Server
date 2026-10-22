@@ -23,6 +23,25 @@ async function fixture(t) {
     deploymentFactory: () => deployment, report: message => reports.push(message), pseudo: 'synthetic-admin', password: 'synthetic-password-123' } };
 }
 
+test('Bash entrypoint reaches the initial prompts without env and delegates existing configuration', async t => {
+  const h = await fixture(t);
+  await fs.copyFile(new URL('../../install.sh', import.meta.url), path.join(h.root, 'install.sh'));
+  const bin = path.join(h.root, 'bin');
+  await fs.mkdir(bin);
+  await fs.writeFile(path.join(bin, 'node'), '#!/bin/sh\nprintf "%s\\n" "$2 $3" >> "$INSTALLER_CALLS"\n', { mode: 0o700 });
+  const callsFile = path.join(h.root, 'shell-calls');
+  const options = { cwd: os.tmpdir(), env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, INSTALLER_CALLS: callsFile } };
+  await assert.rejects(execute('bash', [path.join(h.root, 'install.sh'), 'podman'], options), error => {
+    assert.match(error.stderr, /terminal interactif/);
+    return error.code === 1;
+  });
+  assert.equal(await fs.readFile(callsFile, 'utf8'), 'check podman\n');
+  await fs.writeFile(path.join(h.root, '.env'), 'synthetic', { mode: 0o600 });
+  await fs.writeFile(callsFile, '');
+  await execute('bash', [path.join(h.root, 'install.sh'), 'docker'], options);
+  assert.equal(await fs.readFile(callsFile, 'utf8'), 'check docker\ninstall docker\n');
+});
+
 test('first installation pulls signed images, verifies health and enables the persistent updater without building', async t => {
   const h = await fixture(t);
   await installServer(h.options);
@@ -58,7 +77,7 @@ test('installer rejects a tampered bundle before invoking the container engine',
 });
 
 test('systemd paths are quoted and specifiers escaped', () => {
-  assert.match(serviceUnit('/tmp/installation space%'), /space%%/);
+  assert.match(serviceUnit('/tmp/installation space%'), /\nWorkingDirectory=\/tmp\/installation space%%\n/);
   assert.throws(() => serviceUnit('/tmp/new\nline'));
 });
 
