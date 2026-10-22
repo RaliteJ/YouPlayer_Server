@@ -12,7 +12,7 @@ export function createDeployment({ root, config, run = (program, args, env) => r
   const env = () => composeEnvironment(root, config.project);
   const engineRun = args => run(engine, args, process.env);
   const compose = args => run(engine === 'docker' ? 'docker' : 'podman-compose', [
-    ...(engine === 'docker' ? ['compose'] : []), '--env-file', '/dev/null', '-p', config.project,
+    ...(engine === 'docker' ? ['compose'] : ['--in-pod', 'false']), '--env-file', '/dev/null', '-p', config.project,
     '-f', path.join(root, 'docker-compose.release.yml'), '-f', override, ...args], env());
   async function inspect() {
     const projectLabel = engine === 'podman' ? 'io.podman.compose.project' : 'com.docker.compose.project';

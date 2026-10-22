@@ -12,7 +12,7 @@ export { prepareInstallationEnvironment, composeEnvironment, runHostCommand as r
 export function serviceUnit(root, executable = process.execPath) {
   const quote = value => '"' + value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%') + '"';
   if (/[\r\n\0$]/.test(root + executable)) throw releaseError('incompatible-release');
-  return `[Unit]\nDescription=YouPlayer release updates\nAfter=default.target\n\n[Service]\nType=simple\nWorkingDirectory=${quote(root)}\nExecStart=${quote(executable)} ${quote(path.join(root, 'scripts/release-service.mjs'))}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=900\nKillMode=mixed\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
+  return `[Unit]\nDescription=YouPlayer release updates\nAfter=default.target\n\n[Service]\nType=simple\nWorkingDirectory=${root.replaceAll('%', '%%')}\nExecStart=${quote(executable)} ${quote(path.join(root, 'scripts/release-service.mjs'))}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=900\nKillMode=mixed\nUMask=0077\n\n[Install]\nWantedBy=default.target\n`;
 }
 
 export async function installServer({ root = ROOT, engine = 'podman', checkOnly = false, pseudo, password,

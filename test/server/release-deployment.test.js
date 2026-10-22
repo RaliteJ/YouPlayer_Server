@@ -34,6 +34,10 @@ for (const engine of ['docker', 'podman']) test(`${engine} deployment pins image
   const up = calls.find(([, args]) => args.includes('up'));
   assert.ok(up[1].includes('--no-build') && up[1].includes('--no-deps'));
   assert.equal(up[1][up[1].indexOf('--env-file') + 1], '/dev/null');
+  if (engine === 'podman') {
+    assert.equal(up[1][up[1].indexOf('--in-pod') + 1], 'false');
+    assert.equal(override.services.backend.userns_mode, 'keep-id:uid=1000,gid=1000');
+  } else assert.ok(!up[1].includes('--in-pod'));
   assert.ok(!calls.some(([, args]) => args.some(arg => ['build', 'down', 'rm', '--volumes'].includes(arg))));
   stopped = true;
   await d.resume(images);
