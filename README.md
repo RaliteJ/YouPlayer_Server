@@ -115,10 +115,6 @@ Voir [INSTALL.md](INSTALL.md) pour les prérequis et la configuration.
 un clone Git ne contient pas le manifeste signé `youplayer-release.json`.
 Ne conservez pas une installation active dans `/tmp`.
 
-`install.sh` doit être lancé depuis cette archive, dans un dossier permanent :
-un clone Git ne contient pas le manifeste signé `youplayer-release.json`.
-Ne conservez pas une installation active dans `/tmp`.
-
 Dans **Admin → Intégrations → Version du serveur**, cliquez sur **Vérifier les
 nouvelles releases**, puis **Installer la version**. Le service installé sur l’hôte
 vérifie la signature et les empreintes, remplace les images et contrôle leur santé.
