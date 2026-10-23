@@ -107,8 +107,13 @@ Lisez [AGENTS.md](AGENTS.md) avant de modifier le projet. Utilisez des exemples 
 
 Téléchargez l’archive `youplayer-install.tar.gz` d’une release officielle puis lancez
 `./install.sh podman` (ou `./install.sh docker`). Les images AMD64/ARM64 contiennent
-les dépendances npm validées : aucune compilation ni commande npm n’est nécessaire
-sur le serveur installé. Voir [INSTALL.md](INSTALL.md) pour les prérequis et la configuration.
+les dépendances npm validées. L’archive fournit aussi le service hôte autonome :
+aucun Node.js, npm, Go ou compilation n’est nécessaire sur le serveur installé.
+Voir [INSTALL.md](INSTALL.md) pour les prérequis et la configuration.
+
+`install.sh` doit être lancé depuis cette archive, dans un dossier permanent :
+un clone Git ne contient pas le manifeste signé `youplayer-release.json`.
+Ne conservez pas une installation active dans `/tmp`.
 
 `install.sh` doit être lancé depuis cette archive, dans un dossier permanent :
 un clone Git ne contient pas le manifeste signé `youplayer-release.json`.

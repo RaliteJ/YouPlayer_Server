@@ -22,6 +22,11 @@ admin et bénéficient du contrôle d’origine du serveur. Le navigateur ne cho
 ni une commande, ni une URL, ni une image : il transmet l’identifiant de la version
 qui vient d’être vérifiée. Cette proposition expire après trente minutes.
 
+Le service est l’exécutable autonome `bin/youplayer-host-linux-amd64` ou
+`bin/youplayer-host-linux-arm64`, construit en Go sans bibliothèque dynamique.
+Node reste dans l’image backend ; aucun interpréteur Node ni compilateur Go
+n’est nécessaire sur l’hôte. Le verrou est pris directement par l’exécutable.
+
 Le service vérifie le manifeste Ed25519 avec `keys/release-public-key.pem`, le tag,
 la séquence, la plateforme et les dépôts GHCR autorisés. Les images sont référencées
 par digest SHA-256. Il refuse les versions plus anciennes, les tags modifiés, les
@@ -92,6 +97,21 @@ une archive d’installation par liste d’autorisation et publie :
 - `youplayer-install.tar.gz` : installateur, Compose, clé publique et service ;
 - `SHA256SUMS` : checksum de l’archive.
 
+La CI teste aussi le service Go sur Linux AMD64 et ARM64. Le packaging compile
+les deux exécutables avec `CGO_ENABLED=0` et les inclut dans l’archive commune.
+Les scripts Node de signature et packaging restent des outils de développement.
+Pour vérifier et compiler localement (Go 1.26.2) :
+
+```bash
+(cd host && go test -race ./...)
+bash scripts/build-host.sh
+```
+
+Ces commandes ne produisent pas à elles seules une release signée et ne lancent
+pas d’installation. Le service hôte et le Compose ne se mettent pas à jour via
+les images : une installation antérieure utilisant Node doit faire l’objet d’une
+migration explicite, avec conservation de `.env`, de l’état et des volumes.
+
 La distribution n’embarque ni `.env`, ni données, ni médias, ni clé privée, ni journaux.
 La première publication et l’installation sur une machine vierge doivent être
 vérifiées avant d’annoncer une version prête pour les utilisateurs. Un test local
@@ -116,8 +136,9 @@ podman-compose --env-file .env -p youplayer-server up -d --no-build
 ```
 
 Arrêter à la première erreur. Si les sources sont modifiées, utiliser
-`YOUPLAYER_BUILD_COMMIT=unknown`. Pour les anciennes versions de Podman Compose qui
-réinterprètent les `$`, utiliser `composeEnvironment()` de `scripts/release-host.mjs`
-et `--env-file /dev/null`, comme le service. Les installations Docker existantes
+`YOUPLAYER_BUILD_COMMIT=unknown`. Les anciennes versions de Podman Compose peuvent
+réinterpréter les `$` des mots de passe : le service autonome charge les valeurs
+littéralement et passe `--env-file /dev/null`. Ne pas charger `.env` avec `source`
+pour contourner ce problème. Les installations Docker existantes
 conservent leur Compose adapté et leur projet. Ne jamais lancer une stack neuve
 sur leurs données pour tenter une migration.

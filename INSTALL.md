@@ -6,7 +6,9 @@ Cette procédure concerne une **première installation**, dans un dossier perman
 
 ## Prérequis
 
-- Linux avec systemd, Bash, `flock` et Node.js >= 22.12. npm n’est pas requis.
+- Linux AMD64 ou ARM64 avec systemd et Bash. Node.js, npm et Go ne sont pas requis
+  sur l’hôte : l’archive contient les exécutables autonomes des deux architectures.
+- Les certificats racines du système (`ca-certificates`) pour vérifier HTTPS.
 - Soit Podman rootless et `podman-compose`, soit Docker Engine système et le plugin
   `docker compose`, accessibles au compte utilisateur. Docker rootless n’est pas
   pris en charge par cet installateur ; utiliser Podman pour une installation rootless.
@@ -66,13 +68,25 @@ systemctl --user restart youplayer-updates.service
 
 Conserver `.env`, `.updates/host/`, `keys/`, `src/playlists/`, `src/local_song/`, les
 scripts de l’installation et les volumes des comptes, sessions et certificats.
-Ne pas déplacer le dossier sans adapter le service systemd. Le backend ne monte
+Les installations dans `/tmp`, `/var/tmp` et `/run` sont refusées : le service doit
+retrouver son exécutable après un redémarrage. Ne pas déplacer le dossier sans
+adapter le service systemd. Le backend ne monte
 que les demandes et les statuts du service ; il n’a accès ni au socket Docker/Podman,
 ni à la configuration privée de l’updater.
 
 Si l’installation échoue après le démarrage, elle conserve les données. Ne pas
 supprimer les volumes pour la relancer. Examiner l’état et le diagnostic local
 `.updates/host/last-command.log` ; voir [UPDATES.md](UPDATES.md). Ces journaux sont privés.
+
+Un dossier neuf sur le même compte ne constitue pas une machine vierge : les
+conteneurs, volumes et le service systemd sont communs à ce compte. Le refus
+d’installation précise si un fichier d’état ou une unité existe déjà. Examiner
+ces ressources avant de reprendre ; ne pas effacer les volumes pour contourner
+le refus. Le journal peut être absent si aucune commande externe n’a échoué.
+
+Une ancienne installation avec un service Node conserve ce service. Installer une
+nouvelle archive par-dessus n’effectue pas de migration. Conserver son Node tant
+que son unité systemd n’a pas été migrée et sa récupération vérifiée.
 
 Avec Podman, les services sont lancés avec `--in-pod false` : le mode utilisateur
 `keep-id` du backend est incompatible avec un pod partagé. Si une ancienne archive

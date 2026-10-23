@@ -5,7 +5,8 @@
 !.gitignore
 !server/
 !server/release-channel.test.js
-!server/release-deployment.test.js
+!server/install.test.js
+!server/host-archive.test.js
 !server/release-service.test.js
 !fixtures/
 !fixtures/release.mjs

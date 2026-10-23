@@ -15,6 +15,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  host:
+    name: Service hôte autonome Linux
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.2'
+          cache: false
+      - name: Installer le parseur Compose pour les tests de configuration
+        run: sudo apt-get update && sudo apt-get install -y podman podman-compose
+      - name: Tester signatures, installation, déploiement et récupération
+        working-directory: host
+        run: go test -race ./...
+      - name: Compiler les exécutables sans dépendance dynamique
+        run: bash scripts/build-host.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Vérifier l'archive réelle et l'interopérabilité des signatures
+        run: YOUPLAYER_TEST_HOST_ARCHIVE=true node --test test/server/host-archive.test.js
+      - name: Vérifier le lancement sans Node ni npm
+        run: |
+          case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+          env -i PATH=/nonexistent "$(pwd)/bin/youplayer-host-linux-$arch" version
   tests:
     name: Tests Node et Chromium
     runs-on: ubuntu-24.04
@@ -40,8 +70,6 @@ jobs:
         run: printf 'PUPPETEER_CACHE_DIR=%s/youplayer-puppeteer\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Installer les dependances Node
         run: npm ci
-      - name: Installer les outils de validation de l'installateur
-        run: sudo apt-get update && sudo apt-get install -y python3-yaml python3-dotenv podman-compose
       - name: Installer Chrome et ses dependances systeme
         run: |
           sudo env "PATH=$PATH" "PUPPETEER_CACHE_DIR=$PUPPETEER_CACHE_DIR" ./node_modules/.bin/puppeteer browsers install chrome --install-deps
