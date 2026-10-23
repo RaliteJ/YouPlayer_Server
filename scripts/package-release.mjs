@@ -9,9 +9,7 @@ import { validateManifest, verifyManifest, PLATFORMS } from './release-channel.m
 
 export const installerFiles = [
   'install.sh', 'docker-compose.release.yml', 'INSTALL.md', 'UPDATES.md', 'keys/release-public-key.pem',
-  'scripts/install-release.mjs', 'scripts/release-host.mjs', 'scripts/release-channel.mjs',
-  'scripts/release-deployment.mjs', 'scripts/release-service.mjs',
-  'src/package.json', 'src/server/config.js', 'src/server/release-control.js'
+  'bin/youplayer-host-linux-amd64', 'bin/youplayer-host-linux-arm64'
 ];
 
 export async function packageRelease({ root, output, manifest, privateKey }) {
@@ -31,7 +29,7 @@ export async function packageRelease({ root, output, manifest, privateKey }) {
       const destination = path.join(stage, file);
       await fs.mkdir(path.dirname(destination), { recursive: true });
       await fs.copyFile(source, destination);
-      await fs.chmod(destination, file === 'install.sh' ? 0o755 : 0o644);
+      await fs.chmod(destination, file === 'install.sh' || file.startsWith('bin/') ? 0o755 : 0o644);
     }
     const metadata = JSON.stringify(envelope) + '\n';
     await fs.writeFile(path.join(stage, 'youplayer-release.json'), metadata);

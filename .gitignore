@@ -25,6 +25,8 @@ src/.env.*
 
 # Configuration, cles et artefacts locaux
 .test-tmp/
+bin/youplayer-host-linux-*
+host/.installer-*/
 src/.dependency-audit-lock.tmp
 *.log
 *.key

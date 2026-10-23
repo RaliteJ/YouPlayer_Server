@@ -47,6 +47,13 @@ test('installer archive uses an explicit allowlist and verifies its signing key'
   await packageRelease({ root, output, manifest: manifest(), privateKey });
   const files = execFileSync('tar', ['-tzf', path.join(output, 'youplayer-install.tar.gz')], { encoding: 'utf8' }).trim().split('\n');
   assert.deepEqual(files.sort(), [...installerFiles, 'youplayer-release.json'].sort());
+  assert.ok(!files.some(file => /\.(mjs|js)$/.test(file)));
+  const extracted = path.join(root, 'extracted');
+  await fs.mkdir(extracted);
+  execFileSync('tar', ['-xzf', path.join(output, 'youplayer-install.tar.gz'), '-C', extracted]);
+  for (const arch of ['amd64', 'arm64']) {
+    assert.equal((await fs.stat(path.join(extracted, `bin/youplayer-host-linux-${arch}`))).mode & 0o777, 0o755);
+  }
   assert.equal(verifyManifest(JSON.parse(await fs.readFile(path.join(output, 'youplayer-release.json'))), publicKey).version, 'v1.0.0');
   await assert.rejects(packageRelease({ root, output, manifest: manifest(), privateKey }), { code: 'EEXIST' });
 });

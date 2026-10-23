@@ -1,4 +1,4 @@
-import { promises as fs, constants } from 'node:fs';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -22,18 +22,6 @@ export async function writeReleaseJson(file, value) {
     const directory = await fs.open(path.dirname(file), 'r');
     try { await directory.sync(); } finally { await directory.close(); }
   } finally { await fs.rm(temporary, { force: true }); }
-}
-
-export async function readReleaseJob(file) {
-  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > 1024) throw new Error('Invalid request');
-    const job = JSON.parse(await handle.readFile('utf8'));
-    if (!/^[a-f0-9-]{36}$/.test(job.id || '') || !['check', 'install'].includes(job.action)
-      || job.action === 'install' && !/^[a-f0-9]{64}$/.test(job.candidateId || '')) throw new Error('Invalid request');
-    return job;
-  } finally { await handle.close(); }
 }
 
 export function createReleaseControl({ requestsDirectory = process.env.YOUPLAYER_UPDATE_REQUESTS_DIR,
