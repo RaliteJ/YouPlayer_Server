@@ -27,7 +27,7 @@ body.management-only .player-controls,
 body.management-only .now-playing-overlay,
 body.management-only .queue-drawer,
 body.management-only .queue-drawer-overlay,
-body.management-only #view-parametres .settings-list > :not(#password-change-form) {
+body.management-only #view-parametres .settings-list > :not(#password-change-form):not(#source-code-panel) {
   display: none !important;
 }
 

@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { validateManifest, verifyManifest, PLATFORMS } from './release-channel.mjs';
 
 export const installerFiles = [
-  'install.sh', 'docker-compose.release.yml', 'INSTALL.md', 'UPDATES.md', 'keys/release-public-key.pem',
+  'install.sh', 'docker-compose.release.yml', 'INSTALL.md', 'UPDATES.md', 'LICENSE', 'keys/release-public-key.pem',
   'bin/youplayer-host-linux-amd64', 'bin/youplayer-host-linux-arm64'
 ];
 

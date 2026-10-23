@@ -47,6 +47,7 @@ test('installer archive uses an explicit allowlist and verifies its signing key'
   await packageRelease({ root, output, manifest: manifest(), privateKey });
   const files = execFileSync('tar', ['-tzf', path.join(output, 'youplayer-install.tar.gz')], { encoding: 'utf8' }).trim().split('\n');
   assert.deepEqual(files.sort(), [...installerFiles, 'youplayer-release.json'].sort());
+  assert.ok(!files.some(file => file.startsWith('images/')));
   assert.ok(!files.some(file => /\.(mjs|js)$/.test(file)));
   const extracted = path.join(root, 'extracted');
   await fs.mkdir(extracted);
