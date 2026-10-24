@@ -85,6 +85,40 @@ test('a failed playlist selection does not discard a queued track addition', asy
 	assert.equal(app.queueEditPromise, null);
 });
 
+test('failed Spotify startup waits for the same cached track instead of skipping it', async () => {
+	const { app, calls } = playerHarness();
+	app.currentId = 7;
+	app.lastPlaybackState = { current: { type: 'spotify' } };
+	app.waitForTrackReady = async (id, timeout, { isCurrent }) => {
+		assert.equal(id, 7);
+		assert.equal(isCurrent(), true);
+		return '/play/7';
+	};
+	app.loadAndPlayMainSource = async path => { calls.push(path); return true; };
+	await app.handleSpecialStreamError();
+	assert.deepEqual(calls, ['/play/7']);
+	assert.equal(app.currentId, 7);
+	assert.equal(app.spotifyStreamRecovery, null);
+});
+
+test('Spotify recovery does not replace a track selected while waiting', async () => {
+	const { app, calls } = playerHarness();
+	app.currentId = 7;
+	app.lastPlaybackState = { current: { type: 'spotify' } };
+	app.waitForTrackReady = async () => { app.currentId = 8; return '/play/7'; };
+	await app.handleSpecialStreamError();
+	assert.deepEqual(calls, []);
+});
+
+test('exhausted Spotify recovery advances only after the same-track download fails', async () => {
+	const { app, calls } = playerHarness();
+	app.currentId = 7;
+	app.lastPlaybackState = { current: { type: 'spotify' } };
+	app.waitForTrackReady = async () => null;
+	await app.handleSpecialStreamError();
+	assert.deepEqual(calls, ['play:1']);
+});
+
 for (const reason of ['ended', 'manual', 'media-session', 'error']) {
 	test(`special-to-normal ${reason} starts without waiting for stop response`, async () => {
 		const { app, calls, requests } = playerHarness();

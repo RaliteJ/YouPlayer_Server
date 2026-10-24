@@ -169,16 +169,27 @@ export async function download_spotify(arg, sessionID, song = {}, {
 	resolveTrack = resolveMusicTrack, downloadYoutube = download_youtube
 } = {}){
 	logger.debug("Argument recu: download_spotify", arg[1]);
-	const data1 = await resolveTrack(song);
-	const finalYoutubeUrl = getYoutubeUrlFromSpotifyTrack(data1);
-	logger.debug("URL YouTube récupérée pour Spotify");
-	const result = await downloadYoutube([finalYoutubeUrl, arg[1]], sessionID);
-	try {
-		await updatePlaylistTrack(song, data1);
-	} catch (err) {
-		logger.error("Téléchargement OK, mais mise à jour playlist échouée:", err.message);
+	const excludeIds = [];
+	for (let attempt = 0; attempt < 3; attempt++) {
+		const track = await resolveTrack(song, { excludeIds: [...excludeIds] });
+		const source = getYoutubeUrlFromSpotifyTrack(track);
+		if (!source || excludeIds.includes(source)) throw new Error('Aucune autre correspondance musicale fiable');
+		let result;
+		try {
+			result = await downloadYoutube([source, arg[1]], sessionID);
+		} catch (err) {
+			excludeIds.push(source);
+			if (attempt === 2) throw err;
+			logger.warn('Source Spotify indisponible, essai d’une autre correspondance YouTube');
+			continue;
+		}
+		try {
+			await updatePlaylistTrack(song, track);
+		} catch (err) {
+			logger.error("Téléchargement OK, mais mise à jour playlist échouée:", err.message);
+		}
+		return result;
 	}
-	return result;
 }
 
 export async function download_youtube(arg, sessionID) {

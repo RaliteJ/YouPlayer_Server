@@ -95,6 +95,73 @@ test('the main performer is required when several artists are listed', () => {
 	assert.equal(selectMusicMatch(duet, [candidate()]).videoId, 'correct0001');
 });
 
+test('double-slash video titles and explicit featuring keep the main artist identity', () => {
+	const track = { title: 'Titre test', artist: 'Jul, Invité', duration_ms: 180000 };
+	for (const title of ['JUL // Titre test (Clip Officiel)', 'JUL feat. Invité - Titre test']) {
+		const video = { videoId: 'correct0001', title, seconds: 180 };
+		assert.equal(selectMusicMatch(track, [video]), video);
+		assert.equal(selectMusicMatch(track, [{ ...video, seconds: 300 }]), null);
+	}
+	assert.equal(selectMusicMatch(track, [{ videoId: 'correct0001', title: 'Invité // Titre test', seconds: 180 }]), null);
+});
+
+test('excluded catalog candidates allow another verified video without reusing the failed source', async () => {
+	const options = {
+		excludeIds: ['correct0001'],
+		getMusicClient: async () => ({ searchSongs: async () => [candidate()] }),
+		searchVideos: async () => ({ videos: [candidate(), candidate({ videoId: 'other000001' })] })
+	};
+	assert.equal((await searchMusicTrack(song, options)).videoId, 'other000001');
+	assert.equal(await searchMusicTrack(song, { ...options, excludeIds: ['correct0001', 'other000001'] }), null);
+});
+
+test('retry resolution bypasses a cached failed source and validates exclusions', async () => {
+	const track = { ...song, title: 'Excluded cache test' };
+	const searchTrack = async (_, { excludeIds }) => candidate({
+		name: track.title, videoId: excludeIds.length ? 'other000001' : 'correct0001'
+	});
+	assert.equal((await resolveMusicTrack(track, { searchTrack })).id, 'correct0001');
+	assert.equal((await resolveMusicTrack(track, { searchTrack, excludeIds: ['correct0001'] })).id, 'other000001');
+	await assert.rejects(resolveMusicTrack(track, {
+		excludeIds: ['correct0001'], searchTrack: async () => candidate({ name: track.title })
+	}), /Aucune correspondance/);
+});
+
+test('Spotify retries another source for the same track and destination before skipping', async () => {
+	const attempts = [];
+	const result = await download_spotify(['spotify-url', 'destination'], 'session', song, {
+		resolveTrack: async (track, { excludeIds }) => {
+			assert.equal(track, song);
+			return { ...track, id: excludeIds.length ? 'other000001' : 'correct0001' };
+		},
+		downloadYoutube: async (args, session) => {
+			attempts.push({ args, session });
+			if (args[0] === 'correct0001') throw new Error('Video unavailable');
+			return 'downloaded';
+		}
+	});
+	assert.equal(result, 'downloaded');
+	assert.deepEqual(attempts, [
+		{ args: ['correct0001', 'destination'], session: 'session' },
+		{ args: ['other000001', 'destination'], session: 'session' }
+	]);
+});
+
+test('Spotify retries are bounded and never download the same failed source twice', async () => {
+	let downloads = 0;
+	await assert.rejects(download_spotify(['url', 'destination'], 'session', song, {
+		resolveTrack: async (_, { excludeIds }) => ({ id: `video00000${excludeIds.length}` }),
+		downloadYoutube: async () => { downloads++; throw new Error('Unavailable'); }
+	}), /Unavailable/);
+	assert.equal(downloads, 3);
+	downloads = 0;
+	await assert.rejects(download_spotify(['url', 'destination'], 'session', song, {
+		resolveTrack: async () => ({ id: 'correct0001' }),
+		downloadYoutube: async () => { downloads++; throw new Error('Unavailable'); }
+	}), /Aucune autre correspondance/);
+	assert.equal(downloads, 1);
+});
+
 test('unsafe identifiers and tracks without identity are never accepted', () => {
 	assert.equal(selectMusicMatch(song, [candidate({ videoId: 'https://example.test' })]), null);
 	assert.equal(selectMusicMatch({ title: song.title }, [candidate()]), null);

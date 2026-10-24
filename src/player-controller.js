@@ -260,6 +260,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
 
     async handleMainAudioError() {
         if (!this.lecteur?.currentSrc || this.currentId == null) return;
+        if (this.spotifyStreamRecovery?.trackId === this.currentId) return;
         if (this.nextSongLoading) {
             this.logNextDiagnostic('AUDIO_ERROR_DEFERRED_TO_TRANSITION', {
                 trackId: this.currentId,
@@ -816,6 +817,24 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.logNextDiagnostic('SPECIAL_ERROR_HANDLER_START', {
             streamId: this.currentSpecialStream.id
         }, true);
+        if (this.lastPlaybackState?.current?.type === 'spotify' && this.currentId != null) {
+            const recovery = { trackId: this.currentId };
+            this.spotifyStreamRecovery = recovery;
+            const isCurrent = () => this.spotifyStreamRecovery === recovery
+                && this.currentId === recovery.trackId && !this.currentSpecialStream && !this.userPausedAudio;
+            void this.stopSpecialPlayback('source_error', { preserveAudio: true });
+            this.showNotice('Recherche d’une autre source pour ce morceau…');
+            try {
+                const path = await this.waitForTrackReady(recovery.trackId, 120000, { silent: true, isCurrent });
+                if (!isCurrent()) return;
+                if (path && await this.loadAndPlayMainSource(path, {
+                    trigger: 'spotify-stream-recovery', nextTrackId: recovery.trackId
+                })) return;
+                if (!isCurrent() || this.lastPlayRejection?.name === 'NotAllowedError') return;
+            } finally {
+                if (this.spotifyStreamRecovery === recovery) this.spotifyStreamRecovery = null;
+            }
+        }
         this.showNotice('Le flux du premier titre a échoué. Passage au titre suivant.', true);
         await this.advanceToNextSong('error');
     },
