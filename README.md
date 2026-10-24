@@ -33,6 +33,10 @@ ne garantit pas qu'une source audio correspondante sera trouvée.
 <details>
 <summary>Voir les autres écrans</summary>
 
+### Connexion
+
+![Connexion à YouPlayer](images/page_auth)
+
 ### Recherche YouTube
 
 ![Recherche YouTube](images/youtube.png)
@@ -40,6 +44,10 @@ ne garantit pas qu'une source audio correspondante sera trouvée.
 ### Recherche Spotify
 
 ![Recherche Spotify](images/spotify.png)
+
+### Fiche artiste Spotify
+
+![Fiche artiste Spotify](images/jul.png)
 
 ### Lecture en cours
 
@@ -52,6 +60,18 @@ ne garantit pas qu'une source audio correspondante sera trouvée.
 ### Paramètres utilisateur
 
 ![Paramètres utilisateur](images/pram_user.png)
+
+### Intégrations administrateur
+
+![Intégrations administrateur](images/intégration.png)
+
+### Gestion des comptes
+
+![Gestion des comptes](images/comtpes.png)
+
+### Sécurité des dépendances
+
+![Sécurité des dépendances](images/securite.png)
 
 </details>
 
