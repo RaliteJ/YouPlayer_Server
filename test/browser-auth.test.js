@@ -1250,6 +1250,10 @@ test('admin account forms create a user and reset its password without exposing 
 		await page.evaluate(() => window.fixtureApp.loadView('parametres'));
 		assert.equal(await page.$eval('#spotify-settings-panel', el => el.getBoundingClientRect().width), 0);
 		assert.ok(await page.$eval('#password-change-form', el => el.getBoundingClientRect().width) > 0);
+		assert.deepEqual(await page.$eval('#source-code-panel a', link => ({
+			href: link.href,
+			visible: link.getBoundingClientRect().width > 0
+		})), { href: 'https://github.com/RaliteJ/YouPlayer_Server', visible: true });
 		await page.setViewport({ width: 1280, height: 844 });
 		await page.evaluate(() => window.fixtureApp.loadView('admin'));
 		await page.click('#admin-tab-accounts');
@@ -1278,6 +1282,8 @@ test('admin account forms create a user and reset its password without exposing 
 		await page.$eval('#login-form', form => form.requestSubmit());
 		await page.waitForFunction(() => !document.body.classList.contains('auth-required'));
 		assert.equal(await page.$eval('.nav-admin', link => link.hidden), true);
+		await page.evaluate(() => window.fixtureApp.loadView('parametres'));
+		assert.ok(await page.$eval('#source-code-panel a', link => link.getBoundingClientRect().width) > 0);
 		await page.evaluate(() => window.fixtureApp.loadView('admin'));
 		assert.equal(await page.$eval('#view-admin', view => view.classList.contains('active')), false);
 	} finally {
