@@ -35,7 +35,7 @@ ne garantit pas qu'une source audio correspondante sera trouvée.
 
 ### Connexion
 
-![Connexion à YouPlayer](images/page_auth)
+![Connexion à YouPlayer](images/connexion.png)
 
 ### Recherche YouTube
 
@@ -63,11 +63,11 @@ ne garantit pas qu'une source audio correspondante sera trouvée.
 
 ### Intégrations administrateur
 
-![Intégrations administrateur](images/intégration.png)
+![Intégrations administrateur](images/integrations.png)
 
 ### Gestion des comptes
 
-![Gestion des comptes](images/comtpes.png)
+![Gestion des comptes](images/comptes.png)
 
 ### Sécurité des dépendances
 
