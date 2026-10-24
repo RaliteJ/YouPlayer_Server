@@ -26,6 +26,10 @@ function cleanArtist(value) {
 	return normalize(String(value || '').replace(/(?:\s*-\s*topic|\s*vevo|\s+official)\s*$/i, ''));
 }
 
+function mainArtist(value) {
+	return cleanArtist(String(value || '').split(/,\s*|\s+(?:feat\.?|ft\.?|featuring)\s+/i)[0]);
+}
+
 function similarity(a, b) {
 	if (!a || !b) return 0;
 	if (a === b) return 1;
@@ -49,7 +53,7 @@ function variants(value) {
 export function selectMusicMatch(song, results = []) {
 	const title = normalize(cleanTitle(song.title || song.name));
 	const fullArtist = cleanArtist(song.artist);
-	const artists = [fullArtist, cleanArtist(String(song.artist || '').split(/,\s*/)[0])].filter(Boolean);
+	const artists = [fullArtist, mainArtist(song.artist)].filter(Boolean);
 	if (!title || !artists.length) return null;
 	let best = null;
 	let bestScore = 0;
@@ -59,10 +63,10 @@ export function selectMusicMatch(song, results = []) {
 		const candidateArtists = [result.artist?.name, result.author?.name].filter(Boolean);
 		// YouTube videos often put the performer in the title, rather than in
 		// the channel name. Only a separated performer/title pair is accepted.
-		const parts = candidateTitle.split(/\s+[-–—|]\s+/);
+		const parts = candidateTitle.split(/\s+(?:[-–—|]|\/\/)\s+/);
 		if (parts.length > 1) {
 			for (const index of [0, parts.length - 1]) {
-				if (artists.includes(cleanArtist(parts[index]))) {
+				if (artists.includes(mainArtist(parts[index]))) {
 					candidateArtists.push(parts[index]);
 					candidateTitle = parts.filter((_, i) => i !== index).join(' - ');
 					break;
@@ -74,7 +78,7 @@ export function selectMusicMatch(song, results = []) {
 		if ((title.match(/\d+/g) || []).join('|') !== (normalizedTitle.match(/\d+/g) || []).join('|')) continue;
 		const titleScore = similarity(title, normalizedTitle);
 		const artistScore = Math.max(0, ...candidateArtists.flatMap(candidate =>
-			artists.map(artist => similarity(artist, cleanArtist(candidate)))));
+			artists.map(artist => similarity(artist, mainArtist(candidate)))));
 		if (titleScore < 0.88 || artistScore !== 1) continue;
 		const duration = Number(song.duration_ms) / 1000;
 		const candidateDuration = Number(result.duration ?? result.seconds);
@@ -119,32 +123,37 @@ export async function searchYoutubeVideos(query, { execFileImpl = execFileAsync 
 	};
 }
 
-export async function searchMusicTrack(song, { getMusicClient = musicClient, searchVideos = searchYoutubeVideos } = {}) {
+export async function searchMusicTrack(song, { getMusicClient = musicClient, searchVideos = searchYoutubeVideos, excludeIds = [] } = {}) {
 	const query = [song.artist, song.title || song.name].filter(Boolean).join(' - ');
+	const eligible = results => results.filter(result => !excludeIds.includes(result.videoId));
 	try {
 		const client = await getMusicClient();
-		const match = selectMusicMatch(song, await client.searchSongs(query));
+		const match = selectMusicMatch(song, eligible(await client.searchSongs(query)));
 		if (match) return match;
 	} catch {
 		// The fallback is subject to the same identity checks.
 	}
 	try {
-		return selectMusicMatch(song, (await searchVideos(query)).videos || []);
+		return selectMusicMatch(song, eligible((await searchVideos(query)).videos || []));
 	} catch {
 		throw new Error('Recherche musicale indisponible');
 	}
 }
 
-export async function resolveMusicTrack(song = {}, { searchTrack = searchMusicTrack, useCache = true } = {}) {
+export async function resolveMusicTrack(song = {}, { searchTrack = searchMusicTrack, useCache = true, excludeIds = [] } = {}) {
 	if (!String(song.title || song.name || '').trim() || !String(song.artist || '').trim()) {
 		throw new Error('Titre et artiste requis pour la correspondance musicale');
 	}
 	const key = JSON.stringify([song.title || song.name, song.artist, song.album || '', song.duration_ms || 0]);
+	if (excludeIds.length) {
+		if (excludeIds.includes(cache.get(key)?.id)) cache.delete(key);
+		useCache = false;
+	}
 	if (useCache && cache.get(key)?.expiresAt > Date.now()) return { ...song, id: cache.get(key).id };
 	if (useCache && pending.has(key)) return { ...song, id: await pending.get(key) };
 	const task = (async () => {
-		const match = await searchTrack(song);
-		if (!match || !selectMusicMatch(song, [match])) throw new Error('Aucune correspondance musicale fiable');
+		const match = await searchTrack(song, { excludeIds });
+		if (!match || excludeIds.includes(match.videoId) || !selectMusicMatch(song, [match])) throw new Error('Aucune correspondance musicale fiable');
 		const id = match.videoId;
 		if (useCache) {
 			cache.delete(key);
