@@ -160,25 +160,29 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         }
     },
 
-    bindAudioEvents() {
-        if (!this.lecteur || this.audioEventsBound) return;
-        this.audioEventsBound = true;
+    bindAudioEvents(audio = this.lecteur) {
+        if (!audio) return;
+        this.audioEventPlayers ||= new WeakSet();
+        if (this.audioEventPlayers.has(audio)) return;
+        this.audioEventPlayers.add(audio);
 
-        const eventsSuppressed = () => this.suppressMainPlayerEvents || this.suppressSpecialPlayerEvents;
+        const eventsSuppressed = () => audio !== this.lecteur
+            || this.suppressMainPlayerEvents || this.suppressSpecialPlayerEvents;
         const playerRole = () => this.currentSpecialStream ? 'special-stream-player' : 'main-player';
 
-        this.lecteur.addEventListener('loadstart', () => {
+        audio.addEventListener('loadstart', () => {
             if (eventsSuppressed()) return;
             this.playerState.loading = true;
             this.renderPlayerTransport();
             console.debug('[Player] loading', this.currentId);
         });
-        this.lecteur.addEventListener('loadedmetadata', () => this.syncStateFromAudio(true));
-        this.lecteur.addEventListener('canplay', () => {
+        audio.addEventListener('loadedmetadata', () => { if (!eventsSuppressed()) this.syncStateFromAudio(true); });
+        audio.addEventListener('canplay', () => {
+            if (eventsSuppressed()) return;
             this.playerState.loading = false;
             this.syncStateFromAudio(true);
         });
-        this.lecteur.addEventListener('playing', () => {
+        audio.addEventListener('playing', () => {
             if (eventsSuppressed()) return;
             if (this.sleepTimer?.check()) {
                 this.crossfade?.cancel();
@@ -195,8 +199,8 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             this.syncStateFromAudio(true);
             console.debug('[Player] playing', this.currentId);
         });
-        this.lecteur.addEventListener('pause', () => {
-            const pauseDiagnostic = this.logObservedPause(this.lecteur, playerRole());
+        audio.addEventListener('pause', () => {
+            const pauseDiagnostic = this.logObservedPause(audio, playerRole());
             if (eventsSuppressed()) return;
             this.playerState.playing = false;
             this.updateMediaPlaybackState(this.lecteur.ended ? 'none' : 'paused');
@@ -209,7 +213,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             this.renderPlayerTransport();
             this.savePlaybackPosition(true);
         });
-        this.lecteur.addEventListener('ended', () => {
+        audio.addEventListener('ended', () => {
             if (eventsSuppressed()) return;
             this.playerState.playing = false;
             this.updateMediaPlaybackState('none');
@@ -221,7 +225,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 void this.advanceToNextSong('ended');
             }
         });
-        this.lecteur.addEventListener('error', () => {
+        audio.addEventListener('error', () => {
             if (eventsSuppressed()) return;
             if (this.currentSpecialStream) {
                 void this.handleSpecialStreamError();
@@ -229,20 +233,21 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 void this.handleMainAudioError();
             }
         });
-        this.lecteur.addEventListener('timeupdate', () => {
+        audio.addEventListener('timeupdate', () => {
+            if (eventsSuppressed()) return;
             this.sleepTimer?.check();
             if (this.skipNonMusic?.()) return;
             this.syncStateFromAudio();
             this.crossfade?.tick(!this.repeatTrack && !this.currentSpecialStream
                 && !this.nextSongLoading && !this.queueEditPromise, this.nextTrackPrefetch?.path);
         });
-        this.lecteur.addEventListener('waiting', () => {
+        audio.addEventListener('waiting', () => {
             if (!eventsSuppressed()) {
                 this.playerState.loading = true;
                 this.renderPlayerTransport();
             }
         });
-        this.lecteur.addEventListener('seeked', () => this.syncStateFromAudio(true));
+        audio.addEventListener('seeked', () => { if (!eventsSuppressed()) this.syncStateFromAudio(true); });
     },
 
     syncStateFromAudio(forcePositionUpdate = false) {
@@ -439,8 +444,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             this.cancelPlaybackRestore();
         }
         this.pendingPlaybackSeek = false;
-        if (context.crossfadeHandoff) this.crossfade?.beginHandoff(path);
-        else this.crossfade?.cancel();
+        this.crossfade?.cancel();
         this.handledPlaybackErrorKey = null;
         this.lastPositionStateSecond = -1;
         this.playerState.loading = true;
@@ -482,6 +486,20 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
     },
 
     async loadAndPlayMainSource(path, context = {}, maxAttempts = 2) {
+        const incoming = context.crossfadeHandoff ? this.crossfade?.take(path) : null;
+        if (incoming) {
+            this.cancelPlaybackRestore();
+            this.pendingPlaybackSeek = false;
+            this.lecteur = incoming;
+            this.specialPlayer = incoming;
+            this.handledPlaybackErrorKey = null;
+            this.consecutivePlaybackErrors = 0;
+            this.playerState.loading = false;
+            this.updateMediaPlaybackState('playing');
+            this.syncStateFromAudio(true);
+            this.markRecentBackgroundAutoStart(incoming, context);
+            return true;
+        }
         for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
             const candidatePath = this.mediaPathForRetry(path, attempt);
             this.setMainAudioSource(candidatePath, {
@@ -562,8 +580,8 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         return data;
     },
 
-    clearNextTrackPrefetch({ preserveHandoff = false } = {}) {
-        this.crossfade?.clear({ preserveHandoff });
+    clearNextTrackPrefetch() {
+        this.crossfade?.clear();
         this.prefetchGeneration += 1;
         this.nextTrackPrefetch = null;
         this.nextTrackPrefetchPromise = null;
@@ -573,7 +591,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         const nextTrack = Array.isArray(queue) ? queue[0] : null;
         const nextTrackId = nextTrack?.__sessionIndex;
         if (!Number.isInteger(nextTrackId)) {
-            this.clearNextTrackPrefetch({ preserveHandoff: true });
+            this.clearNextTrackPrefetch();
             return null;
         }
 
@@ -585,7 +603,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             return this.nextTrackPrefetchPromise.promise;
         }
 
-        this.clearNextTrackPrefetch({ preserveHandoff: true });
+        this.clearNextTrackPrefetch();
         const generation = this.prefetchGeneration;
         const promise = (async () => {
             const readyPath = await this.waitForTrackReady(nextTrackId, 120000, { silent: true });
@@ -881,7 +899,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 nextTrackId: prefetched.trackId,
                 path: 'prefetched'
             });
-            this.clearNextTrackPrefetch({ preserveHandoff: playResolved });
+            this.clearNextTrackPrefetch();
             if (!playResolved) {
                 autoplayBlocked = this.lastPlayRejection?.name === 'NotAllowedError';
                 failedTransition = !autoplayBlocked;
@@ -1030,7 +1048,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         }
         await this.syncPrefetchedTransitions();
         if (this.pendingPrefetchedTransitions.length > 0) return false;
-        this.clearNextTrackPrefetch({ preserveHandoff: true });
+        this.clearNextTrackPrefetch();
         const success = await this.apiFetch("/playlist_used", "POST", {
             arg: selectedFiles,
             preservePlayback: true,

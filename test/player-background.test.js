@@ -25,7 +25,7 @@ test('Nginx forwards account checkpoint and resume requests to the authenticated
 });
 
 test('background advancement uses one native ended listener and no duration fallback timer', () => {
-	assert.equal((appSource.match(/this\.lecteur\.addEventListener\('ended'/g) || []).length, 1);
+	assert.equal((appSource.match(/audio\.addEventListener\('ended'/g) || []).length, 1);
 	assert.match(appSource, /addEventListener\('ended',[\s\S]*advanceToNextSong\('ended'\)/);
 	assert.doesNotMatch(appSource, /scheduleNextFallback|nextFallbackTimer/);
 });

@@ -82,7 +82,6 @@ const App = {
     currentSpecialStream: null,
     suppressSpecialPlayerEvents: false,
     suppressMainPlayerEvents: false,
-    audioEventsBound: false,
     mediaSessionInitialized: false,
     lastPositionStateSecond: -1,
     mobileHeaderCondensed: false,
@@ -154,8 +153,7 @@ const App = {
         this.adminLoginEvents = document.getElementById('admin-login-events');
         this.adminAuditLogs = document.getElementById('admin-audit-logs');
         this.lecteur = document.getElementById('lecteur');
-        // Le flux spécial et les fichiers suivants partagent volontairement le
-        // même HTMLAudioElement afin de conserver une seule session média Android.
+        // Le flux spécial utilise le lecteur actif, y compris après un fondu.
         this.specialPlayer = this.lecteur;
         if (!window.YouPlayerNative?.postMessage) {
             this.crossfade = new AudioCrossfade(this.lecteur);
@@ -163,7 +161,7 @@ const App = {
             const value = document.getElementById('crossfade-duration-value');
             try {
                 const stored = localStorage.getItem('crossfade-duration');
-                this.crossfade.setDuration(stored ?? (localStorage.getItem('crossfade-enabled') === 'false' ? 0 : 3));
+                this.crossfade.setDuration(stored ?? (localStorage.getItem('crossfade-enabled') === 'false' ? 0 : 5));
             } catch {}
             const renderDuration = () => {
                 setting.value = String(this.crossfade.duration);
@@ -428,6 +426,7 @@ const App = {
             this.spotifyExplorer.init();
         }
         this.bindAudioEvents();
+        if (this.crossfade) this.bindAudioEvents(this.crossfade.nextAudio);
 
         // Fichier local : au lieu d'uploader, on ouvre la modale avec le fichier en mémoire !
         if (this.fileInput) {

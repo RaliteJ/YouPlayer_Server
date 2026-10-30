@@ -182,7 +182,7 @@ test('reopening the app restores real audio at the saved position and preserves 
 			return audio.readyState >= 1 && Math.abs(audio.currentTime - 12.5) < 0.1;
 		});
 		assert.equal(await page.$eval('#lecteur', audio => audio.paused), true);
-		assert.equal(await page.$$eval('audio', elements => elements.length), 1);
+		assert.equal(await page.$$eval('audio', elements => elements.length), 2);
 		assert.equal(requests.filter(path => path === '/resume_playback').length, 1);
 		// A formerly playing track resumes, with a real advancing media clock.
 		await page.click('#miniPlayPause');
@@ -202,7 +202,7 @@ test('reopening the app restores real audio at the saved position and preserves 
                 && audio.currentTime > 0 && saved?.position > 42.5 && saved.position < 50;
         });
         assert.equal(requests.filter(route => route === '/play_status/0').length, polls);
-        assert.equal(await page.$$eval('audio', elements => elements.length), 1);
+        assert.equal(await page.$$eval('audio', elements => elements.length), 2);
 
 	} catch (error) {
 		t.diagnostic(JSON.stringify(await page.evaluate(() => {
@@ -1426,7 +1426,7 @@ test('audio background diagnostics are opt-in and keep stable player instance id
 	page.on('console', (message) => consoleMessages.push(message.text()));
 	try {
 		await page.goto(`${baseUrl}/?audioDebug=1`, { waitUntil: 'domcontentloaded' });
-		await page.waitForFunction(() => document.querySelectorAll('audio').length === 1);
+		await page.waitForFunction(() => document.querySelectorAll('audio').length === 2);
 		const result = await page.evaluate(async () => {
 			const { App } = await import(document.querySelector('script[type="module"]').src);
 			const before = [App.lecteur, App.specialPlayer]
@@ -1589,7 +1589,7 @@ test('crossfade duration setting persists and zero disables overlap', { timeout:
 });
 
 for (const startupLag of [0, 0.25]) {
-test(`crossfade overlaps real audio and hands off once on the persistent player (lag ${startupLag}s)`, { timeout: 25000 }, async (t) => {
+test(`dual audio crossfade alternates real streaming players without reloading (lag ${startupLag}s)`, { timeout: 25000 }, async (t) => {
 	if (browserSetupError) { t.skip(`Browser test unavailable: ${browserSetupError.message}`); return; }
 	const samples = 8000 * 9;
 	const tone = Buffer.alloc(44 + samples * 2);
@@ -1608,18 +1608,19 @@ test(`crossfade overlaps real audio and hands off once on the persistent player 
 		await page.setRequestInterception(true);
 		page.on('request', request => {
 			const route = new URL(request.url()).pathname;
-			if (/^\/play\/[01]$/.test(route)) {
+			if (/^\/play\/[012]$/.test(route)) {
 				const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers().range || '');
 				const start = range ? Number(range[1]) : 0;
 				const end = range?.[2] ? Math.min(Number(range[2]), tone.length - 1) : tone.length - 1;
 				void request.respond({ status: range ? 206 : 200, contentType: 'audio/wav',
 					headers: { 'Accept-Ranges': 'bytes', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${tone.length}` } : {}) },
 					body: (route === '/play/1' ? nextTone : tone).subarray(start, end + 1) });
-			} else if (route === '/play_status/1') {
-				void request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ready', path: '/play/1' }) });
+			} else if (/^\/play_status\/[12]$/.test(route)) {
+				void request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ready', path: `/play/${route.split('/').pop()}` }) });
 			} else if (route === '/prefetched_next') {
 				transitions++;
-				void request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ currentId: 1, current: { title: 'Fixture B' }, queue: [] }) });
+				const id = JSON.parse(request.postData()).expectedTrackId;
+				void request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ currentId: id, current: { title: `Fixture ${id}` }, queue: id === 1 ? [{ __sessionIndex: 2, title: 'Fixture C' }] : [] }) });
 			} else void request.continue();
 		});
 		await page.goto(baseUrl, { waitUntil: 'networkidle0' });
@@ -1627,86 +1628,92 @@ test(`crossfade overlaps real audio and hands off once on the persistent player 
 			const { App } = await import(document.querySelector('script[type="module"]').src);
 			window.fixtureApp = App;
 			window.originalAudio = App.lecteur;
-			App.lecteur.addEventListener('loadedmetadata', () => {
-				if (Number(App.currentId) === 1 && startupLag) App.lecteur.currentTime = Math.max(0, App.lecteur.currentTime - startupLag);
-			});
-			window.fadeEvents = [];
-			for (const event of ['ended', 'pause', 'loadedmetadata', 'playing', 'error']) {
-				App.lecteur.addEventListener(event, () => window.fadeEvents.push({ event, time: App.lecteur.currentTime,
-					handoff: App.crossfade.handoff, preview: !!App.crossfade.preview, id: App.currentId }));
+			window.incomingAudio = App.crossfade.nextAudio;
+			App.crossfade.setDuration(5);
+			if (startupLag) {
+				const play = window.incomingAudio.play.bind(window.incomingAudio);
+				window.incomingAudio.play = async () => {
+					await new Promise(resolve => setTimeout(resolve, startupLag * 1000));
+					return play();
+				};
 			}
+			window.incomingLoads = 0;
+			window.incomingAudio.addEventListener('loadedmetadata', () => window.incomingLoads++);
 			App.currentId = 0;
-			const queue = [{ __sessionIndex: 1, title: 'Fixture B' }];
+			const queue = [{ __sessionIndex: 1, title: 'Fixture B' }, { __sessionIndex: 2, title: 'Fixture C' }];
 			App.lastPlaybackState = { currentId: 0, queue };
 			await App.crossfade.unlock();
-			const analyser = App.crossfade.context.createAnalyser();
-			analyser.fftSize = 1024;
-			App.crossfade.mainGain.connect(analyser);
-			const originalTick = App.crossfade.tick.bind(App.crossfade);
-			App.crossfade.tick = (...args) => {
-				const previous = App.crossfade.preview;
-				originalTick(...args);
-				if (App.crossfade.preview && App.crossfade.preview !== previous) App.crossfade.preview.gain.connect(analyser);
-			};
-			window.handoffSamples = [];
-			const data = new Float32Array(analyser.fftSize);
-			window.handoffSampler = setInterval(() => {
-				if (Number(App.currentId) !== 1) return;
-				analyser.getFloatTimeDomainData(data);
-				window.handoffSamples.push({ time: performance.now(), rms: Math.sqrt(data.reduce((sum, v) => sum + v * v, 0) / data.length),
-					preview: !!App.crossfade.preview, finishing: App.crossfade.handoffFinishing, loading: App.nextSongLoading,
-					drift: App.crossfade.elapsed() - App.lecteur.currentTime });
-			}, 10);
+			window.fadeAnalyser = App.crossfade.context.createAnalyser();
+			window.fadeAnalyser.fftSize = 1024;
+			App.crossfade.mainGain.connect(window.fadeAnalyser);
+			App.crossfade.nextGain.connect(window.fadeAnalyser);
 			await App.prefetchUpcomingTrack(queue);
 			await App.loadAndPlayMainSource('/play/0');
 		}, startupLag);
-		await page.waitForFunction(() => window.fixtureApp.crossfade.prepared);
-		// Seeking and pausing during an overlap must silence the preview immediately.
-		await page.evaluate(() => window.fixtureApp.seekPlayer(6.1));
-		await page.waitForFunction(() => window.fixtureApp.crossfade.preview);
+		await page.waitForFunction(() => window.fixtureApp.crossfade.nextAudio.readyState >= 3);
+		await page.evaluate(() => window.fixtureApp.seekPlayer(4.1));
+		await page.waitForFunction(() => window.fixtureApp.crossfade.preview?.started);
 		const paused = await page.evaluate(() => {
 			const app = window.fixtureApp;
 			app.togglePlayback();
-			return { preview: !!app.crossfade.preview, paused: app.lecteur.paused };
+			return { preview: !!app.crossfade.preview, paused: app.lecteur.paused, nextPaused: app.crossfade.nextAudio.paused };
 		});
-		assert.deepEqual(paused, { preview: false, paused: true });
-		await page.evaluate(() => { window.fixtureApp.seekPlayer(5.5); window.fixtureApp.togglePlayback(); });
+		assert.deepEqual(paused, { preview: false, paused: true, nextPaused: true });
+		await page.evaluate(() => { window.fixtureApp.seekPlayer(4.1); window.fixtureApp.togglePlayback(); });
 		await page.waitForFunction(() => {
 			const c = window.fixtureApp.crossfade;
-			return c.preview && c.mainGain.gain.value > 0.1 && c.mainGain.gain.value < 0.8
-				&& c.preview.gain.gain.value > 0.1 && c.preview.gain.gain.value < 0.9;
+			return c.preview?.started && c.mainGain.gain.value > 0.1 && c.mainGain.gain.value < 0.8
+				&& c.nextGain.gain.value > 0.1 && c.nextGain.gain.value < 0.9;
 		});
-		assert.equal(await page.evaluate(() => window.fixtureApp.currentId), 0, 'preview does not advance the queue');
+		assert.equal(await page.evaluate(() => window.fixtureApp.currentId), 0, 'overlap does not advance the queue');
+		await page.evaluate(() => {
+			window.fadeSamples = [];
+			const data = new Float32Array(window.fadeAnalyser.fftSize);
+			window.fadeSampler = setInterval(() => {
+				window.fadeAnalyser.getFloatTimeDomainData(data);
+				window.fadeSamples.push({ id: Number(window.fixtureApp.currentId), time: performance.now(),
+					rms: Math.sqrt(data.reduce((sum, v) => sum + v * v, 0) / data.length) });
+			}, 10);
+		});
 		await page.waitForFunction(() => {
 			const app = window.fixtureApp;
-			return Number(app.currentId) === 1 && !app.lecteur.paused && app.lecteur.currentTime >= 2.5 && !app.crossfade.preview;
+			return Number(app.currentId) === 1 && !app.lecteur.paused && app.lecteur.currentTime >= 3;
 		}, { timeout: 8000 });
+		assert.deepEqual(await page.evaluate(() => ({
+			promoted: window.fixtureApp.lecteur === window.incomingAudio,
+			activeId: document.getElementById('lecteur') === window.incomingAudio,
+			loads: window.incomingLoads,
+			rate: window.fixtureApp.lecteur.playbackRate
+		})), { promoted: true, activeId: true, loads: 1, rate: 1 });
+		await page.waitForFunction(() => window.fadeSamples.some(sample => sample.id === 1));
+		const samples = await page.evaluate(() => { clearInterval(window.fadeSampler); return window.fadeSamples; });
+		const pausedAfterPromotion = await page.evaluate(() => {
+			const app = window.fixtureApp;
+			app.togglePlayback();
+			return { incoming: app.lecteur === window.incomingAudio, paused: app.lecteur.paused,
+				nextPaused: app.crossfade.nextAudio.paused };
+		});
+		assert.deepEqual(pausedAfterPromotion, { incoming: true, paused: true, nextPaused: true });
+		await page.evaluate(() => { window.fixtureApp.seekPlayer(3); window.fixtureApp.togglePlayback(); });
+		await page.waitForFunction(() => Number(window.fixtureApp.currentId) === 2, { timeout: 8000 });
 		await page.waitForFunction(() => window.fixtureApp.pendingPrefetchedTransitions.length === 0);
-		assert.equal(transitions, 1);
-		const handoffTime = await page.evaluate(() => window.fadeEvents.find(e => e.event === 'playing' && Number(e.id) === 1)?.time);
-		assert.ok(handoffTime >= 2, `next track must skip its previewed intro, got ${handoffTime}`);
-		assert.equal(await page.evaluate(() => window.fixtureApp.lecteur === window.originalAudio), true);
-		assert.equal(await page.evaluate(() => window.fixtureApp.crossfade.mainGain.gain.value), 1);
-		const continuity = await page.evaluate(() => { clearInterval(window.handoffSampler); return window.handoffSamples; });
-		assert.ok(continuity.some(s => s.preview && !s.loading), 'prefetch cleanup must preserve the introduction after play resolves');
-		assert.ok(continuity.some(s => s.finishing), 'the scheduled handoff must actually run');
-		t.diagnostic(`Handoff drift: ${continuity.find(s => s.finishing)?.drift.toFixed(3)} s`);
-		assert.ok(Math.abs(continuity.find(s => s.finishing).drift) < 0.025, 'handoff must align both copies of the recording');
-		assert.equal(await page.evaluate(() => window.fixtureApp.lecteur.playbackRate), 1);
+		assert.equal(transitions, 2);
+		assert.equal(await page.evaluate(() => window.fixtureApp.lecteur === window.originalAudio), true, 'third track reuses the first player');
+		assert.ok(samples.some(s => s.id === 0) && samples.some(s => s.id === 1));
 		let silenceStart = null;
-		for (const sample of continuity) {
+		for (const sample of samples) {
 			if (sample.rms >= 0.005) silenceStart = null;
 			else silenceStart ??= sample.time;
-			assert.ok(silenceStart === null || sample.time - silenceStart < 60, 'handoff must not produce 60 ms of silence');
+			assert.ok(silenceStart === null || sample.time - silenceStart < 60, 'promotion must not produce 60 ms of silence');
 		}
 	} catch (error) {
 		t.diagnostic(JSON.stringify(await page.evaluate(() => {
 			const app = window.fixtureApp;
 			return { id: app?.currentId, time: app?.lecteur.currentTime, paused: app?.lecteur.paused,
 				src: app?.lecteur.currentSrc, pending: app?.nextSongLoading,
-				preview: !!app?.crossfade.preview, handoff: app?.crossfade.handoff,
-				gain: app?.crossfade.mainGain?.gain.value, prefetch: app?.nextTrackPrefetch?.path,
-				events: window.fadeEvents };
+				preview: !!app?.crossfade.preview, prepared: app?.crossfade.prepared,
+				next: { time: app?.crossfade.nextAudio.currentTime, ready: app?.crossfade.nextAudio.readyState,
+					paused: app?.crossfade.nextAudio.paused } };
 		})));
 		throw error;
 	} finally { await page.close(); }
@@ -2187,7 +2194,7 @@ test('SponsorBlock is opt-in, skips real audio, can be disabled per track and pr
         await page.waitForFunction(() => window.sbEnded.length === 1);
         assert.deepEqual(await page.evaluate(() => window.sbEnded), ['ended']);
         assert.equal(await page.evaluate(() => window.sbAudio === document.getElementById('lecteur')), true);
-        assert.equal(await page.$$eval('audio', items => items.length), 1);
+        assert.equal(await page.$$eval('audio', items => items.length), 2);
         const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('playbackResume:sb-test')));
         assert.ok(saved.position === 0 || saved.position >= 5, 'checkpoints keep the original timeline');
         await page.evaluate(() => {
