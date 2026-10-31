@@ -476,6 +476,80 @@ test('library preferences require auth, origin and playlist ownership and stay i
 	assert.deepEqual((await first.request('/playlist_preferences')).body, { pinned: [], recent: [] });
 });
 
+test('playlist file transfer preserves order and artists across users, without replacing playlists or exposing local files', async () => {
+    const store = app.locals.youplayerStore;
+    const owner = await store.createUser({ pseudo: 'archive-owner', password: 'password123' });
+    const recipient = await store.createUser({ pseudo: 'archive-recipient', password: 'password123' });
+    const first = createClient();
+    const second = createClient();
+    await login(first, 'archive-owner');
+    await login(second, 'archive-recipient');
+    const youtube = { type: 'youtube', id: 'abcdefghijk', title: 'Premier', token: 'secret', __playlist: 'private' };
+    const spotify = { type: 'spotify', url: 'https://open.spotify.com/track/' + 'A'.repeat(22), title: 'Second',
+        spotifyArtists: [{ id: 'B'.repeat(22), name: 'Artiste' }] };
+    await store.appendPlaylistItems(owner.id, 'Voyage', [youtube, spotify, { type: 'local', url: 'private.mp3', title: 'Local' }]);
+    await store.appendPlaylistItems(owner.id, 'Vide', []);
+    await store.appendPlaylistItems(recipient.id, 'Voyage', [{ ...youtube, title: 'À conserver' }]);
+    const exported = await first.request('/playlist/export');
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get('cache-control'), /private, no-store/);
+    assert.equal(exported.body.skippedLocalTracks, 1);
+    assert.doesNotMatch(exported.text, /secret|private\.mp3|__playlist/);
+    assert.deepEqual(exported.body.playlists.find(p => p.name === 'Voyage.json').items.map(t => t.title), ['Premier', 'Second']);
+    const imported = await second.request('/playlist/import', { method: 'POST', body: exported.body });
+    assert.equal(imported.status, 200);
+    assert.equal(imported.body.imported.length, 2);
+    const name = imported.body.imported.find(p => p.count === 2).name;
+    const preview = await second.request('/playlist_preview?playlist=' + encodeURIComponent(name));
+    assert.deepEqual(preview.body.map(t => t.title), ['Premier', 'Second']);
+    assert.deepEqual(preview.body[1].spotifyArtists, spotify.spotifyArtists);
+    assert.deepEqual((await store.getPlaylistItems(recipient.id, 'Voyage')).map(t => t.title), ['À conserver']);
+    assert.equal((await store.listPlaylistFiles(owner.id)).length, 2);
+    const repeated = await second.request('/playlist/import', { method: 'POST', body: exported.body });
+    assert.equal(repeated.status, 200);
+    assert.notEqual(repeated.body.imported.find(p => p.count === 2).name, name);
+    assert.equal((await store.listPlaylistFiles(recipient.id)).length, 5);
+});
+
+test('playlist file import validates the entire archive before writing and protects auth, origin and admin boundaries', async () => {
+    const anonymous = createClient();
+    assert.equal((await anonymous.request('/playlist/export')).status, 401);
+    assert.equal((await anonymous.request('/playlist/import', { method: 'POST', body: {} })).status, 401);
+    const admin = createClient();
+    await login(admin, 'admin');
+    assert.equal((await admin.request('/playlist/export')).status, 403);
+    assert.equal((await admin.request('/playlist/import', { method: 'POST', body: {} })).status, 403);
+    const user = await app.locals.youplayerStore.createUser({ pseudo: 'archive-validation', password: 'password123' });
+    const client = createClient();
+    await login(client, 'archive-validation');
+    const valid = { name: 'Valide', items: [{ type: 'youtube', id: 'abcdefghijk' }] };
+    const archive = { format: 'youplayer-playlists', version: 1, playlists: [valid] };
+    assert.equal((await client.request('/playlist/import', { method: 'POST', skipOrigin: true, body: archive })).status, 403);
+    for (const body of [
+        {}, { ...archive, version: 2 },
+        { ...archive, playlists: [valid, { name: '../secret', items: [] }] },
+        { ...archive, playlists: [valid, { name: 'Local', items: [{ type: 'local', url: 'private.mp3' }] }] },
+        { ...archive, playlists: [valid, { name: 'Mauvais lien', items: [{ type: 'spotify', url: 'https://example.test/track/foo' }] }] },
+        { ...archive, playlists: Array.from({ length: 101 }, () => valid) },
+        { ...archive, playlists: [{ name: 'Trop de titres', items: Array.from({ length: 10001 }, () => valid.items[0]) }] }
+    ]) {
+        assert.equal((await client.request('/playlist/import', { method: 'POST', body })).status, 400);
+        assert.deepEqual(await app.locals.youplayerStore.listPlaylistFiles(user.id), []);
+    }
+});
+
+test('playlist file import accepts archives above the default JSON limit and rejects more than 5 MiB', async () => {
+    const user = await app.locals.youplayerStore.createUser({ pseudo: 'archive-large', password: 'password123' });
+    const client = createClient();
+    await login(client, 'archive-large');
+    const body = { format: 'youplayer-playlists', version: 1, playlists: [{ name: 'Grand fichier',
+        items: Array.from({ length: 300 }, () => ({ type: 'youtube', id: 'abcdefghijk', title: 'a'.repeat(490) })) }] };
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) > 100 * 1024);
+    assert.equal((await client.request('/playlist/import', { method: 'POST', body })).status, 200);
+    await assert.rejects(client.request('/playlist/import', { method: 'POST', body: { ...body, padding: 'x'.repeat(5 * 1024 * 1024) } }), { status: 413 });
+    assert.equal((await app.locals.youplayerStore.listPlaylistFiles(user.id)).length, 1);
+});
+
 test('POST /auth/login authenticates a user and stores user_id plus role in the session', async () => {
 	const client = createClient();
 	const loginResponse = await client.request('/auth/login', {
@@ -580,47 +654,15 @@ test('the first remote track gets a private stream and the next track returns to
 	await login(clientB, 'second');
 	const playlist = 'first-special-stream.json';
 
-	await clientA.request('/update_playlist', {
-		method: 'POST',
-		body: {
-			arg: {
-				playlist,
-				song: {
-					type: 'youtube',
-					title: 'Premier titre distant',
-					url: 'https://www.youtube.com/watch?v=first-track-test'
-				}
-			}
-		}
-	});
 	await writeFile(path.join(tempRoot, 'local_song', 'third-track.mp3'), 'audio', 'utf8');
-	await clientA.request('/update_playlist', {
-		method: 'POST',
-		body: {
-			arg: {
-				playlist,
-				song: {
-					type: 'local',
-					title: 'Troisième titre normal',
-					url: 'third-track.mp3'
-				}
-			}
-		}
-	});
 	await writeFile(path.join(tempRoot, 'local_song', 'second-track.mp3'), 'audio', 'utf8');
-	await clientA.request('/update_playlist', {
-		method: 'POST',
-		body: {
-			arg: {
-				playlist,
-				song: {
-					type: 'local',
-					title: 'Deuxième titre normal',
-					url: 'second-track.mp3'
-				}
-			}
-		}
-	});
+	// Individual additions prepend; insert this playback fixture in reverse order.
+	for (const song of [
+		{ type: 'local', title: 'Deuxième titre normal', url: 'second-track.mp3' },
+		{ type: 'local', title: 'Troisième titre normal', url: 'third-track.mp3' },
+		{ type: 'youtube', title: 'Premier titre distant', url: 'https://www.youtube.com/watch?v=first-track-test' }
+	]) await clientA.request('/update_playlist', { method: 'POST', body: { arg: { playlist, song } } });
+
 	await clientA.request('/playlist_used', {
 		method: 'POST',
 		body: { arg: [playlist], random: false }
@@ -867,32 +909,11 @@ test('a later remote track streams while its download continues in the backgroun
 	const playlist = 'later-remote-stream.json';
 
 	await writeFile(path.join(tempRoot, 'local_song', 'local-first.mp3'), 'audio', 'utf8');
-	await client.request('/update_playlist', {
-		method: 'POST',
-		body: {
-			arg: {
-				playlist,
-				song: {
-					type: 'local',
-					title: 'Premier titre local',
-					url: 'local-first.mp3'
-				}
-			}
-		}
-	});
-	await client.request('/update_playlist', {
-		method: 'POST',
-		body: {
-			arg: {
-				playlist,
-				song: {
-					type: 'youtube',
-					title: 'Titre distant suivant',
-					url: 'https://www.youtube.com/watch?v=later-remote-test'
-				}
-			}
-		}
-	});
+	for (const song of [
+		{ type: 'youtube', title: 'Titre distant suivant', url: 'https://www.youtube.com/watch?v=later-remote-test' },
+		{ type: 'local', title: 'Premier titre local', url: 'local-first.mp3' }
+	]) await client.request('/update_playlist', { method: 'POST', body: { arg: { playlist, song } } });
+
 	await client.request('/playlist_used', {
 		method: 'POST',
 		body: { arg: [playlist], random: false }
@@ -990,6 +1011,7 @@ test('POST /auth/password lets a user change their own password', async () => {
 test('playlist routes reject unauthenticated requests after auth is enabled', async () => {
 	const client = createClient();
 	assert.equal((await client.request('/sponsorblock?trackId=0')).status, 401);
+	assert.equal((await client.request('/lyrics?trackId=0')).status, 401);
 	const list = await client.request('/playlist_summaries');
 	const preview = await client.request('/playlist_preview?playlist=anything.json');
 	const selection = await client.request('/playlist_used', {
@@ -1100,7 +1122,7 @@ test('admin-only routes expose users, login events and audit logs only to role=a
 	assert.equal((await userClient.request('/admin/integrations/check', { method: 'POST' })).status, 403);
 	assert.equal((await createClient().request('/admin/integrations/check', { method: 'POST' })).status, 401);
 	assert.equal((await adminClient.request('/admin/integrations/check', { method: 'POST', skipOrigin: true })).status, 403);
-	for (const route of ['/playlist', '/playlist_summaries', '/playback_state', '/sponsorblock?trackId=0', '/auth/spotify/start']) {
+	for (const route of ['/playlist', '/playlist_summaries', '/playback_state', '/sponsorblock?trackId=0', '/lyrics?trackId=0', '/auth/spotify/start']) {
 		assert.equal((await adminClient.request(route)).status, 403, route);
 	}
 	for (const route of ['/spotify_test', '/send_search_youtube', '/add_song_ecoute', '/update_playlist', '/upload_to_playlist']) {
@@ -1316,7 +1338,7 @@ test('discovered YouTube and Spotify tracks can be liked and Spotify can enter t
 async function orderedPlaybackPlaylist(client, playlist) {
     const songs = Array.from({ length: 12 }, (_, index) => ({ type: 'youtube', title: `Track ${index + 1}`,
         url: `https://www.youtube.com/watch?v=controlled-track-${index + 1}` }));
-    for (const song of songs) {
+    for (const song of songs.toReversed()) {
         assert.equal((await client.request('/update_playlist', { method: 'POST', body: { arg: { playlist, song } } })).status, 200);
     }
     return songs;
@@ -1518,4 +1540,51 @@ test('remote account resume streams before download, retaining position, queue a
     assert.equal(cached.body.mode, undefined);
     assert.equal(cached.body.resume.position, 42.5);
     assert.equal(cached.body.current.__queueId, restored.body.current.__queueId);
+});
+
+test('prepending an individual track keeps both sessions playing their original audio and exposes the new source order', async () => {
+    const first = createClient(), second = createClient();
+    await login(first);
+    await login(second);
+    const playlist = 'prepend-active-audio.json';
+    for (const file of ['prepend-old.mp3', 'prepend-new.mp3']) await writeFile(path.join(tempRoot, 'local_song', file), 'synthetic audio');
+    const add = song => first.request('/update_playlist', { method: 'POST', body: { arg: { playlist, song } } });
+    await add({ type: 'local', title: 'Original', url: 'prepend-old.mp3' });
+    for (const client of [first, second]) {
+        await client.request('/playlist_used', { method: 'POST', body: { arg: [playlist], random: false } });
+        assert.equal((await client.request('/next_song')).body.current.title, 'Original');
+    }
+    await add({ type: 'local', title: 'Nouveau', url: 'prepend-new.mp3' });
+    assert.deepEqual((await first.request(`/playlist_preview?playlist=${playlist}`)).body.map(track => track.title), ['Nouveau', 'Original']);
+    for (const client of [first, second]) {
+        const tracks = await client.request('/playlist');
+        assert.equal(tracks.status, 200);
+        assert.deepEqual(tracks.body.map(track => track.title), ['Nouveau', 'Original']);
+        const state = (await client.request('/playback_state')).body;
+        assert.equal(state.currentId, 0);
+        assert.equal(state.current.title, 'Original');
+        assert.equal(state.current.__playlistIndex, 1);
+        assert.equal(state.queue[0].title, 'Nouveau');
+        assert.equal((await client.request('/next_song')).body.current.title, 'Nouveau');
+    }
+});
+
+test('deleting the new first track from a preview does not delete stale active session entries', async () => {
+    const first = createClient(), second = createClient();
+    await login(first); await login(second);
+    const playlist = 'prepend-delete-preview.json';
+    for (const file of ['before-delete.mp3', 'new-delete.mp3']) await writeFile(path.join(tempRoot, 'local_song', file), 'synthetic audio');
+    await first.request('/update_playlist', { method: 'POST', body: { arg: { playlist,
+        song: { type: 'local', url: 'before-delete.mp3', title: 'Original' } } } });
+    await second.request('/playlist_used', { method: 'POST', body: { arg: [playlist], random: false } });
+    await second.request('/next_song');
+    await first.request('/update_playlist', { method: 'POST', body: { arg: { playlist,
+        song: { type: 'local', url: 'new-delete.mp3', title: 'Nouveau' } } } });
+    // This session has not refreshed its queue since the other session prepended a track.
+    const removed = await second.request('/delete_from_playlist', { method: 'POST', body: { playlist, index: 0, key: 'local:new-delete.mp3' } });
+    assert.equal(removed.status, 200);
+    const state = (await second.request('/playback_state')).body;
+    assert.equal(state.current.title, 'Original');
+    assert.equal(state.currentId, 0);
+    assert.deepEqual(state.queue, []);
 });

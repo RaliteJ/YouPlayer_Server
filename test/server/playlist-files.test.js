@@ -28,7 +28,7 @@ test('playlistPath accepts only local json filenames', () => {
 	assert.throws(() => playlistPath('', baseDir), /invalide/);
 });
 
-test('updateJsonFile appends single and multiple items while preserving existing items', async () => {
+test('updateJsonFile prepends a single item and appends batches while preserving their order', async () => {
 	await withTempDir(async (dir) => {
 		const filePath = path.join(dir, 'mix.json');
 		await writeFile(filePath, JSON.stringify({ items: [{ title: 'Existing' }] }), 'utf8');
@@ -37,7 +37,7 @@ test('updateJsonFile appends single and multiple items while preserving existing
 		await updateJsonFile(filePath, [{ title: 'Batch 1' }, { title: 'Batch 2' }]);
 
 		const saved = JSON.parse(await readFile(filePath, 'utf8'));
-		assert.deepEqual(saved.items.map((item) => item.title), ['Existing', 'Single', 'Batch 1', 'Batch 2']);
+		assert.deepEqual(saved.items.map((item) => item.title), ['Single', 'Existing', 'Batch 1', 'Batch 2']);
 		assert.match(saved.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
 	});
 });

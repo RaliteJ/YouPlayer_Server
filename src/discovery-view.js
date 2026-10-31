@@ -1,4 +1,5 @@
 import { LIKED_PLAYLIST, publicErrorMessage, trackLikeKey } from './client-utils.js';
+import { artistLinksMarkup } from './artist-view.js';
 
 export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => fetch(...args) }) {
     return {
@@ -382,6 +383,7 @@ async confirmAddSong(playlistName) {
 	        this.openAddModal({
 	            title: track.name || "Titre inconnu",
 	            artist: (track.artists || []).map((artist) => artist.name).filter(Boolean).join(", "),
+            spotifyArtists: track.artists || [],
 	            album: track.album?.name || "",
 	            albumCoverURL: track.album?.images?.[0]?.url || "",
 	            trackNumber: track.track_number || 0,
@@ -413,7 +415,7 @@ async confirmAddSong(playlistName) {
                 <div class="video-card ${isPlaylist ? 'playlist-result-card' : ''}" data-id="${this.escapeHtml(id)}" data-kind="${isPlaylist ? 'playlist' : 'video'}">
                     <img src="${this.escapeHtml(thumbnail)}" alt="" loading="lazy">
                     ${isPlaylist ? '<span class="result-badge">Playlist</span>' : ''}
-                    <div class="youtube-card-copy"><p>${title}</p><span class="youtube-channel">${this.escapeHtml(item.snippet.channelTitle || 'YouTube')}</span></div>
+                    <div class="youtube-card-copy"><p>${title}</p><span class="youtube-channel">${isPlaylist ? this.escapeHtml(item.snippet.channelTitle || 'YouTube') : artistLinksMarkup({ type: 'youtube', title: item.snippet.title, channelTitle: item.snippet.channelTitle })}</span></div>
                     ${isPlaylist ? '<button type="button" class="btn-small import-youtube-playlist">Importer playlist</button>' : `<div class="youtube-card-actions"><button type="button" class="btn-small youtube-add" aria-label="Ajouter à une playlist">+ Ajouter</button><button type="button" class="song-like youtube-like" aria-label="Aimer ce morceau" title="Aimer ce morceau">♡</button><button type="button" class="youtube-options" aria-label="Options du morceau" title="Options du morceau" aria-haspopup="true">⋯</button></div>`}
                 </div>
             `;

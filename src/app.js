@@ -4,6 +4,8 @@ import { playerView } from './player-view.js';
 import { createAccountView } from './account-view.js?v=20261012-playback-resume';
 import { playlistView } from './playlist-view.js';
 import { sponsorBlockView } from './sponsorblock.js';
+import { artistView } from './artist-view.js';
+import { lyricsView } from './lyrics-view.js';
 import { libraryView } from './library-view.js';
 import { bindQueueSwipe } from './track-gestures.js';
 import {
@@ -31,6 +33,8 @@ const AUDIO_BACKGROUND_DEBUG = (() => {
 })();
 
 const App = {
+    ...artistView,
+    ...lyricsView,
     ...audioDiagnostics,
     ...playerView,
     ...createPlayerController({ apiUrl: API_URL }),
@@ -111,6 +115,8 @@ const App = {
         this.cacheDOM();
         this.initLibraryControls();
         this.initSponsorBlock();
+        this.initArtistLinks();
+        this.initLyrics();
         this.initAudioDiagnostics();
         this.bindEvents();
         await this.refreshAuthProviders();
@@ -284,6 +290,7 @@ const App = {
     },
 
     bindEvents() {
+        this.bindPlaylistTransfer();
         this.bindPageDiagnostics();
         this.bindAdminTabs();
         if (this.loginForm) {
@@ -335,6 +342,7 @@ const App = {
         document.getElementById('prev').onclick = () => this.previousTrack();
         document.getElementById('reloadBtn').onclick = () => this.setRepeatMode(!this.repeatTrack);
         this.miniPlayerOpen?.addEventListener('click', () => this.openNowPlaying());
+        this.playerArtwork?.addEventListener('click', () => this.openNowPlaying());
         this.nowPlayingClose?.addEventListener('click', () => this.closeNowPlaying());
         this.bindNowPlayingSwipeToClose();
         this.miniPlayPause?.addEventListener('click', () => this.togglePlayback());
@@ -616,7 +624,7 @@ const App = {
         document.body.classList.toggle('mobile-header-condensed', shouldCondense);
     },
 
-    loadView(viewName) {
+    loadView(viewName, { activateSpotify = true } = {}) {
         if (this.currentUser?.role === 'admin' && !['admin', 'parametres'].includes(viewName)) {
             viewName = 'admin';
         }
@@ -637,7 +645,7 @@ const App = {
         if (viewName === 'playlist') return this.fetchPlaylist();
         if (viewName === 'accueil') this.fetchAvailablePlaylists();
         if (viewName === 'admin') this.fetchAdminData();
-        if (viewName === 'add_spotify') this.spotifyExplorer?.activate();
+        if (viewName === 'add_spotify' && activateSpotify) this.spotifyExplorer?.activate();
 		if (viewName === 'parametres' && this.currentUser?.role !== 'admin') this.spotifyExplorer?.refreshConnection();
     },
 

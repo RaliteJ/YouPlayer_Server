@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { trackLikeKey } from '../client-utils.js';
+
 export function shuffleArray(array, random = Math.random) {
 	for (let i = array.length - 1; i > 0; i--) {
 		const j = Math.floor(random() * (i + 1));
@@ -31,19 +34,29 @@ export function buildControlledQueue(ids, selectedId, previousId = null) {
 export function sessionTrackKey(item) {
 	if (item?.__removed) return item.__removed;
 	if (item?.__queueId) return `queue:${item.__queueId}`;
+	if (item?.__sessionKey) return item.__sessionKey;
 	return `${item?.__playlist}:${item?.__playlistIndex}`;
 }
 
 // Preserve numeric playback URLs and in-flight download destinations across selections.
 export function stablePlaylistTracks(previousItems, tracks) {
 	const items = previousItems.map(item => ({ ...item, __retained: true }));
-	const indices = new Map(items.map((item, index) => [sessionTrackKey(item), index]));
+	const sourceKey = item => item.__queueId || item.__removed ? sessionTrackKey(item)
+		: trackLikeKey(item) ? JSON.stringify([item.__playlist, trackLikeKey(item)])
+			: `${item.__playlist}:${item.__playlistIndex}`;
+	const indices = new Map();
+	// Match duplicate occurrences in source order, independently of session/cache IDs.
+	for (const { item, index } of items.map((item, index) => ({ item, index }))
+		.sort((a, b) => (a.item.__playlistIndex ?? a.index) - (b.item.__playlistIndex ?? b.index))) {
+		const key = sourceKey(item);
+		if (!indices.has(key)) indices.set(key, []);
+		indices.get(key).push(index);
+	}
 	for (const [selectionIndex, track] of tracks.entries()) {
-		const index = indices.get(sessionTrackKey(track));
+		const index = indices.get(sourceKey(track))?.shift();
 		if (index === undefined) {
-			indices.set(sessionTrackKey(track), items.length);
-			items.push({ ...track, __retained: false, __selectionIndex: selectionIndex });
-		} else items[index] = { ...track, __retained: false, __selectionIndex: selectionIndex };
+			items.push({ ...track, __sessionKey: `playlist:${randomUUID()}`, __retained: false, __selectionIndex: selectionIndex });
+		} else items[index] = { ...track, __sessionKey: sessionTrackKey(items[index]), __retained: false, __selectionIndex: selectionIndex };
 	}
 	return items;
 }

@@ -1,3 +1,5 @@
+import { artistView, artistLinksMarkup } from '../src/artist-view.js';
+import { lyricsView } from '../src/lyrics-view.js';
 import { publicErrorMessage, LIKED_PLAYLIST, trackLikeKey, formatTrackTitle as formatTrackTitleValue, getTrackArtwork as getTrackArtworkValue, playlistEntries as playlistEntriesValue } from '../src/client-utils.js';
 import { bindQueueSwipe } from '../src/track-gestures.js';
 import test from 'node:test';
@@ -9,15 +11,15 @@ const sponsorSource = (await readFile(new URL('../src/sponsorblock.js', import.m
 const source = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
 const controllerSource = (await readFile(new URL('../src/player-controller.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export function', 'function');
 const discoverySource = (await readFile(new URL('../src/discovery-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export function', 'function');
-const playerViewSource = (await readFile(new URL('../src/player-view.js', import.meta.url), 'utf8')).replace('export const', 'const');
+const playerViewSource = (await readFile(new URL('../src/player-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export const', 'const');
 const accountSource = (await readFile(new URL('../src/account-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/m, '').replace('export function', 'function');
 const diagnosticSource = (await readFile(new URL('../src/audio-diagnostics.js', import.meta.url), 'utf8')).replace('export const', 'const');
 
-const playlistSource = (await readFile(new URL('../src/playlist-view.js', import.meta.url), 'utf8')).replace(/^import[\s\S]*?;\n/, '').replace('export const', 'const');
+const playlistSource = (await readFile(new URL('../src/playlist-view.js', import.meta.url), 'utf8')).replace(/^import[\s\S]*?;\n/, '').replace(/^import .*;\n/gm, '').replace('export const', 'const');
 const librarySource = (await readFile(new URL('../src/library-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export const', 'const');
 function playerHarness() {
 	const requests = [];
-	const context = vm.createContext({
+	const context = vm.createContext({ artistView, artistLinksMarkup, lyricsView,
         bindQueueSwipe, publicErrorMessage, LIKED_PLAYLIST, trackLikeKey, formatTrackTitleValue, getTrackArtworkValue, playlistEntriesValue,
 		URLSearchParams,
 		console: { log() {}, debug() {}, error() {} },
@@ -302,7 +304,7 @@ test('playlist selection leaves current audio and stream intact and replaces the
     };
     // DOM and timeout are supplied separately by this minimal VM harness.
     const contextSource = source.slice(source.indexOf('const API_URL'), source.indexOf('export { App }'));
-    const context = vm.createContext({
+    const context = vm.createContext({ artistView, artistLinksMarkup, lyricsView,
         bindQueueSwipe, publicErrorMessage, LIKED_PLAYLIST, trackLikeKey, formatTrackTitleValue, getTrackArtworkValue, playlistEntriesValue,
         URLSearchParams, window: { location: { origin: 'https://player.test' } },
         document: { getElementById: () => ({ checked: false, style: {} }) },

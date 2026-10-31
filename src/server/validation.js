@@ -1,4 +1,5 @@
 import path from "path";
+import { spotifyArtists } from '../client-utils.js';
 import { getYoutubeId } from "./media-utils.js";
 import { normalizePlaylistName, normalizePseudo, normalizeRole } from "./stores/store-utils.js";
 
@@ -128,9 +129,11 @@ export function sanitizeTrackInput(song, { allowLocal = true } = {}) {
 	}
 
 	const type = cleanOptionalString(song.type || "youtube", 32).toLowerCase();
+	const artistIdentities = spotifyArtists(song.spotifyArtists);
 	const baseTrack = {
+		...(artistIdentities.length ? { spotifyArtists: artistIdentities } : {}),
 		title: cleanOptionalString(song.title || song.name || "Titre inconnu"),
-		artist: cleanOptionalString(song.artist || song.channelTitle),
+		artist: cleanOptionalString(song.artist || song.channelTitle || artistIdentities.map(artist => artist.name).join(', ')),
 		album: cleanOptionalString(song.album),
 		albumCoverURL: cleanOptionalString(song.albumCoverURL || song.thumbnail || song.image || song.cover, 2000),
 		trackNumber: Number.isInteger(Number(song.trackNumber)) ? Number(song.trackNumber) : 0

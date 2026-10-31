@@ -1,3 +1,5 @@
+import { artistLinksMarkup } from './artist-view.js';
+
 export const playerView = {
     setCurrentHighlight(currentId) {
         if (!this.playlistContainer) return;
@@ -47,8 +49,7 @@ export const playerView = {
 
         const markup = safeQueue.map((track, index) => {
             const title = this.escapeHtml(track.title || track.name || 'Titre inconnu');
-            const metaParts = [track.artist, track.album].filter(Boolean);
-            const meta = this.escapeHtml(metaParts.join(' • ') || track.type || '');
+            const meta = [artistLinksMarkup(track), this.escapeHtml(track.album || '')].filter(Boolean).join(' • ') || this.escapeHtml(track.type || '');
             const cover = this.escapeHtml(track.albumCoverURL || track.thumbnail || '');
             const trackIndex = track.__sessionIndex ?? track.id ?? '';
             const coverMarkup = cover
@@ -145,6 +146,7 @@ export const playerView = {
             ? null
             : (state.current || this.playerState.currentTrack);
         void this.refreshSponsorBlock?.();
+        this.refreshLyricsTrack?.();
         this.playerState.queue = Array.isArray(state.queue) ? state.queue : [];
         this.playerState.currentIndex = currentId;
         this.playerState.nextTrack = this.playerState.queue[0] || null;
@@ -170,9 +172,9 @@ export const playerView = {
             || 'YouPlayer';
 
         if (this.songTitle) this.songTitle.innerText = title;
-        if (this.songArtist) this.songArtist.innerText = artist;
+        if (this.songArtist) this.songArtist.innerHTML = artistLinksMarkup(track) || this.escapeHtml(artist);
         if (this.overlayTitle) this.overlayTitle.innerText = title;
-        if (this.overlayArtist) this.overlayArtist.innerText = artist;
+        if (this.overlayArtist) this.overlayArtist.innerHTML = artistLinksMarkup(track) || this.escapeHtml(artist);
         if (this.overlayContext) this.overlayContext.innerText = context;
         this.updateMediaMetadata(track, title);
         this.renderLikeButtons();
@@ -197,6 +199,8 @@ export const playerView = {
         this.updatePlayerProgress();
         this.renderPlayerTransport();
         this.nowPlayingClose?.focus();
+        this.updateLyricsProgress?.({ force: true, instant: true });
+        this.revealLyrics?.();
     },
 
     closeNowPlaying() {
@@ -270,6 +274,7 @@ export const playerView = {
         }
         if (this.playerCurrentTime) this.playerCurrentTime.innerText = this.formatPlayerTime(currentTime);
         if (this.playerDuration) this.playerDuration.innerText = this.formatPlayerTime(duration);
+        this.updateLyricsProgress?.();
     },
 
     renderPlayerTransport() {

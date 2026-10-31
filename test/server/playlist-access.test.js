@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createPlaylistAccess } from '../../src/server/playlist-access.js';
 import { LIKED_PLAYLIST } from '../../src/client-utils.js';
+import { registerPlaylistRoutes } from '../../src/server/playlist-routes.js';
 
 const first = { type: 'youtube', id: 'abcdefghijk', url: 'https://www.youtube.com/watch?v=abcdefghijk', title: 'Premier' };
 const second = { ...first, id: 'lmnopqrstuv', url: 'https://www.youtube.com/watch?v=lmnopqrstuv', title: 'Second' };
@@ -14,6 +15,30 @@ async function local(t) {
 	t.after(() => rm(playlistsDir, { recursive: true, force: true }));
 	return { playlistsDir, access: createPlaylistAccess({ authEnabled: false, playlistsDir }) };
 }
+
+test('playlist file transfer also persists new copies in the authentication-disabled file store', async t => {
+    const { access, playlistsDir } = await local(t);
+    await access.appendPlaylistItemsForRequest({}, 'Original.json', [first, second]);
+    await access.appendPlaylistItemsForRequest({}, 'Vide.json', []);
+    const routes = new Map();
+    const app = {
+        get: (path, ...handlers) => routes.set('GET ' + path, handlers.at(-1)),
+        post: (path, ...handlers) => routes.set('POST ' + path, handlers.at(-1))
+    };
+    registerPlaylistRoutes(app, { authEnabled: false, playlistAccess: access,
+        recordAction: async () => {}, sendJsonError: (_res, error) => { throw error; } });
+    let data;
+    const res = { set() { return this; }, type() { return this; },
+        send(value) { data = JSON.parse(value); }, json(value) { data = value; } };
+    await routes.get('GET /playlist/export')({}, res);
+    await routes.get('POST /playlist/import')({ body: data }, res);
+    assert.equal(data.imported.length, 2);
+    const copy = data.imported.find(playlist => playlist.count === 2).name;
+    assert.deepEqual(JSON.parse(await readFile(join(playlistsDir, copy), 'utf8')).items.map(t => t.title), ['Premier', 'Second']);
+    assert.deepEqual((await access.playlistItemsForRequest({}, 'Original.json')).map(t => t.title), ['Premier', 'Second']);
+    const emptyCopy = data.imported.find(playlist => playlist.count === 0).name;
+    assert.deepEqual(await access.playlistItemsForRequest({}, emptyCopy), []);
+});
 
 test('local playlist CRUD preserves source indices and protects the automatic liked playlist', async t => {
 	const { access } = await local(t);
@@ -30,6 +55,14 @@ test('local playlist CRUD preserves source indices and protects the automatic li
 	]) await assert.rejects(operation, /bouton cœur/);
 	await access.deletePlaylistForRequest({}, 'Test.json');
 	assert.deepEqual(await access.playlistFilesForRequest({}), []);
+});
+
+test('single local additions go first while imported batches preserve their order', async t => {
+	const { access } = await local(t);
+	await access.appendPlaylistItemsForRequest({}, 'Test.json', [first, second]);
+	await access.appendPlaylistItemsForRequest({}, 'Test.json', { ...first, title: 'Nouveau' });
+	await access.appendPlaylistItemsForRequest({}, 'Test.json', [{ ...first, title: 'Import A' }, { ...first, title: 'Import B' }]);
+	assert.deepEqual((await access.playlistItemsForRequest({}, 'Test.json')).map(item => item.title), ['Nouveau', 'Premier', 'Second', 'Import A', 'Import B']);
 });
 
 test('concurrent local likes retain both tracks and stable queue IDs survive a removal', async t => {

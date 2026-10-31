@@ -37,6 +37,7 @@ function harness(playlist, pages = [], callbacks = {}) {
 	const results = root.querySelector('[data-spotify-results]');
 	return {
 		requests, results,
+		openTrackArtist: artist => explorer.openTrackArtist(artist),
 		connect: () => explorer.refreshConnection(),
 		search: () => root.querySelector('[data-spotify-search-form]').listeners.submit({ preventDefault() {} }),
 		artist: id => results.listeners.click({ target: { closest: selector => selector === '[data-entity-type][data-entity-id]'
@@ -344,4 +345,36 @@ test('Spotify failures hide technical details and result clicks remain retryable
 	await assert.doesNotReject(click);
 	assert.match(h.status.textContent, /Réessaie/);
 	await assert.doesNotReject(click);
+});
+
+test('artist navigation resolves YouTube metadata uniquely through Spotify and asks on ambiguous matches', async () => {
+    const artist = { id: 'A'.repeat(22), name: 'Artiste', images: [{ url: 'portrait.jpg' }] };
+    const h = harness(null, [
+        { data: { tracks: { items: [{ name: 'Titre', artists: [artist] }] } } },
+        { data: { artist, top_tracks: [], albums: [], related_artists: [] } }
+    ]);
+    await h.openTrackArtist({ name: 'Artiste', title: 'Titre' });
+    assert.deepEqual(h.requests.map(request => request.action), ['search', 'artist']);
+    assert.equal(h.requests[1].id, artist.id);
+    assert.match(h.results.innerHTML, /Artiste/);
+    const ambiguous = harness(null, [{ data: { tracks: { items: [
+        { id: '1', name: 'Titre', artists: [artist] },
+        { id: '2', name: 'Titre', artists: [{ ...artist, id: 'B'.repeat(22) }] }
+    ] } } }, { data: { artists: { items: [artist, { ...artist, id: 'B'.repeat(22) }] } } }]);
+    await ambiguous.openTrackArtist({ name: 'Artiste', title: 'Titre' });
+    assert.deepEqual(ambiguous.requests.map(request => request.action), ['search', 'search']);
+    assert.match(ambiguous.status.textContent, /incertaine/);
+});
+
+test('YouTube artist navigation finds Zamdane by name when the video title differs from Spotify', async () => {
+    const artist = { id: 'Z'.repeat(22), name: 'Zamdane' };
+    const h = harness(null, [
+        { data: { tracks: { items: [{ name: 'Titre studio', artists: [artist] }] } } },
+        { data: { artists: { items: [{ id: 'O'.repeat(22), name: 'Autre artiste' }, artist] } } },
+        { data: { artist, top_tracks: [], albums: [], related_artists: [] } }
+    ]);
+    await h.openTrackArtist({ name: 'zamdane', title: 'Titre du clip feat. invité' });
+    assert.deepEqual(h.requests.map(request => request.action), ['search', 'search', 'artist']);
+    assert.equal(h.requests[1].query, 'zamdane');
+    assert.equal(h.requests[2].id, artist.id);
 });

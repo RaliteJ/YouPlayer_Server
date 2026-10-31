@@ -1,5 +1,6 @@
 import { registerPlaybackRoutes } from './playback-routes.js';
 import { registerSponsorBlockRoutes } from './sponsorblock.js';
+import { registerLyricsRoutes } from './lyrics.js';
 import { registerYoutubeRoutes } from './youtube-routes.js';
 import { registerHealthRoutes, checkWritableDirectories } from './health-routes.js';
 import { registerSpotifyRoutes } from './spotify-routes.js';
@@ -18,7 +19,8 @@ import { promises as fs_promises } from 'fs';
 import session from 'express-session';
 import { RedisStore } from "connect-redis";
 import { createClient as createRedisClient } from "redis";
-import { resolveYoutubeStreamSource } from './download.js';
+import { resolveYoutubeStreamSource, downloadedYoutubeSource } from './download.js';
+import { trackLikeKey } from '../client-utils.js';
 import { createFirstTrackStreamManager } from './first-track-streams.js';
 import { PLAYLISTS_DIR } from './playlist-files.js';
 import { createYouplayerStore, seedTestStore } from './youplayer-store.js';
@@ -188,12 +190,12 @@ app.use((req, res, next) => {
 });
 
 
-// Large Spotify collections are accepted only on the authenticated queue route.
+// Larger JSON bodies are accepted only on the authenticated queue and playlist import routes.
 const defaultJsonParser = express.json();
 const queueJsonParser = express.json({ limit: '5mb' });
 app.use((req, res, next) => {
-	if (req.path === '/add_song_ecoute' && req.method === 'POST') {
-		return requireAuth(req, res, () => queueJsonParser(req, res, next));
+	if (['/add_song_ecoute', '/playlist/import'].includes(req.path) && req.method === 'POST') {
+		return requireListener(req, res, () => queueJsonParser(req, res, next));
 	}
 	return defaultJsonParser(req, res, next);
 });
@@ -208,6 +210,8 @@ const STATIC_FILE_ALLOWLIST = new Map([
 	["/client-utils.js", "client-utils.js"],
 	["/library-tools.js", "library-tools.js"],
 	["/sponsorblock.js", "sponsorblock.js"],
+	["/artist-view.js", "artist-view.js"],
+	["/lyrics-view.js", "lyrics-view.js"],
 	["/audio-diagnostics.js", "audio-diagnostics.js"],
 	["/track-gestures.js", "track-gestures.js"],
 	["/library-view.js", "library-view.js"],
@@ -292,15 +296,23 @@ async function recordAction(req, action, resourceType = "", resourceId = "", det
 }
 
 const playlistAccess = createPlaylistAccess({ authEnabled: AUTH_ENABLED, store: youplayerStore });
-const { validateSessionTrack, removeSongFromSessionQueue } = registerPlaybackRoutes(app, {
+const { validateSessionTrack, removeSongFromSessionQueue, refreshSessionTracks } = registerPlaybackRoutes(app, {
 	config, store: youplayerStore, firstTrackStreams, playlistAccess, requireAuth: requireListener, recordAction, sendJsonError
 });
 registerSponsorBlockRoutes(app, { requireAuth: requireListener, validateSessionTrack, sendJsonError });
+registerLyricsRoutes(app, { requireAuth: requireListener, validateSessionTrack, sendJsonError,
+	youtubeSource: async (req, id, track) => {
+		const stream = firstTrackStreams.findForSession(req.sessionID);
+		if (stream?.source && req.session.ecoute_actuelle === id && trackLikeKey(stream.track) === trackLikeKey(track)
+			&& firstTrackStreams.isOwner(stream, { userId: AUTH_ENABLED ? req.session.userId : null, sessionId: req.sessionID })) return stream.source;
+		return downloadedYoutubeSource(track.__queueId ? `queue-${track.__queueId}` : id, req.sessionID);
+	}
+});
 registerYoutubeRoutes(app, { requireAuth: requireListener, sendJsonError, youtubeApiKey: API_KEY });
 registerPlaylistRoutes(app, {
 	authEnabled: AUTH_ENABLED, store: youplayerStore, localSongDir: LOCAL_SONG_DIR,
 	requireAuth: requireListener, uploadLocalAudio, playlistAccess, validateSessionTrack,
-	removeSongFromSessionQueue, recordAction, sendJsonError
+	removeSongFromSessionQueue, refreshSessionTracks, recordAction, sendJsonError
 });
 registerImportRoutes(app, {
 	requireAuth: requireListener, appendPlaylistItemsForRequest: playlistAccess.appendPlaylistItemsForRequest,

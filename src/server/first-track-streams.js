@@ -211,6 +211,7 @@ export function createFirstTrackStreamManager({
 			error.statusCode = 410;
 			throw error;
 		}
+		record.source = source;
 
 		clearTimer(record.startTimer);
 		record.startTimer = null;

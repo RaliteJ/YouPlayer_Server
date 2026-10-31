@@ -88,6 +88,7 @@ test("opening a stream transitions to playing and natural ffmpeg completion remo
 	const response = new PassThrough();
 
 	await manager.openStream(stream.id, { userId: "user-a", sessionId: "session-a" }, response);
+	assert.equal(stream.source, 'youtube-id');
 	assert.deepEqual(children.map(({ command }) => command), ["yt-dlp", "ffmpeg"]);
 	assert.deepEqual(children[0].args.slice(-4), ["--output", "-", "--", "youtube-id"]);
 	assert.equal(children[0].args.includes("--extract-audio"), false);

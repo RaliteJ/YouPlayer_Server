@@ -167,6 +167,15 @@ test('playlist operations are isolated per user and return copied items', async 
 	}]);
 });
 
+test('single additions prepend without reversing imported tracks or affecting another user', async () => {
+	const { store, user, admin } = await createStoreWithUsers();
+	await store.appendPlaylistItems(user.id, 'mix', [{ title: 'A' }, { title: 'B' }]);
+	await store.appendPlaylistItems(user.id, 'mix', { title: 'Nouveau' });
+	await store.appendPlaylistItems(user.id, 'mix', [{ title: 'C' }, { title: 'D' }]);
+	assert.deepEqual((await store.getPlaylistItems(user.id, 'mix')).map(item => item.title), ['Nouveau', 'A', 'B', 'C', 'D']);
+	assert.deepEqual(await store.listPlaylistFiles(admin.id), []);
+});
+
 test('deletePlaylistItem removes by playlist index and rewrites later summaries', async () => {
 	const { store, user } = await createStoreWithUsers();
 	await store.appendPlaylistItems(user.id, 'mix.json', [

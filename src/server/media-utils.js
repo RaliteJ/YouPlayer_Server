@@ -377,6 +377,7 @@ export async function enrichYoutubeTrack(song, fetchImpl = fetch) {
 
 	return {
 		title: deezerMatch?.title || itunesMatch?.trackName || parsed.title || song.title || "",
+		...(song.spotifyArtists?.length ? { spotifyArtists: song.spotifyArtists } : {}),
 		artist: deezerMatch?.artist?.name || itunesMatch?.artistName || sourceArtist,
 		album: deezerMatch?.album?.title || itunesMatch?.collectionName || song.album || "",
 		id,

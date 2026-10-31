@@ -53,6 +53,24 @@ test('sessionTrackKey identifies tracks by source playlist and position', () => 
 	assert.equal(sessionTrackKey(null), 'undefined:undefined');
 });
 
+test('prepending a playlist track preserves current audio IDs, history and duplicate occurrences', () => {
+	const song = (id, index) => ({ ...track(id, 'mix.json', index), type: 'youtube', id });
+	const previous = [song('aaaaaaaaaaa', 0), song('bbbbbbbbbbb', 1), song('aaaaaaaaaaa', 2)];
+	const req = { session: { items: previous, ecoute_actuelle: 1, playback_history: [0], list_order: [2], queue_initialized: true } };
+	const updated = stablePlaylistTracks(previous, [song('ccccccccccc', 0), ...previous.map(item => ({ ...item, __playlistIndex: item.__playlistIndex + 1 }))]);
+	syncSessionQueue(req, updated);
+	assert.equal(req.session.ecoute_actuelle, 1);
+	assert.equal(req.session.items[1].id, 'bbbbbbbbbbb');
+	assert.equal(req.session.items[1].__playlistIndex, 2);
+	assert.deepEqual(req.session.playback_history, [0]);
+	assert.deepEqual(req.session.list_order, [3, 2]);
+	assert.equal(req.session.items[0].__playlistIndex, 1);
+	assert.equal(req.session.items[2].__playlistIndex, 3);
+	syncSessionQueue(req, stablePlaylistTracks(req.session.items, [song('ccccccccccc', 0), song('aaaaaaaaaaa', 1), song('bbbbbbbbbbb', 2), song('aaaaaaaaaaa', 3)]));
+	assert.equal(req.session.ecoute_actuelle, 1);
+	assert.deepEqual(req.session.list_order, [3, 2]);
+});
+
 test('syncSessionQueue initializes a new session queue', () => {
 	const req = { session: { random: false } };
 	syncSessionQueue(req, [track('One', 'a.json', 0), track('Two', 'a.json', 1)]);

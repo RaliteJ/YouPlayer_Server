@@ -1,5 +1,6 @@
-import { LIKED_PLAYLIST } from './client-utils.js';
+import { LIKED_PLAYLIST, spotifyArtists, matchSpotifyArtist } from './client-utils.js';
 import { spotifyBrowserBridge } from "./spotify-browser-bridge.js";
+import { artistLinksMarkup } from './artist-view.js';
 
 export function createSpotifyExplorer({
 	root,
@@ -179,6 +180,7 @@ export function createSpotifyExplorer({
 		return {
 			title: track.name || "Titre inconnu",
 			artist: artistNames(track.artists || []),
+			...(spotifyArtists(track.artists).length ? { spotifyArtists: spotifyArtists(track.artists) } : {}),
 			album: track.album?.name || "",
 			albumCoverURL: imageUrl(track.album?.images || []),
 			trackNumber: track.track_number || 0,
@@ -193,17 +195,17 @@ export function createSpotifyExplorer({
 		const url = imageUrl(entity.images || []);
 		const subtitle = {
 			artist: "Artiste",
-			album: artistNames(entity.artists || []),
-			playlist: entity.owner?.display_name || "Playlist",
-			track: artistNames(entity.artists || [])
+			album: artistLinksMarkup({ spotifyArtists: entity.artists, artist: artistNames(entity.artists || []) }),
+			playlist: escapeHtml(entity.owner?.display_name || "Playlist"),
+			track: artistLinksMarkup({ spotifyArtists: entity.artists, artist: artistNames(entity.artists || []) })
 		}[type] || "";
 
 		return `
-			<button class="spotify-entity-card" type="button" data-entity-type="${type}" data-entity-id="${escapeHtml(entity.id)}">
+			<div class="spotify-entity-card" role="button" tabindex="0" data-entity-type="${type}" data-entity-id="${escapeHtml(entity.id)}">
 				${coverMarkup(url, type === "artist" ? "artist" : "", entity.name)}
 				<span class="spotify-card-title">${escapeHtml(entity.name || "Sans titre")}</span>
-				<span class="spotify-card-meta">${escapeHtml(subtitle)}</span>
-			</button>
+				<span class="spotify-card-meta">${subtitle}</span>
+			</div>
 		`;
 	}
 
@@ -460,7 +462,7 @@ export function createSpotifyExplorer({
 		const url = imageUrl(entity.images || entity.album?.images || []);
 		const external = entity.external_urls?.spotify || spotifyUrl(type, entity.id);
 		const subtitle = type === "track"
-			? [artistNames(entity.artists || []), entity.album?.name].filter(Boolean).join(" • ")
+			? [artistLinksMarkup({ spotifyArtists: entity.artists, artist: artistNames(entity.artists || []), title: entity.name }), escapeHtml(entity.album?.name || '')].filter(Boolean).join(" • ")
 			: type;
 		const addAction = type === "track"
 			? `<button class="btn-primary" type="button" data-detail-add-track="${escapeHtml(entity.id)}">Ajouter</button>`
@@ -471,7 +473,7 @@ export function createSpotifyExplorer({
 				${url ? `<img src="${escapeHtml(url)}" alt="">` : `<div class="spotify-hero-cover" aria-hidden="true"></div>`}
 				<div class="spotify-detail-meta">
 					<h2>${escapeHtml(entity.name || "Sans titre")}</h2>
-					<p>${escapeHtml(subtitle)}</p>
+					<p>${subtitle}</p>
 					${type === "track" ? `<p>${formatDuration(entity.duration_ms)}</p>` : ""}
 					<div class="spotify-hero-actions">
 						${addAction}
@@ -607,6 +609,7 @@ export function createSpotifyExplorer({
 	}
 
 	async function openArtist(id) {
+		const userId = getCurrentUser()?.id;
 		setStatus("Chargement de l'artiste...");
 		let data;
 		if (state.browserBridgeStatus?.authenticated && state.browserBridgeStatus?.tokenCaptured) {
@@ -619,6 +622,7 @@ export function createSpotifyExplorer({
 		} else {
 			data = await spotifyRequest("artist", { id });
 		}
+		if (getCurrentUser()?.id !== userId) return;
 		renderArtist(data);
 		setStatus("");
 	}
@@ -875,6 +879,28 @@ export function createSpotifyExplorer({
 	}
 
 	return {
+		async openTrackArtist(artist) {
+			this.init();
+			const userId = getCurrentUser()?.id;
+			await refreshBrowserBridgeStatus();
+			if (getCurrentUser()?.id !== userId) return;
+			if (artist.id) return openArtist(artist.id);
+			let data;
+			let tracks;
+			for (const query of new Set([`${artist.name} ${artist.title || ''}`.trim(), artist.name])) {
+				const payload = { query, limit: 20 };
+				if (state.browserBridgeStatus?.authenticated && state.browserBridgeStatus?.tokenCaptured) {
+					try { data = await browserSpotifyRequest('search', payload); }
+					catch { data = await spotifyRequest('search', payload); }
+				} else data = await spotifyRequest('search', payload);
+				if (getCurrentUser()?.id !== userId) return;
+				tracks ||= data?.tracks?.items || [];
+				const match = matchSpotifyArtist(artist, tracks, data?.artists?.items || []);
+				if (match) return openArtist(match.id);
+			}
+			renderSearch(data);
+			setStatus('Correspondance incertaine : choisis l’artiste dans les résultats Spotify.');
+		},
 		init() {
 			if (state.initialized) return;
 			state.initialized = true;

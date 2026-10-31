@@ -1,10 +1,12 @@
 import { normalizePathfinderTrack } from './media-utils.js';
+import { spotifyArtists } from '../client-utils.js';
 
 function getBestImageUrl(images) {
 	return images?.slice?.(-1)?.[0]?.url || images?.[0]?.url || "";
 }
 
 export function spotifyTrackToStoredTrack(data) {
+	const identities = spotifyArtists(data.artists);
 	const artists = (data.artists?.items || data.artists || [])
 		.map((artist) => artist?.profile?.name || artist?.name)
 		.filter(Boolean)
@@ -15,6 +17,7 @@ export function spotifyTrackToStoredTrack(data) {
 	return {
 		title: data.name || "",
 		artist: artists,
+		...(identities.length ? { spotifyArtists: identities } : {}),
 		album: album.name || "",
 		id: "",
 		albumCoverURL: getBestImageUrl(album.coverArt?.sources),
@@ -26,6 +29,7 @@ export function spotifyTrackToStoredTrack(data) {
 }
 
 export function spotifyWebApiTrackToStoredTrack(track = {}) {
+	const identities = spotifyArtists(track.artists);
 	const artists = (track.artists || [])
 		.map((artist) => artist?.name)
 		.filter(Boolean)
@@ -36,6 +40,7 @@ export function spotifyWebApiTrackToStoredTrack(track = {}) {
 	return {
 		title: track.name || "",
 		artist: artists,
+		...(identities.length ? { spotifyArtists: identities } : {}),
 		album: track.album?.name || "",
 		id: "",
 		albumCoverURL: image,
@@ -94,9 +99,11 @@ function getSpotifyTrackUrl(track) {
 }
 
 export function toFinalStoredTrack(track) {
+	const identities = spotifyArtists(track.spotifyArtists);
 	const storedTrack = {
 		title: track.title || track.name || "",
 		artist: track.artist || "",
+		...(identities.length ? { spotifyArtists: identities } : {}),
 		album: track.album || "",
 		id: track.id || "",
 		albumCoverURL: track.albumCoverURL || "",
