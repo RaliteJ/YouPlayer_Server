@@ -82,7 +82,8 @@ test('same account resumes real audio in a separate browser session and pauses t
 			return !audio.paused && audio.currentTime >= 17.25 && audio.currentTime < 25;
 		});
 		await first.waitForFunction(() => document.getElementById('lecteur').paused);
-		assert.equal(await second.$$eval('audio', elements => elements.length), 1);
+		assert.equal(await second.$$eval('audio', elements => elements.length), 2);
+		assert.equal(await second.$eval('#lecteur-next', audio => audio.paused), true);
 		assert.equal(await second.evaluate(async () => (await (await fetch('/playback_state')).json()).queue[0].title), 'Upcoming fixture');
 		const stranger = await open(other, 'second', 'password123');
 		assert.equal(await stranger.$eval('#lecteur', audio => audio.currentSrc), '');
