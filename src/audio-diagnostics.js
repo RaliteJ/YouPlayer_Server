@@ -243,6 +243,7 @@ export const audioDiagnostics = {
         if (!this.audioBackgroundDebug || this.audioDiagnosticsBound) return;
         this.audioDiagnosticsBound = true;
         this.bindAudioDiagnosticElement(this.lecteur, 'main-player');
+        if (this.crossfade) this.bindAudioDiagnosticElement(this.crossfade.nextAudio, 'crossfade-player');
         const activePlayerPayload = {
             event: 'active',
             timestamp: this.diagnosticTimestamp(),
