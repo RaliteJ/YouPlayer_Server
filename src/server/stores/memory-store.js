@@ -340,7 +340,8 @@ export class MemoryYouplayerStore {
 	async appendPlaylistItems(userId, playlistName, newItems) {
 		const playlist = await this.ensurePlaylist(userId, playlistName);
 		const items = Array.isArray(newItems) ? newItems : [newItems];
-		playlist.items.push(...items);
+		if (Array.isArray(newItems)) playlist.items.push(...items);
+		else playlist.items.unshift(newItems);
 		playlist.updatedAt = new Date().toISOString();
 		return {
 			playlist: playlist.name,

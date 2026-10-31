@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { downloadQueue } from './download-queue.js';
 import { logger } from './logger.js';
+import { spotifyArtists, trackLikeKey } from '../client-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -78,9 +79,11 @@ function canonicalYoutubeSource(value) {
 }
 
 function toStoredTrack(trackData, fallbackTitle) {
+	const identities = spotifyArtists(trackData?.spotifyArtists);
 	return {
 		title: trackData?.title || fallbackTitle || "",
 		artist: trackData?.artist || "",
+		...(identities.length ? { spotifyArtists: identities } : {}),
 		album: trackData?.album || "",
 		id: getYoutubeUrlFromSpotifyTrack(trackData) || "",
 		albumCoverURL: trackData?.albumCoverURL || "",
@@ -101,6 +104,8 @@ async function updatePlaylistTrack(song, trackData) {
 	if (!Array.isArray(playlist.items) || !playlist.items[song.__playlistIndex]) {
 		return;
 	}
+	// An individual addition may have shifted this index during the download.
+	if (!trackLikeKey(song) || trackLikeKey(playlist.items[song.__playlistIndex]) !== trackLikeKey(song)) return;
 
 	playlist.items[song.__playlistIndex] = toStoredTrack(trackData, song.title);
 	playlist.updatedAt = new Date().toISOString();
@@ -210,7 +215,7 @@ export async function download_youtube(arg, sessionID) {
 	}
 
 	try {
-		return await new Promise((resolve, reject) => {
+		const result = await new Promise((resolve, reject) => {
 			execFile('yt-dlp', youtubeDownloadArgs(arg[0], sessionID, arg[1]), (error, stdout, stderr) => {
 				if (stdout) logger.debug(stdout);
 				if (stderr) logger.debug(stderr);
@@ -222,10 +227,30 @@ export async function download_youtube(arg, sessionID) {
 				resolve(stdout);
 			});
 		});
+		try {
+			await fs_promises.writeFile(cacheSourcePath(arg[1], sessionID, MUSIQ_DIR), JSON.stringify({ source: canonicalYoutubeSource(arg[0]) }), { mode: 0o600 });
+		} catch { logger.warn('Source des sous-titres non mémorisée'); }
+		return result;
 	} finally {
 		await clearDownloadInProgress(sessionID, arg[1]);
 	}
 };
+
+function cacheSourcePath(id, sessionID, musiqDir) {
+	const root = path.resolve(musiqDir);
+	const sessionRoot = path.resolve(root, String(sessionID));
+	if (path.basename(String(sessionID)) !== String(sessionID) || path.dirname(sessionRoot) !== root
+		|| path.basename(String(id)) !== String(id) || ['.', '..'].includes(String(id))) throw new Error('Chemin de cache audio invalide');
+	return path.join(sessionRoot, `${id}.source.json`);
+}
+
+export async function downloadedYoutubeSource(id, sessionID, { musiqDir = MUSIQ_DIR } = {}) {
+	try {
+		const file = cacheSourcePath(id, sessionID, musiqDir);
+		if ((await fs_promises.stat(file)).size > 4096) return null;
+		return canonicalYoutubeSource(JSON.parse(await fs_promises.readFile(file, 'utf8')).source);
+	} catch { return null; }
+}
 
 export async function deleteDownloadedTrack(id, sessionID, { musiqDir = MUSIQ_DIR } = {}) {
 	const root = path.resolve(musiqDir);
@@ -237,6 +262,7 @@ export async function deleteDownloadedTrack(id, sessionID, { musiqDir = MUSIQ_DI
 		throw new Error('Chemin de cache audio invalide');
 	}
 	await fs_promises.rm(target, { force: true });
+	await fs_promises.rm(cacheSourcePath(id, sessionID, musiqDir), { force: true });
 }
 
 

@@ -1,3 +1,5 @@
+import { artistView, artistLinksMarkup } from '../src/artist-view.js';
+import { lyricsView } from '../src/lyrics-view.js';
 import { LIKED_PLAYLIST, trackLikeKey, formatTrackTitle as formatTrackTitleValue, getTrackArtwork as getTrackArtworkValue, playlistEntries as playlistEntriesValue } from '../src/client-utils.js';
 import { bindQueueSwipe } from '../src/track-gestures.js';
 import test from 'node:test';
@@ -10,14 +12,14 @@ const sponsorSource = (await readFile(new URL('../src/sponsorblock.js', import.m
 const source = await readFile(new URL('../src/app.js', import.meta.url), 'utf8');
 const controllerSource = (await readFile(new URL('../src/player-controller.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export function', 'function');
 const discoverySource = (await readFile(new URL('../src/discovery-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export function', 'function');
-const playerViewSource = (await readFile(new URL('../src/player-view.js', import.meta.url), 'utf8')).replace('export const', 'const');
+const playerViewSource = (await readFile(new URL('../src/player-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export const', 'const');
 const accountSource = (await readFile(new URL('../src/account-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/m, '').replace('export function', 'function');
 const diagnosticSource = (await readFile(new URL('../src/audio-diagnostics.js', import.meta.url), 'utf8')).replace('export const', 'const');
-const playlistSource = (await readFile(new URL('../src/playlist-view.js', import.meta.url), 'utf8')).replace(/^import[\s\S]*?;\n/, '').replace('export const', 'const');
+const playlistSource = (await readFile(new URL('../src/playlist-view.js', import.meta.url), 'utf8')).replace(/^import[\s\S]*?;\n/, '').replace(/^import .*;\n/gm, '').replace('export const', 'const');
 const librarySource = (await readFile(new URL('../src/library-view.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '').replace('export const', 'const');
 function harness(fetch) {
     const notices = [];
-    const context = vm.createContext({
+    const context = vm.createContext({ artistView, artistLinksMarkup, lyricsView,
         bindQueueSwipe, LIKED_PLAYLIST, trackLikeKey, formatTrackTitleValue, getTrackArtworkValue, playlistEntriesValue,
         publicErrorMessage, fetch, URLSearchParams,
         console: { error() {} },
@@ -116,7 +118,7 @@ test('native player diagnostics never reach visible notices or API error message
         updatePlaybackUi() {}, updatePlayerProgress() {},
         apiFetch() {}, showAuth() {}, bindEvents() {}, loadView() {}
     };
-    const context = vm.createContext({ publicErrorMessage, document: { getElementById: () => null } });
+    const context = vm.createContext({ artistView, artistLinksMarkup, lyricsView, publicErrorMessage, document: { getElementById: () => null } });
     vm.runInContext(nativeSource.replace(/^import .*;\n/m, '').replace('export function', 'function'), context);
     assert.equal(context.installAndroidPlayer(app, host), true);
     listeners['youplayer-native-state']({ detail: { native: true, error: 'PRIVATE_NATIVE_DIAGNOSTIC' } });

@@ -13,6 +13,39 @@ export function formatTrackTitle(track) {
 	return [track.artist, track.title || track.name || 'Titre inconnu'].filter(Boolean).join(' - ');
 }
 
+// Keep stable Spotify identities alongside the display name, without bearer data.
+export function spotifyArtists(artists = []) {
+	const items = Array.isArray(artists) ? artists : Array.isArray(artists?.items) ? artists.items : [];
+	return items.slice(0, 20).map(item => {
+		const artist = item?.data || item;
+		const id = artist?.id || artist?.uri?.split(':').pop() || '';
+		const name = String(artist?.name || artist?.profile?.name || '').trim().slice(0, 120);
+		return typeof id === 'string' && /^[A-Za-z0-9]{22}$/.test(id) && name ? { id, name } : null;
+	}).filter(Boolean);
+}
+
+export function normalizeMusicText(value = '') {
+	return String(value).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+		.replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+export function matchSpotifyArtist({ name, title }, tracks = [], artists = []) {
+	if (!normalizeMusicText(name)) return null;
+	const matches = new Map();
+	for (const track of tracks) {
+		if (normalizeMusicText(track.name) !== normalizeMusicText(title)) continue;
+		for (const artist of spotifyArtists(track.artists)) {
+			if (normalizeMusicText(artist.name) === normalizeMusicText(name)) matches.set(artist.id, artist);
+		}
+	}
+	if (!matches.size) {
+		for (const artist of spotifyArtists(artists)) {
+			if (normalizeMusicText(artist.name) === normalizeMusicText(name)) matches.set(artist.id, artist);
+		}
+	}
+	return matches.size === 1 ? [...matches.values()][0] : null;
+}
+
 export function getTrackArtwork(track, origin) {
 	const artwork = track?.albumCoverURL || track?.thumbnail || '';
 	if (!artwork) return '';

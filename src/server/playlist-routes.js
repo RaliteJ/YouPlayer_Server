@@ -7,15 +7,53 @@ import { normalizePlaylistName } from './stores/store-utils.js';
 import { RequestValidationError, resolveStoredFile, safeStoredFileName, sanitizeTrackInput,
 	validateLocalUploadMetadata, validatePlaylistMutationPayload } from './validation.js';
 import { logger } from './logger.js';
+import { randomUUID } from 'node:crypto';
+import { PLAYLIST_ARCHIVE_FORMAT, validatePlaylistArchive } from './playlist-transfer.js';
 
 export function registerPlaylistRoutes(app, {
 	authEnabled: AUTH_ENABLED, store: youplayerStore, localSongDir: LOCAL_SONG_DIR,
 	requireAuth, uploadLocalAudio, playlistAccess, validateSessionTrack,
-	removeSongFromSessionQueue, recordAction, sendJsonError
+	removeSongFromSessionQueue, refreshSessionTracks, recordAction, sendJsonError
 }) {
 	const { playlistFilesForRequest, playlistItemsForRequest, playlistSummariesForRequest,
 		appendPlaylistItemsForRequest, deletePlaylistItemForRequest, playlistTracksForRequest,
 		setTrackLikedForRequest } = playlistAccess;
+	app.get('/playlist/export', requireAuth, async (req, res) => {
+		try {
+			const playlists = [];
+			let skippedLocalTracks = 0;
+			for (const name of await playlistFilesForRequest(req)) {
+				const items = [];
+				for (const track of await playlistItemsForRequest(req, name)) {
+					if (track.type === 'local') { skippedLocalTracks++; continue; }
+					items.push(sanitizeTrackInput(track, { allowLocal: false }));
+				}
+				playlists.push({ name, items });
+			}
+			const archive = { format: PLAYLIST_ARCHIVE_FORMAT, version: 1, playlists, skippedLocalTracks };
+			validatePlaylistArchive(archive);
+			const json = JSON.stringify(archive);
+			if (Buffer.byteLength(json) > 5 * 1024 * 1024) throw new RequestValidationError('Export trop volumineux (5 Mo maximum)');
+			res.set('Cache-Control', 'private, no-store');
+			res.type('application/json').send(json);
+		} catch (error) { sendJsonError(res, error, 'Export impossible', 400); }
+	});
+
+	app.post('/playlist/import', requireAuth, async (req, res) => {
+		try {
+			// Validate the whole file before creating anything; each import keeps its own names.
+			const playlists = validatePlaylistArchive(req.body);
+			const imported = [];
+			for (const playlist of playlists) {
+				const name = `${Array.from(playlist.name).slice(0, 45).join('')} (import ${randomUUID().slice(0, 8)}).json`;
+				await appendPlaylistItemsForRequest(req, name, playlist.items);
+				imported.push({ name, count: playlist.items.length });
+			}
+			await recordAction(req, 'playlist.import', 'playlist', 'archive', { count: imported.length });
+			res.set('Cache-Control', 'private, no-store');
+			res.json({ imported });
+		} catch (error) { sendJsonError(res, error, 'Import impossible', 400); }
+	});
 	app.get('/liked_tracks', requireAuth, async (req, res) => {
 		try { res.json({ items: await playlistItemsForRequest(req, LIKED_PLAYLIST) }); }
 		catch (error) { sendJsonError(res, error); }
@@ -78,6 +116,7 @@ export function registerPlaylistRoutes(app, {
 					throw new RequestValidationError('Le morceau a changé', 409);
 				}
 			}
+			if (req.session.playlists?.includes(normalizedPlaylist)) await refreshSessionTracks(req);
 			const removed = await deletePlaylistItemForRequest(req, normalizedPlaylist, songIndex);
 			if (!removed) {
 				return res.status(404).json({ error: "Musique introuvable dans la playlist" });

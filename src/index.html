@@ -191,7 +191,7 @@
           </div>
           <label class="setting-row">
             <input type="checkbox" id="rich-playlist-display">
-            <span>Afficher les pochettes, artistes et albums</span>
+            <span>Afficher les pochettes et les albums</span>
           </label>
           <label class="setting-row">
             <input type="checkbox" id="controlled-playback" aria-describedby="controlled-playback-help">
@@ -203,6 +203,18 @@
             <span>Passer les passages sans musique sur YouTube</span>
           </label>
           <p class="muted" id="sponsorblock-help">Avec <a href="https://sponsor.ajay.app/" target="_blank" rel="noreferrer">SponsorBlock</a>. Désactivé par défaut, réglage pour ce compte dans ce navigateur. L’activation autorise le serveur à consulter les repères communautaires, sans envoyer le lien exact ni tes informations de compte. Disponible dans le lecteur web, lorsque le flux permet les sauts.</p>
+          <section class="settings-panel" id="playlist-transfer-panel">
+            <h2>Importer et exporter mes playlists</h2>
+            <p class="muted">Le fichier JSON conserve les liens YouTube et Spotify, les artistes et l’ordre des titres. Les fichiers audio locaux ne sont pas inclus. L’import crée des copies avec un suffixe « import », sans remplacer tes playlists ni modifier la lecture en cours.</p>
+            <button type="button" class="btn-small" id="playlist-export">Exporter mes playlists</button>
+            <form id="playlist-import-form">
+              <label>Fichier de playlists YouPlayer (JSON, 5 Mo, 100 playlists et 10 000 titres maximum)
+                <input id="playlist-import-file" type="file" accept=".json,application/json" required>
+              </label>
+              <button type="submit" class="btn-small">Importer le fichier</button>
+            </form>
+            <p id="playlist-transfer-message" class="settings-message" role="status" aria-live="polite" hidden></p>
+          </section>
           <form id="password-change-form" class="settings-panel">
             <h2>Mot de passe</h2>
             <label>
@@ -313,15 +325,15 @@
       <div id="miniPlayerProgress" class="mini-player-progress" role="progressbar" aria-label="Progression du morceau" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <span></span>
       </div>
-      <button id="miniPlayerOpen" class="current-track" type="button" aria-label="Ouvrir le lecteur">
+      <div class="current-track">
         <div id="player-artwork" class="player-artwork player-artwork-placeholder" aria-hidden="true">
           <span>♫</span>
         </div>
         <span class="player-track-copy">
-          <strong id="actual_song">Aucun titre en lecture</strong>
+          <button id="miniPlayerOpen" class="mini-track-open" type="button" aria-label="Ouvrir le lecteur"><strong id="actual_song">Aucun titre en lecture</strong></button>
           <span id="actual_artist">Artiste inconnu</span>
         </span>
-      </button>
+      </div>
       <button id="miniPlayPause" class="mini-play-pause" type="button" aria-label="Lecture">
         <span aria-hidden="true">▶</span>
       </button>
@@ -386,6 +398,18 @@
           </button>
         </div>
 
+        <button id="lyrics-toggle" class="player-action-button" type="button" aria-controls="lyrics-panel" aria-expanded="false">Paroles</button>
+        <section id="lyrics-panel" class="lyrics-panel" aria-label="Paroles du morceau" hidden>
+          <p class="muted">Recherche sur LRCLIB, puis YouTube et lyrics.ovh. Le titre et l’artiste sont transmis aux fournisseurs consultés.</p>
+          <p id="lyrics-status" role="status">Ouvre les paroles pour ce morceau.</p>
+          <div class="lyrics-controls">
+            <label><input id="lyrics-sync" type="checkbox" checked disabled> Suivre la lecture</label>
+            <label>Décalage (secondes) <input id="lyrics-offset" type="number" min="-60" max="60" step="0.5" value="0" title="Une valeur positive retarde les paroles" disabled></label>
+            <button id="lyrics-retry" class="btn-small" type="button">Réessayer</button>
+          </div>
+          <div id="lyrics-content" class="lyrics-content" tabindex="0" aria-label="Texte des paroles"></div>
+          <a id="lyrics-source" href="https://lrclib.net" target="_blank" rel="noreferrer" hidden>Source : LRCLIB</a>
+        </section>
         <div id="sponsorblock-track-control" hidden>
           <label><input type="checkbox" id="sponsorblock-track-enabled" checked> Passer les passages sans musique pour ce titre</label>
           <p class="muted" id="sponsorblock-status" role="status"></p>

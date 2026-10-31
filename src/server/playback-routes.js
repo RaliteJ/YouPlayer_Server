@@ -127,6 +127,15 @@ export function registerPlaybackRoutes(app, {
 			tracks.push(...await playlistTracksForRequest(req, playlist));
 		}
 		const selected = [...tracks, ...queueTracks];
+		if (!req.session.stable_playlist_indices) {
+			const previous = new Map((req.session.items || []).filter(item => !item.__removed)
+				.map(item => [`${item.__playlist}:${item.__playlistIndex}`, trackLikeKey(item)]));
+			// A prepend must not move playback IDs onto another cached audio file.
+			req.session.stable_playlist_indices = selected.some(item => {
+				const key = `${item.__playlist}:${item.__playlistIndex}`;
+				return previous.has(key) && previous.get(key) !== trackLikeKey(item);
+			});
+		}
 		return req.session.stable_playlist_indices
 			? stablePlaylistTracks(req.session.items || [], selected)
 			: selected;
@@ -924,5 +933,5 @@ export function registerPlaybackRoutes(app, {
 	});
 
 
-	return { validateSessionTrack, removeSongFromSessionQueue };
+	return { validateSessionTrack, removeSongFromSessionQueue, refreshSessionTracks };
 }

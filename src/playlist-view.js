@@ -1,17 +1,21 @@
 import { LIKED_PLAYLIST, trackLikeKey, formatTrackTitle as formatTrackTitleValue,
     getTrackArtwork as getTrackArtworkValue, playlistEntries as playlistEntriesValue } from './client-utils.js';
+import { artistLinksMarkup } from './artist-view.js';
 
 // Keep App as the receiver for paging, gestures and playback actions.
 export const playlistView = {
     playlistItemMarkup(item) {
         const title = this.escapeHtml(item.title || 'Titre inconnu');
-        const artist = this.escapeHtml(item.artist || '');
+        const artist = artistLinksMarkup(item);
         const album = this.escapeHtml(item.album || '');
         const cover = this.escapeHtml(item.albumCoverURL || item.thumbnail || '');
 
         if (!this.richPlaylistDisplay) {
             return `
-                <span class="song-title">${title}</span>
+                <div class="song-text">
+                    <span class="song-title">${title}</span>
+                    <span class="song-meta">${artist}</span>
+                </div>
                 ${this.likeButtonMarkup(item)}
                 <button type="button" class="song-options" aria-label="Options du morceau" title="Options">⋯</button>
             `;
@@ -66,8 +70,8 @@ export const playlistView = {
 
     playlistPreviewTrackMarkup(item, index) {
         const title = this.escapeHtml(item.title || item.name || 'Titre inconnu');
-        const metaParts = [item.artist, item.album, item.__libraryPlaylist?.title].filter(Boolean);
-        const meta = this.escapeHtml(metaParts.join(' • ') || item.type || '');
+        const metaParts = [artistLinksMarkup(item), ...[item.album, item.__libraryPlaylist?.title].filter(Boolean).map(value => this.escapeHtml(value))].filter(Boolean);
+        const meta = metaParts.join(' • ') || this.escapeHtml(item.type || '');
         const cover = this.escapeHtml(item.albumCoverURL || item.thumbnail || '');
         const coverMarkup = cover
             ? `<img class="queue-cover" src="${cover}" alt="" width="42" height="42" loading="lazy">`
@@ -381,6 +385,7 @@ export const playlistView = {
                     url: item.url,
                     type: item.type,
                     artist: item.artist,
+                    spotifyArtists: item.spotifyArtists,
                     album: item.album,
                     id: item.id,
                     albumCoverURL: item.albumCoverURL,

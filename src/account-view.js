@@ -3,6 +3,65 @@ import { publicErrorMessage } from './client-utils.js';
 // Preserve the app origin and the shared App receiver for account and logout actions.
 export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fetch(...args) }) {
     return {
+        bindPlaylistTransfer() {
+            const panel = document.getElementById('playlist-transfer-panel');
+            if (!panel) return;
+            const exportButton = panel.querySelector('#playlist-export');
+            const form = panel.querySelector('#playlist-import-form');
+            const fileInput = panel.querySelector('#playlist-import-file');
+            const message = panel.querySelector('#playlist-transfer-message');
+            const run = async action => {
+                if (exportButton.disabled) return;
+                const user = this.currentUser?.id;
+                for (const control of panel.querySelectorAll('button, input')) control.disabled = true;
+                message.hidden = false;
+                message.textContent = 'Traitement en cours…';
+                message.classList.remove('error-msg');
+                try {
+                    const text = await action(user);
+                    if (this.currentUser?.id === user) message.textContent = text;
+                } catch (error) {
+                    if (this.currentUser?.id === user) {
+                        message.textContent = error.message;
+                        message.classList.add('error-msg');
+                    }
+                } finally {
+                    for (const control of panel.querySelectorAll('button, input')) control.disabled = false;
+                }
+            };
+            exportButton.onclick = () => run(async user => {
+                const archive = await this.apiFetch('/playlist/export');
+                if (this.currentUser?.id !== user) return '';
+                if (!archive) throw new Error('Export impossible. Réessaie dans un instant.');
+                const url = URL.createObjectURL(new Blob([JSON.stringify(archive)], { type: 'application/json' }));
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'youplayer-playlists.json';
+                document.body.append(link);
+                link.click();
+                link.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                return `${archive.playlists.length} playlist(s) exportée(s). ${archive.skippedLocalTracks} titre(s) local(aux) non inclus.`;
+            });
+            form.onsubmit = event => {
+                event.preventDefault();
+                const file = fileInput.files?.[0];
+                return run(async user => {
+                    if (!file || file.size > 5 * 1024 * 1024) throw new Error('Choisis un fichier JSON de 5 Mo maximum.');
+                    let archive;
+                    try { archive = JSON.parse(await file.text()); }
+                    catch { throw new Error('Ce fichier ne contient pas de JSON valide.'); }
+                    if (this.currentUser?.id !== user) return '';
+                    const result = await this.apiFetch('/playlist/import', 'POST', archive);
+                    if (this.currentUser?.id !== user) return '';
+                    if (!result) throw new Error('Import refusé. Utilise un export JSON YouPlayer valide (100 playlists et 10 000 titres maximum).');
+                    form.reset();
+                    await this.fetchAvailablePlaylists();
+                    return `${result.imported.length} playlist(s) importée(s). Tes playlists existantes sont conservées.`;
+                });
+            };
+        },
+
         selectAdminTab(tab, focus = false) {
             const tabs = Array.from(document.querySelectorAll('#view-admin [role="tab"]'));
             if (!tabs.includes(tab)) return;
@@ -125,6 +184,10 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         showAuth(message = '') {
+            document.getElementById('playlist-import-form')?.reset();
+            const transferMessage = document.getElementById('playlist-transfer-message');
+            if (transferMessage) transferMessage.hidden = true;
+            this.resetLyrics?.();
             clearTimeout(this.releasePollTimer);
             this.releaseRequestId = null;
             this.releasePollUntil = null;

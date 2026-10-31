@@ -19,12 +19,51 @@ fichiers audio dans une seule interface web.
 
 - rechercher de la musique sur YouTube et Spotify ;
 - créer des playlists et ajouter vos fichiers audio ;
+- exporter et importer vos playlists en JSON depuis les paramètres (liens YouTube et Spotify, sans les fichiers audio locaux) ;
+- ajouter les morceaux individuels en tête de playlist, sans inverser les imports ;
+- ouvrir la fiche Spotify d’un artiste depuis les listes et le lecteur ;
+- afficher les paroles depuis le lecteur, avec synchronisation ou texte seul ;
 - retrouver votre file et votre position de lecture sur un autre appareil ;
 - passer automatiquement les passages non musicaux YouTube avec SponsorBlock ;
 - gérer plusieurs comptes, chacun avec sa bibliothèque privée.
 
 Spotify fournit des références musicales. La disponibilité d'un titre sur Spotify
 ne garantit pas qu'une source audio correspondante sera trouvée.
+
+Les liens artistes conservent les identifiants Spotify disponibles. Pour un titre
+YouTube ou une ancienne entrée, YouPlayer cherche une correspondance sur le titre
+et l’artiste ; en cas de doute, il affiche les résultats à choisir.
+
+Le bouton **Paroles** lance une recherche sur [LRCLIB](https://lrclib.net/docs.txt),
+sans clé API, en transmettant le titre et l’artiste. Tant que le panneau reste
+ouvert, le morceau suivant déclenche une nouvelle recherche. Les paroles suivent
+la position audio uniquement si les durées diffèrent de deux secondes au maximum ;
+sinon, le texte reste disponible sans défilement automatique. Un réglage de décalage
+et la case **Suivre la lecture** permettent de corriger ou désactiver le suivi.
+Pendant le suivi, la ligne chantée reste au centre du panneau et le texte défile
+automatiquement, y compris pour la première et la dernière ligne. Ouvrir les
+paroles affiche directement leur zone de lecture ; le centrage s’adapte à la
+taille de l’écran et aux changements de position.
+Une durée proche ne garantit pas un alignement parfait : les intros, versions live
+et montages peuvent différer. Aucun étirement des paroles n’est appliqué.
+
+Si LRCLIB ne trouve pas de texte, YouPlayer essaie les sous-titres de la vidéo
+effectivement utilisée pour l’audio, via yt-dlp. Les sous-titres manuels sont
+prioritaires ; les transcriptions automatiques sont identifiées comme telles et
+peuvent contenir des erreurs. Leur suivi utilise les horodatages de cette vidéo,
+sans imposer la durée de la version Spotify. La source vidéo est conservée dans
+le cache privé de la session ; un ancien fichier audio sans cette référence ne
+permet pas ce repli tant qu’il n’a pas été téléchargé à nouveau. Certaines vidéos
+n’ont pas de sous-titres accessibles ou leur récupération peut être refusée par
+YouTube. La musique continue même si la recherche de sous-titres échoue.
+
+Si ces deux sources ne fournissent aucun texte, YouPlayer interroge
+[lyrics.ovh](https://github.com/NTag/lyrics.ovh), sans clé API, avec le titre et
+l’artiste. Ce dernier recours fournit uniquement du texte : le suivi automatique
+et le décalage sont désactivés, et la source est indiquée dans le lecteur. Il
+fonctionne aussi quand un ancien cache audio n’a pas de référence vidéo. Les
+réponses sont mises en cache ; les requêtes sont limitées et les erreurs du
+fournisseur n’interrompent pas la musique.
 
 ## Aperçu
 

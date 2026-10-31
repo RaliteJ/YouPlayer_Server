@@ -618,6 +618,13 @@ export class PostgresYouplayerStore {
 				WHERE playlist_id = $1
 			`, [playlist.id]);
 			let position = Number(maxResult.rows[0].max_position) + 1;
+			const count = position + items.length;
+			if (!Array.isArray(newItems)) {
+				// Two steps avoid collisions with the immediate unique position constraint.
+				await client.query('UPDATE yp_playlist_items SET position = -position - 1 WHERE playlist_id = $1', [playlist.id]);
+				await client.query('UPDATE yp_playlist_items SET position = -position WHERE playlist_id = $1', [playlist.id]);
+				position = 0;
+			}
 			for (const item of items) {
 				await client.query(`
 					INSERT INTO yp_playlist_items (playlist_id, position, data)
@@ -631,7 +638,7 @@ export class PostgresYouplayerStore {
 			await client.query("COMMIT");
 			return {
 				playlist: playlist.name,
-				count: position,
+				count,
 				added: items.length
 			};
 		} catch (err) {

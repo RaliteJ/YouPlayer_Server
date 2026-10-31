@@ -35,7 +35,7 @@ export async function updateJsonFile(filePath, newItem) {
 			obj.items.push(item);
 		}
 	} else {
-		obj.items.push(newItem);
+		obj.items.unshift(newItem);
 	}
 	obj.updatedAt = new Date().toISOString();
 
