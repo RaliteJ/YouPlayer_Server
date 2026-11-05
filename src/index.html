@@ -83,7 +83,14 @@
             <div class="playlist-preview-header">
               <h2 id="playlist-preview-title">Aperçu</h2>
               <span id="playlist-preview-count">Aucune playlist ouverte</span>
+              <button id="playlist-rename" type="button" class="btn-small" hidden>Renommer</button>
             </div>
+            <form id="playlist-rename-form" hidden>
+              <label for="playlist-rename-title">Nom de la playlist</label>
+              <input id="playlist-rename-title" type="text" maxlength="100" required autocomplete="off">
+              <button type="submit" class="btn-small">Enregistrer</button>
+              <button id="playlist-rename-cancel" type="button" class="btn-small">Annuler</button>
+            </form>
             <ul id="playlist-preview-list" class="playlist-preview-list">
               <li class="playlist-preview-empty">Aucune musique à afficher</li>
             </ul>
@@ -400,7 +407,7 @@
 
         <button id="lyrics-toggle" class="player-action-button" type="button" aria-controls="lyrics-panel" aria-expanded="false">Paroles</button>
         <section id="lyrics-panel" class="lyrics-panel" aria-label="Paroles du morceau" hidden>
-          <p class="muted">Recherche sur LRCLIB, puis YouTube et lyrics.ovh. Le titre et l’artiste sont transmis aux fournisseurs consultés.</p>
+          <p class="muted">Paroles Spotify via l’extension connectée. Le jeton Spotify reste dans le navigateur.</p>
           <p id="lyrics-status" role="status">Ouvre les paroles pour ce morceau.</p>
           <div class="lyrics-controls">
             <label><input id="lyrics-sync" type="checkbox" checked disabled> Suivre la lecture</label>
@@ -408,7 +415,7 @@
             <button id="lyrics-retry" class="btn-small" type="button">Réessayer</button>
           </div>
           <div id="lyrics-content" class="lyrics-content" tabindex="0" aria-label="Texte des paroles"></div>
-          <a id="lyrics-source" href="https://lrclib.net" target="_blank" rel="noreferrer" hidden>Source : LRCLIB</a>
+          <a id="lyrics-source" href="https://open.spotify.com" target="_blank" rel="noreferrer" hidden>Source : Spotify</a>
         </section>
         <div id="sponsorblock-track-control" hidden>
           <label><input type="checkbox" id="sponsorblock-track-enabled" checked> Passer les passages sans musique pour ce titre</label>

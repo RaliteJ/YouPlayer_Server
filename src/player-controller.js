@@ -149,7 +149,10 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             if (audio.readyState >= 1) seek();
             else audio.addEventListener('loadedmetadata', seek, { once: true });
             this.userPausedAudio = saved.playing !== true;
-            if (saved.playing === true) await this.playAudioWithDiagnostics(audio, { trigger: 'restore-playback' });
+            if (saved.playing === true) {
+                const played = await this.playAudioWithDiagnostics(audio, { trigger: 'restore-playback' });
+                if (played === null) return;
+            }
             void this.prefetchUpcomingTrack(resumed.queue || []);
         } catch {
             if (this.playbackRestoreGeneration === generation) {
@@ -359,6 +362,9 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             this.pauseAudioWithDiagnostics(audio, 'sleep-timer');
             return true;
         }
+        const request = this.pendingPlay = { audio };
+        const source = audio.src;
+        const isCurrent = () => this.pendingPlay === request && audio.src === source && this.activeAudioPlayer() === audio;
         this.lastPlayRejection = null;
         this.logNextDiagnostic('BEFORE_PLAY', {
             ...this.audioDiagnosticSnapshot(audio),
@@ -380,6 +386,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 ...context
             });
             if (returnedPromise) await result;
+            if (!isCurrent()) return null;
             this.logNextDiagnostic('PLAY_RESOLVED', {
                 playerInstanceId: this.diagnosticInstanceId(audio),
                 paused: audio.paused,
@@ -390,6 +397,11 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             });
             return true;
         } catch (error) {
+            // A replaced source or explicit pause cancels play; it is not a failed track.
+            if (!isCurrent()) {
+                this.logNextDiagnostic('PLAY_CANCELLED', { ...context, name: error?.name });
+                return null;
+            }
             this.lastPlayRejection = error;
             this.logNextDiagnostic('PLAY_REJECTED', {
                 playerInstanceId: this.diagnosticInstanceId(audio),
@@ -440,6 +452,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
     },
 
     setMainAudioSource(path, context = {}) {
+        this.pendingPlay = null;
         if (context.trigger !== 'restore-playback') {
             this.cancelPlaybackRestore();
         }
@@ -514,6 +527,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             }, {
                 reportRejection: attempt === maxAttempts - 1
             });
+            if (playResolved === null) return null;
             if (playResolved) {
                 this.markRecentBackgroundAutoStart(this.lecteur, context);
                 return true;
@@ -748,6 +762,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             trigger: 'start-special-playback',
             streamId: data.stream_id
         });
+        if (playResolved === null) return;
         this.logNextDiagnostic('SPECIAL_STREAM_PLAY_RESULT', {
             streamId: data.stream_id,
             playResolved
@@ -845,9 +860,12 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             try {
                 const path = await this.waitForTrackReady(recovery.trackId, 120000, { silent: true, isCurrent });
                 if (!isCurrent()) return;
-                if (path && await this.loadAndPlayMainSource(path, {
-                    trigger: 'spotify-stream-recovery', nextTrackId: recovery.trackId
-                })) return;
+                if (path) {
+                    const played = await this.loadAndPlayMainSource(path, {
+                        trigger: 'spotify-stream-recovery', nextTrackId: recovery.trackId
+                    });
+                    if (played !== false) return;
+                }
                 if (!isCurrent() || this.lastPlayRejection?.name === 'NotAllowedError') return;
             } finally {
                 if (this.spotifyStreamRecovery === recovery) this.spotifyStreamRecovery = null;
@@ -899,6 +917,10 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 nextTrackId: prefetched.trackId,
                 path: 'prefetched'
             });
+            if (playResolved === null) {
+                void this.syncPrefetchedTransitions();
+                return;
+            }
             this.clearNextTrackPrefetch();
             if (!playResolved) {
                 autoplayBlocked = this.lastPlayRejection?.name === 'NotAllowedError';
@@ -1202,6 +1224,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                     nextTrackId: newId,
                     path: 'network'
                 });
+                if (playResolved === null) return;
                 if (!playResolved) {
                     if (this.lastPlayRejection?.name === 'NotAllowedError') {
                         this.logNextDiagnostic('ADVANCE_WAITING_FOR_USER_PLAY', {

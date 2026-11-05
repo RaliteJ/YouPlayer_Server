@@ -117,7 +117,7 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
     },
 
     async openSpotifyPlaylistPicker(menu) {
-        const playlists = await this.apiFetch('/different_playlist');
+        const playlists = await this.apiFetch('/playlist_summaries');
         if (!playlists) {
             this.showNotice(this.apiErrorMessage("Impossible de charger les playlists."));
             return;
@@ -187,7 +187,7 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
     },
 
     async openYoutubePlaylistPicker(menu, playlistData) {
-        const playlists = await this.apiFetch('/different_playlist');
+        const playlists = await this.apiFetch('/playlist_summaries');
         if (!playlists) {
             this.showNotice(this.apiErrorMessage("Impossible de charger les playlists."));
             return;
@@ -241,7 +241,7 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
         this.modalLocalArtwork.value = '';
 
         // Récupération des playlists existantes pour la liste déroulante
-        const playlists = await this.apiFetch('/different_playlist');
+        const playlists = await this.apiFetch('/playlist_summaries');
 
         if (playlists) {
             this.modalSelect.innerHTML = this.playlistEntries(playlists).filter(item => item.name !== LIKED_PLAYLIST)

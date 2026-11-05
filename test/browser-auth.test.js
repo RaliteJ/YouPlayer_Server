@@ -398,6 +398,60 @@ test('settings playlist file export and import round trip through the real user 
     }
 });
 
+test('renaming a playlist updates its preview and pickers while actual audio, selection and pins stay intact', { timeout: 20000 }, async t => {
+    if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
+    const user = await app.locals.youplayerStore.createUser({ pseudo: 'rename-browser', password: 'synthetic-password' });
+    const samples = 8000 * 30;
+    const wav = Buffer.alloc(44 + samples * 2);
+    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4);
+    wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+    await writeFile(path.join(tempRoot, 'local_song', 'rename-browser.wav'), wav);
+    await app.locals.youplayerStore.appendPlaylistItems(user.id, 'Original', [{ type: 'local', url: 'rename-browser.wav', title: 'Synthetic audio' }]);
+    await app.locals.youplayerStore.updateLibraryPreferences(user.id, { action: 'pin', playlist: 'Original.json', enabled: true });
+    const context = await browser.createBrowserContext();
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    try {
+        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+        await page.evaluate(async () => {
+            await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pseudo: 'rename-browser', password: 'synthetic-password' }) });
+            const { App } = await import(document.querySelector('script[type="module"]').src);
+            window.fixtureApp = App;
+            await App.refreshAuth();
+            await App.fetchAvailablePlaylists();
+            await App.playLibraryPlaylist('Original.json');
+            App.loadView('accueil');
+        });
+        await page.waitForFunction(() => window.fixtureApp.lecteur.currentTime > 0);
+        const source = await page.evaluate(() => window.fixtureApp.lecteur.currentSrc);
+        await page.click('.playlist-preview-button[data-playlist="Original.json"]');
+        await page.waitForFunction(() => !document.getElementById('playlist-rename').hidden);
+        await page.click('#playlist-rename');
+        assert.equal(await page.$eval('#playlist-rename-title', input => input.value), 'Original');
+        await page.click('#playlist-rename-cancel');
+        assert.equal(await page.$eval('#playlist-rename-form', form => form.hidden), true);
+        await page.click('#playlist-rename');
+        await page.$eval('#playlist-rename-title', input => { input.value = 'Voyages <été>'; });
+        await page.click('#playlist-rename-form [type="submit"]');
+        await page.waitForFunction(() => document.getElementById('playlist-preview-title').textContent === 'Voyages <été>');
+        assert.equal(await page.$eval('.playlist-choice-title', element => element.textContent), 'Voyages <été>');
+        assert.equal(await page.$eval('.library-pin[data-playlist="Original.json"]', button => button.getAttribute('aria-pressed')), 'true');
+        assert.deepEqual(await page.evaluate(() => window.fixtureApp.selectedPlaylists), ['Original.json']);
+        assert.equal(await page.evaluate(() => window.fixtureApp.lecteur.currentSrc), source);
+        assert.equal(await page.evaluate(() => window.fixtureApp.lecteur.paused), false);
+        assert.equal(await page.$eval('#overlay-context', element => element.textContent), 'Voyages <été>');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        await page.evaluate(() => window.fixtureApp.openAddModal({ type: 'youtube', url: 'https://www.youtube.com/watch?v=abcdefghijk', title: 'Synthetic' }));
+        assert.equal(await page.$eval('#modal-playlist-select option[value="Original.json"]', option => option.textContent), 'Voyages <été>');
+        assert.equal((await app.locals.youplayerStore.getPlaylistSummaries(user.id))[0].title, 'Voyages <été>');
+    } finally { await context.close(); }
+});
+
 test('library shortcuts preserve filtered selection, pins and mobile layout; sleep timer blocks late playback', { timeout: 30000 }, async (t) => {
 	if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
 	const page = await browser.newPage();
@@ -1001,7 +1055,7 @@ test('YouTube results play on click, queue on swipe and open the playlist form f
 			App.openYoutubePlaylistActionMenu = (_button, playlist) => window.imported.push(playlist.playlistId);
 			App.apiFetch = async (path, method, body) => {
 				if (path === '/send_search_youtube') return { items: results };
-				if (path === '/different_playlist') return ['Existing fixture.json'];
+				if (path === '/playlist_summaries') return ['Existing fixture.json'];
 				if (path === '/liked_tracks') {
 					window.liked.push(body);
 					return { items: body.liked ? [body.song] : [] };
@@ -1563,6 +1617,72 @@ test('ended handling remains wired while the tab is in background', { timeout: 2
 	}
 });
 
+test('a YouTube click replaces a stalled play without stale retries or a false audio error', { timeout: 15000 }, async t => {
+	if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
+	const samples = 8000 * 8;
+	const tone = Buffer.alloc(44 + samples * 2);
+	tone.write('RIFF'); tone.writeUInt32LE(tone.length - 8, 4);
+	tone.write('WAVEfmt ', 8); tone.writeUInt32LE(16, 16);
+	tone.writeUInt16LE(1, 20); tone.writeUInt16LE(1, 22);
+	tone.writeUInt32LE(8000, 24); tone.writeUInt32LE(16000, 28);
+	tone.writeUInt16LE(2, 32); tone.writeUInt16LE(16, 34);
+	tone.write('data', 36); tone.writeUInt32LE(samples * 2, 40);
+	for (let i = 0; i < samples; i++) tone.writeInt16LE(Math.round(2000 * Math.sin(i * Math.PI * 440 / 4000)), 44 + i * 2);
+	const page = await browser.newPage();
+	page.setDefaultTimeout(4000);
+	const mediaRequests = [];
+	try {
+		await page.setRequestInterception(true);
+		page.on('request', request => {
+			const route = new URL(request.url()).pathname;
+			if (route.startsWith('/play/old-loading') || route === '/audio/selected-fixture') mediaRequests.push(route);
+			if (route.startsWith('/play/old-loading')) return;
+			if (route === '/audio/selected-fixture') {
+				return void request.respond({ status: 200, contentType: 'audio/wav', body: tone });
+			}
+			if (request.url().startsWith(baseUrl)) void request.continue();
+			else void request.abort();
+		});
+		await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+		await page.evaluate(async () => {
+			const { App } = await import(document.querySelector('script[type="module"]').src);
+			window.fixtureApp = App;
+			window.playbackNotices = [];
+			App.currentUser = { id: 'source-replacement-fixture', role: 'user' };
+			const track = { type: 'youtube', url: 'https://www.youtube.com/watch?v=aaaaaaaaaaa', title: 'Selected fixture' };
+			App.apiFetch = async endpoint => {
+				if (endpoint === '/account_playback/restore') return null;
+				if (endpoint === '/liked_tracks') return { items: [] };
+				if (endpoint === '/send_search_youtube') return { items: [{ id: { videoId: 'aaaaaaaaaaa' }, snippet: { title: track.title, thumbnails: {} } }] };
+				if (endpoint === '/add_song_ecoute') return { currentId: 0, queue: [{ ...track, __sessionIndex: 51 }], first_track_special_pending: true };
+				if (endpoint === '/next_song?reason=select') return { mode: 'special_stream', stream_id: 'selected-fixture', audio_url: '/audio/selected-fixture', currentId: 51, current: track, queue: [] };
+				return [];
+			};
+			App.showApp();
+			App.showNotice = message => window.playbackNotices.push(message);
+			App.loadView('add_youtube');
+			document.getElementById('query_yt').value = 'Selected fixture';
+			await App.searchYoutube();
+			App.currentId = 0;
+			window.oldPlayback = App.loadAndPlayMainSource('/play/old-loading', { trigger: 'restore-playback' });
+		});
+		await page.waitForFunction(() => window.fixtureApp.lecteur.networkState === HTMLMediaElement.NETWORK_LOADING);
+		await page.click('.video-card[data-id="aaaaaaaaaaa"]');
+		await page.waitForFunction(() => Number(window.fixtureApp.currentId) === 51 && window.fixtureApp.lecteur.currentTime > 0.05);
+		assert.equal(await page.evaluate(() => window.oldPlayback), null);
+		assert.deepEqual(await page.evaluate(() => window.playbackNotices), []);
+		assert.equal(await page.evaluate(() => window.fixtureApp.lastPlayRejection), null);
+		assert.deepEqual(mediaRequests, ['/play/old-loading', '/audio/selected-fixture']);
+	} catch (error) {
+		t.diagnostic(JSON.stringify({ mediaRequests, state: await page.evaluate(() => {
+			const app = window.fixtureApp;
+			return app ? { id: app.currentId, source: app.lecteur.src, paused: app.lecteur.paused,
+				error: app.lecteur.error?.message, notices: window.playbackNotices } : null;
+		}) }));
+		throw error;
+	} finally { await page.close(); }
+});
+
 test('second audio actually plays in background while first-stream stop HTTP is stalled', { timeout: 20000 }, async (t) => {
 	if (browserSetupError) {
 		t.skip(`Browser test unavailable: ${browserSetupError.message}`);
@@ -2107,7 +2227,7 @@ test('local upload form sends edited title, artist and resized cover', { timeout
             window.fixtureApp = App;
             App.currentUser = { id: 'local-upload-browser', role: 'user' };
             App.refreshLikes = async () => {};
-            App.apiFetch = async endpoint => endpoint === '/different_playlist' ? {} : null;
+            App.apiFetch = async endpoint => endpoint === '/playlist_summaries' ? {} : null;
             App.showApp();
             const canvas = document.createElement('canvas');
             canvas.width = canvas.height = 2;
@@ -2165,7 +2285,7 @@ test('YouTube playlist menu creates or appends an import, excludes Liked and kee
                     id: { kind: 'youtube#playlist', playlistId: 'PLsynthetic' },
                     snippet: { title: 'Synthetic playlist' }
                 }] };
-                if (path === '/different_playlist') return ['Existing fixture.json', LIKED_PLAYLIST];
+                if (path === '/playlist_summaries') return ['Existing fixture.json', LIKED_PLAYLIST];
                 if (path === '/youtube_import_playlist') {
                     window.playlistImports.push(body);
                     return { playlist: body.playlist || 'Synthetic playlist.json', count: 2 };
@@ -2331,7 +2451,7 @@ test('artist links navigate from playlists, previews, queue and both players wit
     } finally { await page.close(); }
 });
 
-test('lyrics load on demand, follow seek and offsets, and fall back to plain text for another duration', { timeout: 15000 }, async t => {
+test('Spotify lyrics load on demand, follow seek and offsets and render unsynced text safely', { timeout: 15000 }, async t => {
     if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
     const page = await browser.newPage();
     try {
@@ -2339,114 +2459,133 @@ test('lyrics load on demand, follow seek and offsets, and fall back to plain tex
         await page.goto(baseUrl, { waitUntil: 'networkidle0' });
         await page.evaluate(async () => {
             const { App } = await import(document.querySelector('script[type="module"]').src);
+            const { spotifyBrowserBridge } = await import('/spotify-browser-bridge.js');
             window.featureApp = App;
             window.lyricsRequests = 0;
-            App.currentUser = { id: 'lyrics-fixture', role: 'user' };
-            App.apiFetch = async endpoint => {
-                if (endpoint.startsWith('/lyrics?')) {
-                    window.lyricsRequests++;
-                    return { available: true, found: true, key: 'local:lyrics-fixture.mp3', duration: 180,
-                        sourceUrl: 'https://lrclib.net/api/get/42', plainLyrics: 'Texte <img src=x> de test',
-                        syncedLyrics: '[00:01.00]Première ligne\n[00:10.00]Deuxième ligne' };
-                }
-                if (endpoint === '/account_playback/restore') return null;
-                if (endpoint === '/liked_tracks') return { items: [] };
-                return [];
+            spotifyBrowserBridge.status = async () => ({ authenticated: true });
+            spotifyBrowserBridge.getLyrics = async () => {
+                window.lyricsRequests++;
+                return { available: true, found: true, source: 'Spotify', sourceUrl: `https://open.spotify.com/track/${'A'.repeat(22)}`,
+                    plainLyrics: 'Texte <img src=x> de test', timedLines: [{ time: 1, text: 'Première ligne' }, { time: 10, text: 'Deuxième ligne' }] };
             };
+            App.currentUser = { id: 'lyrics-fixture', role: 'user' };
+            App.apiFetch = async endpoint => endpoint === '/account_playback/restore' ? null : [];
             App.showApp();
             App.playerState.duration = 180;
             App.playerState.currentTime = 2;
-            App.updatePlaybackUi({ currentId: 0, current: { type: 'local', url: 'lyrics-fixture.mp3', title: 'Titre de test', artist: 'Artiste de test' }, queue: [] });
+            App.updatePlaybackUi({ currentId: 0, current: { type: 'spotify', url: `https://open.spotify.com/track/${'A'.repeat(22)}`,
+                duration_ms: 180000, title: 'Titre de test', artist: 'Artiste' }, queue: [] });
             App.openNowPlaying();
         });
         assert.equal(await page.evaluate(() => window.lyricsRequests), 0);
         await page.click('#lyrics-toggle');
         await page.waitForFunction(() => document.querySelector('#lyrics-content .is-active'));
-        assert.equal(await page.$eval('#lyrics-content .is-active', element => element.textContent), 'Première ligne');
-        await page.evaluate(() => { window.featureApp.playerState.currentTime = 11; window.featureApp.updatePlayerProgress(); });
-        assert.equal(await page.$eval('#lyrics-content .is-active', element => element.textContent), 'Deuxième ligne');
-        await page.$eval('#lyrics-offset', element => { element.value = '10'; element.dispatchEvent(new Event('input')); });
-        assert.equal(await page.$eval('#lyrics-content .is-active', element => element.textContent), 'Première ligne');
-        await page.evaluate(() => { window.featureApp.playerState.currentTime = 0; window.featureApp.updatePlayerProgress(); });
-        assert.equal(await page.$('#lyrics-content .is-active'), null);
-        await page.evaluate(() => { window.featureApp.playerState.duration = 200; window.featureApp.updatePlayerProgress(); });
-        assert.equal(await page.$eval('#lyrics-sync', element => element.disabled), true);
-        assert.match(await page.$eval('#lyrics-content', element => element.textContent), /<img src=x>/);
+        assert.equal(await page.$eval('#lyrics-content .is-active', el => el.textContent), 'Première ligne');
+        await page.evaluate(() => { featureApp.playerState.currentTime = 12; featureApp.updatePlayerProgress(); });
+        assert.equal(await page.$eval('#lyrics-content .is-active', el => el.textContent), 'Deuxième ligne');
+        await page.$eval('#lyrics-offset', el => { el.value = '10'; el.dispatchEvent(new Event('input')); });
+        assert.equal(await page.$eval('#lyrics-content .is-active', el => el.textContent), 'Première ligne');
+        await page.evaluate(() => { featureApp.playerState.duration = 200; featureApp.renderLyrics(); });
+        assert.equal(await page.$eval('#lyrics-sync', el => el.disabled), true);
         assert.equal(await page.$('#lyrics-content img'), null);
+        assert.match(await page.$eval('#lyrics-content', el => el.textContent), /<img src=x>/);
         assert.equal(await page.evaluate(() => window.lyricsRequests), 1);
-        await page.evaluate(async () => {
-            const App = window.featureApp;
-            App.apiFetch = async () => ({ available: true, found: true, key: 'local:lyrics-fixture.mp3',
-                source: 'YouTube', sourceUrl: 'https://www.youtube.com/watch?v=aaaaaaaaaaa', sameSource: true,
-                automatic: true, timedLines: [{ time: 1, text: 'Sous-titre vidéo' }, { time: 10, text: 'Suite vidéo' }] });
-            App.lyricsData = null;
-            App.playerState.duration = 0;
-            App.playerState.currentTime = 5;
-            App.lyricsOffset.value = '0';
-            await App.loadLyrics();
-        });
-        assert.equal(await page.$eval('#lyrics-sync', element => element.disabled), false);
-        assert.equal(await page.$eval('#lyrics-content .is-active', element => element.textContent), 'Sous-titre vidéo');
-        assert.match(await page.$eval('#lyrics-status', element => element.textContent), /automatiques YouTube/);
-        assert.equal(await page.$eval('#lyrics-source', element => element.href), 'https://www.youtube.com/watch?v=aaaaaaaaaaa');
-        await page.click('#lyrics-sync');
-        assert.equal(await page.$('#lyrics-content .is-active'), null);
-        assert.match(await page.$eval('#lyrics-content', element => element.textContent), /Suite vidéo/);
-        await page.evaluate(async () => {
-            const App = window.featureApp;
-            App.apiFetch = async () => ({ available: true, found: true, key: 'local:lyrics-fixture.mp3',
-                source: 'lyrics.ovh', sourceUrl: 'https://api.lyrics.ovh/v1/Artiste/Titre',
-                plainLyrics: 'Texte OVH <img src=x> sans synchronisation', duration: 180,
-                syncedLyrics: '[00:01.00]Horodatage à ignorer' });
-            App.lyricsData = null;
-            App.playerState.duration = 180;
-            App.lyricsSync.checked = true;
-            await App.loadLyrics();
-        });
-        assert.equal(await page.$eval('#lyrics-sync', element => element.disabled), true);
-        assert.equal(await page.$eval('#lyrics-offset', element => element.disabled), true);
-        assert.equal(await page.$('#lyrics-content .is-active'), null);
-        assert.equal(await page.$('#lyrics-content img'), null);
-        assert.match(await page.$eval('#lyrics-content', element => element.textContent), /Texte OVH <img src=x>/);
-        assert.match(await page.$eval('#lyrics-status', element => element.textContent), /texte seul · lyrics.ovh/);
-        assert.equal(await page.$eval('#lyrics-source', element => element.textContent), 'Source : lyrics.ovh');
-        assert.equal(await page.$eval('#lyrics-source', element => element.href), 'https://api.lyrics.ovh/v1/Artiste/Titre');
-        await page.screenshot({ path: '/tmp/youplayer-lyrics-mobile.png', fullPage: true });
-        for (const width of [320, 390, 1200]) {
-            await page.setViewport({ width, height: 844 });
-            assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-        }
     } finally { await page.close(); }
 });
 
-test('late lyrics responses cannot replace another track or survive logout', { timeout: 15000 }, async t => {
+test('Spotify lyrics use the extension bridge without any server lyrics fallback', { timeout: 15000 }, async t => {
     if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
     const page = await browser.newPage();
     try {
         await page.goto(baseUrl, { waitUntil: 'networkidle0' });
         const result = await page.evaluate(async () => {
             const { App } = await import(document.querySelector('script[type="module"]').src);
+            let fallback = 0, missing = false;
+            const actions = [];
+            const id = 'A'.repeat(22);
+            window.addEventListener('message', event => {
+                const message = event.data;
+                if (message?.source !== 'youplayer-app') return;
+                actions.push(message.action);
+                const data = message.action === 'status' ? { authenticated: true }
+                    : missing ? { available: true, found: false }
+                    : { available: true, found: true, source: 'Spotify', sourceUrl: `https://open.spotify.com/track/${id}`,
+                        plainLyrics: 'Test <img src=x>', timedLines: [{ time: 1, text: 'Test <img src=x>' }] };
+                window.postMessage({ source: 'youplayer-spotify-extension', requestId: message.requestId, ok: true, data }, location.origin);
+            });
+            App.currentUser = { id: 'spotify-lyrics-fixture', role: 'user' };
+            App.apiFetch = async endpoint => {
+                if (endpoint.startsWith('/lyrics?')) {
+                    fallback++;
+                    throw new Error('Backend lyrics must not be requested');
+                }
+                return endpoint === '/account_playback/restore' ? null : [];
+            };
+            App.showApp();
+            App.playerState.duration = 180;
+            App.playerState.currentTime = 2;
+            App.updatePlaybackUi({ currentId: 0, current: { type: 'spotify', url: `https://open.spotify.com/track/${id}`,
+                duration_ms: 180000, title: 'Test', artist: 'Artist' }, queue: [] });
+            await App.loadLyrics();
+            const synced = { source: App.lyricsData?.source, enabled: !App.lyricsSync.disabled,
+                text: App.lyricsContent.textContent, images: App.lyricsContent.querySelectorAll('img').length,
+                sourceUrl: App.lyricsSource.href, fallback };
+            App.playerState.duration = 190;
+            App.renderLyrics();
+            const mismatched = App.lyricsSync.disabled;
+            missing = true;
+            App.lyricsData = null;
+            await App.loadLyrics();
+            return { synced, mismatched, actions, fallback, fallbackText: App.lyricsContent.textContent };
+        });
+        assert.equal(result.synced.source, 'Spotify');
+        assert.equal(result.synced.enabled, true);
+        assert.match(result.synced.text, /<img src=x>/);
+        assert.equal(result.synced.images, 0);
+        assert.equal(result.synced.sourceUrl, `https://open.spotify.com/track/${'A'.repeat(22)}`);
+        assert.equal(result.synced.fallback, 0);
+        assert.equal(result.mismatched, true);
+        assert.ok(result.actions.includes('get-lyrics'));
+        assert.equal(result.fallback, 0);
+        assert.equal(result.fallbackText, '');
+    } finally { await page.close(); }
+});
+
+test('late Spotify lyrics cannot replace another track or survive logout', { timeout: 15000 }, async t => {
+    if (browserSetupError) return t.skip(`Browser test unavailable: ${browserSetupError.message}`);
+    const page = await browser.newPage();
+    try {
+        await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+        const result = await page.evaluate(async () => {
+            const { App } = await import(document.querySelector('script[type="module"]').src);
+            const { spotifyBrowserBridge } = await import('/spotify-browser-bridge.js');
             App.currentUser = { id: 'lyrics-race', role: 'user' };
             App.apiFetch = async endpoint => endpoint === '/account_playback/restore' ? null : [];
             App.showApp();
             const pending = [];
-            App.apiFetch = endpoint => endpoint.startsWith('/lyrics?') ? new Promise(resolve => pending.push(resolve)) : Promise.resolve([]);
-            const select = (id, name) => App.updatePlaybackUi({ currentId: id, current: { type: 'local', url: `${name}.mp3`, title: name, artist: 'Test' }, queue: [] });
-            const response = name => ({ available: true, found: true, source: 'lyrics.ovh', key: `local:${name}.mp3`, plainLyrics: name });
-            select(0, 'ancien');
+            spotifyBrowserBridge.status = async () => ({ authenticated: true });
+            spotifyBrowserBridge.getLyrics = () => new Promise(resolve => pending.push(resolve));
+            const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+            const select = (index, letter) => App.updatePlaybackUi({ currentId: index,
+                current: { type: 'spotify', url: `https://open.spotify.com/track/${letter.repeat(22)}`, title: letter, artist: 'Test' }, queue: [] });
+            const response = name => ({ available: true, found: true, source: 'Spotify', plainLyrics: name, timedLines: [] });
+            select(0, 'A');
             App.lyricsPanel.hidden = false;
             const old = App.loadLyrics();
-            select(1, 'nouveau');
+            await settle();
+            select(1, 'B');
+            await settle();
             pending[1](response('nouveau'));
-            await new Promise(resolve => setTimeout(resolve, 0));
+            await settle();
             pending[0](response('ancien'));
             await old;
             const text = App.lyricsContent.textContent;
-            select(2, 'troisieme');
+            select(2, 'C');
+            await settle();
             App.currentUser = null;
             App.showAuth();
             pending[2](response('troisieme'));
-            await new Promise(resolve => setTimeout(resolve, 0));
+            await settle();
             return { text, afterLogout: App.lyricsContent.textContent, closed: App.lyricsPanel.hidden };
         });
         assert.equal(result.text, 'nouveau');
@@ -2474,23 +2613,24 @@ test('synced lyrics keep the current line centered from first to last without ma
         await page.goto(baseUrl, { waitUntil: 'networkidle0' });
         await page.evaluate(async () => {
             const { App } = await import(document.querySelector('script[type="module"]').src);
+            const { spotifyBrowserBridge } = await import('/spotify-browser-bridge.js');
             window.scrollLyricsApp = App;
             App.currentUser = { id: 'lyrics-scroll-fixture', role: 'user' };
             App.apiFetch = async endpoint => {
                 if (endpoint === '/account_playback/restore') return null;
                 if (endpoint === '/liked_tracks') return { items: [] };
-                if (endpoint.startsWith('/lyrics?')) return {
-                    available: true, found: true, key: 'local:scroll-fixture.mp3', source: 'YouTube', sameSource: true,
-                    sourceUrl: 'https://www.youtube.com/watch?v=aaaaaaaaaaa',
-                    timedLines: Array.from({ length: 24 }, (_, index) => ({ time: index * 5,
-                        text: index % 5 === 0 ? `Ligne ${index} suffisamment longue pour revenir à la ligne sur un petit écran` : `Ligne ${index}` }))
-                };
                 return [];
             };
+            spotifyBrowserBridge.status = async () => ({ authenticated: true });
+            spotifyBrowserBridge.getLyrics = async () => ({
+                available: true, found: true, source: 'Spotify', sourceUrl: `https://open.spotify.com/track/${'A'.repeat(22)}`,
+                timedLines: Array.from({ length: 24 }, (_, index) => ({ time: index * 5,
+                    text: index % 5 === 0 ? `Ligne ${index} suffisamment longue pour revenir à la ligne sur un petit écran` : `Ligne ${index}` }))
+            });
             App.showApp();
             App.playerState.duration = 180;
             App.playerState.currentTime = 1;
-            App.updatePlaybackUi({ currentId: 0, current: { type: 'local', url: 'scroll-fixture.mp3', title: 'Titre de test', artist: 'Artiste de test' }, queue: [] });
+            App.updatePlaybackUi({ currentId: 0, current: { type: 'spotify', url: `https://open.spotify.com/track/${'A'.repeat(22)}`, duration_ms: 180000, title: 'Titre de test', artist: 'Artiste de test' }, queue: [] });
             App.openNowPlaying();
         });
         await page.click('#lyrics-toggle');
@@ -2522,7 +2662,7 @@ test('synced lyrics keep the current line centered from first to last without ma
         await page.screenshot({ path: '/tmp/youplayer-lyrics-centered-mobile.png' });
         await page.evaluate(() => {
             const App = window.scrollLyricsApp;
-            App.lyricsData = { available: true, found: true, source: 'lyrics.ovh', plainLyrics: 'Texte seul sans horodatages' };
+            App.lyricsData = { available: true, found: true, source: 'Spotify', plainLyrics: 'Texte seul sans horodatages' };
             App.lyricsLines = [];
             App.renderLyrics();
         });

@@ -401,6 +401,9 @@ body.auth-required .main {
   white-space: nowrap;
 }
 
+#playlist-rename-form { margin-bottom: 12px; }
+#playlist-rename-title { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; }
+
 #playlist-preview-count {
   color: var(--text-muted);
   font-size: 13px;

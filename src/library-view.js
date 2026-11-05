@@ -156,6 +156,7 @@ export const libraryView = {
         const current = () => revision === this.librarySearchRevision && userId === this.currentUser?.id;
         const needles = fold(query).split(/\s+/);
         this.previewedPlaylist = null;
+        this.updatePlaylistRename();
         this.clearTrackPageScrolling(this.playlistPreviewList);
         this.playlistPreviewTitle.textContent = 'Recherche dans la bibliothèque';
         this.playlistPreviewCount.textContent = 'Recherche…';

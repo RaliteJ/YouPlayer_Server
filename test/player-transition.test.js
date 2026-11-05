@@ -49,6 +49,80 @@ function playerHarness() {
 	return { app, calls, requests };
 }
 
+test('replacing a pending source with a private stream does not retry the old source or report a failure', async () => {
+	const { app } = playerHarness();
+	const notices = [], prefetched = [], sources = [];
+	const audio = app.lecteur;
+	app.currentSpecialStream = null;
+	app.showNotice = message => notices.push(message);
+	app.requestWakeLock = () => {};
+	app.prefetchUpcomingTrack = queue => prefetched.push(queue);
+	let rejectOld;
+	audio.play = () => {
+		sources.push(audio.src);
+		return sources.length === 1 ? new Promise((resolve, reject) => { rejectOld = reject; }) : Promise.resolve();
+	};
+	audio.load = () => {
+		if (rejectOld) {
+			rejectOld(Object.assign(new Error('Media fetching was aborted'), { name: 'AbortError' }));
+			rejectOld = null;
+		}
+	};
+	audio.removeAttribute = () => { audio.src = ''; };
+	const old = app.loadAndPlayMainSource('/play/0');
+	await app.startSpecialPlayback({ stream_id: 'selected', audio_url: '/audio/selected', queue: [] });
+	assert.equal(await old, null);
+	assert.deepEqual(sources, ['https://player.test/play/0', 'https://player.test/audio/selected']);
+	assert.deepEqual(notices, []);
+	assert.equal(prefetched.length, 1);
+	assert.equal(app.lastPlayRejection, null);
+	assert.equal(audio.src, 'https://player.test/audio/selected');
+});
+
+test('an intentional pause cancels a pending play without reporting an audio failure', async () => {
+	const { app } = playerHarness();
+	const notices = [];
+	app.showNotice = message => notices.push(message);
+	let rejectPlay;
+	app.lecteur.play = () => new Promise((resolve, reject) => { rejectPlay = reject; });
+	app.lecteur.pause = () => rejectPlay(Object.assign(new Error('Paused'), { name: 'AbortError' }));
+	const playing = app.playAudioWithDiagnostics(app.lecteur);
+	app.pauseAudioWithDiagnostics(app.lecteur, 'play-pause-control');
+	assert.equal(await playing, null);
+	assert.deepEqual(notices, []);
+});
+
+test('a real failure of the current play attempt still reports the audio error', async () => {
+	const { app } = playerHarness();
+	const notices = [];
+	app.showNotice = message => notices.push(message);
+	const error = Object.assign(new Error('Unsupported audio'), { name: 'NotSupportedError' });
+	app.lecteur.play = () => Promise.reject(error);
+	assert.equal(await app.playAudioWithDiagnostics(app.lecteur), false);
+	assert.equal(app.lastPlayRejection, error);
+	assert.deepEqual(notices, ['La lecture audio n’a pas pu démarrer.']);
+});
+
+for (const outcome of ['resolve', 'reject']) {
+	test(`an obsolete play that ${outcome}s cannot overwrite the current attempt's error`, async () => {
+		const { app } = playerHarness();
+		const notices = [];
+		app.showNotice = message => notices.push(message);
+		let finishOld;
+		app.lecteur.play = () => new Promise((resolve, reject) => {
+			finishOld = () => outcome === 'resolve' ? resolve() : reject(Object.assign(new Error('Replaced'), { name: 'AbortError' }));
+		});
+		const old = app.playAudioWithDiagnostics(app.lecteur);
+		const error = Object.assign(new Error('Unsupported audio'), { name: 'NotSupportedError' });
+		app.lecteur.play = () => Promise.reject(error);
+		assert.equal(await app.playAudioWithDiagnostics(app.lecteur), false);
+		finishOld();
+		assert.equal(await old, null);
+		assert.equal(app.lastPlayRejection, error);
+		assert.equal(notices.length, 1);
+	});
+}
+
 test('a failed playlist selection does not discard the next queued selection', async () => {
 	const { app } = playerHarness();
 	const selections = [];

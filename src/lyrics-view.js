@@ -1,22 +1,21 @@
 import { trackLikeKey } from './client-utils.js';
+import { spotifyBrowserBridge } from './spotify-browser-bridge.js';
 
-export function parseLrc(value = '') {
-    const lines = [];
-    // An offset embedded in a file is not a verified alignment for the played video.
-    if (/\[offset\s*:/i.test(value)) return lines;
-    for (const line of value.split(/\r?\n/).slice(0, 2000)) {
-        const stamps = [...line.matchAll(/\[(\d{1,3}):([0-5]\d)(?:[.:](\d{1,3}))?\]/g)];
-        const text = line.replace(/\[[^\]]*\]/g, '').trim();
-        for (const stamp of stamps) lines.push({
-            time: Number(stamp[1]) * 60 + Number(stamp[2]) + Number(`0.${stamp[3] || 0}`), text
-        });
-    }
-    return lines.sort((a, b) => a.time - b.time);
+export async function lookupSpotifyLyrics(track, bridge = spotifyBrowserBridge) {
+    if (!bridge) return null;
+    let url;
+    try { url = new URL(track?.url); } catch { return null; }
+    const id = url.origin === 'https://open.spotify.com' && /^\/track\/([A-Za-z0-9]{22})$/.exec(url.pathname)?.[1];
+    if (!id) return null;
+    try {
+        if (!(await bridge.status())?.authenticated) return null;
+        const data = await bridge.getLyrics(id);
+        if (!data?.available || !data.found) return null;
+        return { ...data, duration: Number(track.duration_ms) > 0 ? Number(track.duration_ms) / 1000 : null };
+    } catch { return null; }
 }
 
 export function lyricsCanSync(data, duration) {
-    if (data?.source === 'lyrics.ovh') return false;
-    if (data?.source === 'YouTube' && data.sameSource === true) return true;
     return Number.isFinite(duration) && duration > 0 && Number.isFinite(data?.duration)
         && data.duration > 0 && Math.abs(duration - data.duration) <= 2;
 }
@@ -87,21 +86,23 @@ export const lyricsView = {
         if (this.lyricsRequest) return;
         const request = this.lyricsRequest = {};
         const user = this.currentUser?.id;
-        const key = trackLikeKey(this.playerState.currentTrack);
-        this.lyricsStatus.textContent = 'Recherche des paroles et sous-titres…';
-        const duration = this.playerState.duration || 0;
-        let data;
-        try { data = await this.apiFetch(`/lyrics?trackId=${this.currentId}&key=${encodeURIComponent(key)}&duration=${duration}`); } catch {}
+        this.lyricsStatus.textContent = 'Recherche des paroles Spotify…';
+        const data = await lookupSpotifyLyrics(this.playerState.currentTrack);
         if (this.lyricsRequest !== request || this.currentUser?.id !== user) return;
         this.lyricsRequest = null;
-        if (!data?.available || data.key !== key) {
-            this.lyricsStatus.textContent = 'Paroles indisponibles pour le moment. Réessaie plus tard.';
+        if (!data) {
+            this.lyricsLines = [];
+            this.lyricsContent.replaceChildren();
+            this.lyricsContent.classList.remove('is-synced');
+            this.lyricsSync.disabled = true;
+            this.lyricsOffset.disabled = true;
+            if (this.lyricsSource) this.lyricsSource.hidden = true;
+            this.lyricsStatus.textContent = 'Aucune parole Spotify disponible. Vérifie que l’extension est connectée à Spotify.';
             return;
         }
         this.lyricsData = data;
         this.lyricsLines = Array.isArray(data.timedLines)
-            ? data.timedLines.slice(0, 2000).filter(line => Number.isFinite(line.time) && line.time >= 0 && typeof line.text === 'string')
-            : parseLrc(data.syncedLyrics || '');
+            ? data.timedLines.slice(0, 2000).filter(line => Number.isFinite(line.time) && line.time >= 0 && typeof line.text === 'string') : [];
         this.renderLyrics();
     },
 
@@ -114,20 +115,15 @@ export const lyricsView = {
         const synced = canSync && this.lyricsSync.checked;
         this.lyricsMode = synced ? 'synced' : 'plain';
         this.lyricsContent.classList.toggle('is-synced', synced);
-        const provider = data.source === 'YouTube' ? data.automatic ? 'Sous-titres automatiques YouTube : la transcription peut contenir des erreurs.' : 'Sous-titres YouTube de la vidéo lue.' : '';
-        this.lyricsStatus.textContent = !data.found ? 'Aucune parole trouvée pour ce morceau.'
-            : data.instrumental ? 'Ce morceau est instrumental.'
-            : data.source === 'lyrics.ovh' ? 'Paroles en texte seul · lyrics.ovh. Cette source ne fournit pas de synchronisation.'
-            : provider ? `${provider}${synced ? ' Suivi synchronisé.' : ' Texte seul.'}`
-            : synced ? 'Paroles synchronisées · LRCLIB. Ajuste le décalage si nécessaire.'
-            : 'Paroles en texte seul · LRCLIB. La synchronisation est désactivée pour cette version.';
+        this.lyricsStatus.textContent = synced
+            ? 'Paroles synchronisées · Spotify / Musixmatch. Ajuste le décalage si nécessaire.'
+            : 'Paroles en texte seul · Spotify / Musixmatch. La synchronisation est désactivée pour cette version.';
         this.lyricsContent.replaceChildren();
         const source = this.lyricsSource;
         if (source) {
             source.hidden = !data.found;
-            source.textContent = `Source : ${['YouTube', 'lyrics.ovh'].includes(data.source) ? data.source : 'LRCLIB'}`;
-            source.href = /^https:\/\/lrclib\.net(?:\/|$)/.test(data.sourceUrl || '') || /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{11}$/.test(data.sourceUrl || '')
-                || /^https:\/\/api\.lyrics\.ovh\/v1\/[^/]+\/[^/]+$/.test(data.sourceUrl || '') ? data.sourceUrl : 'https://lrclib.net';
+            source.textContent = 'Source : Spotify';
+            source.href = /^https:\/\/open\.spotify\.com\/track\/[A-Za-z0-9]{22}$/.test(data.sourceUrl || '') ? data.sourceUrl : 'https://open.spotify.com';
         }
         if (synced) {
             for (const line of this.lyricsLines) {
@@ -136,8 +132,8 @@ export const lyricsView = {
                 this.lyricsContent.append(element);
             }
         } else {
-            this.lyricsContent.textContent = data.plainLyrics || this.lyricsLines.map(line => line.text).join('\n') || (data.syncedLyrics || '').replace(/\[[^\]]*\]/g, '').trim()
-                || (data.found && !data.instrumental ? 'Le texte des paroles n’est pas disponible.' : '');
+            this.lyricsContent.textContent = data.plainLyrics || this.lyricsLines.map(line => line.text).join('\n')
+                || (data.found ? 'Le texte des paroles n’est pas disponible.' : '');
         }
         this.lyricsActiveLine = -1;
         this.lyricsContent.scrollTop = 0;

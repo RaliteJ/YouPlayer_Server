@@ -7,6 +7,7 @@ import { libraryPreferences, updateLibraryPreferences } from "../library-prefere
 import {
 	normalizePseudo,
 	normalizePlaylistName,
+	normalizePlaylistTitle,
 	normalizeRole,
 	playlistImage,
 	playlistTitle,
@@ -262,7 +263,10 @@ export class MemoryYouplayerStore {
 			.map((playlist) => ({ ...playlist, items: playlist.items.map((item) => ({ ...item })) }));
 
 		for (const playlist of sourcePlaylists) {
+			const targetKey = this.playlistKey(targetId, playlist.name);
+			const existed = this.playlists.has(targetKey);
 			await this.appendPlaylistItems(targetId, playlist.name, playlist.items);
+			if (!existed) this.playlists.get(targetKey).title = playlist.title;
 			this.playlists.delete(this.playlistKey(sourceId, playlist.name));
 		}
 
@@ -384,6 +388,15 @@ export class MemoryYouplayerStore {
 				updatedAt: playlist.updatedAt
 			};
 		});
+	}
+
+	async setPlaylistTitle(userId, playlistName, title) {
+		title = normalizePlaylistTitle(title);
+		const playlist = this.playlists.get(this.playlistKey(userId, playlistName));
+		if (!playlist) return false;
+		playlist.title = title;
+		playlist.updatedAt = new Date().toISOString();
+		return true;
 	}
 
 	async deletePlaylist(userId, playlistName) {

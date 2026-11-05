@@ -7,6 +7,7 @@ import { libraryPreferences, updateLibraryPreferences } from "../library-prefere
 import {
 	normalizePseudo,
 	normalizePlaylistName,
+	normalizePlaylistTitle,
 	normalizeRole,
 	playlistTitle,
 	publicUser,
@@ -482,7 +483,7 @@ export class PostgresYouplayerStore {
 			}
 
 			const playlistResult = await client.query(`
-				SELECT id, name
+				SELECT id, name, title
 				FROM yp_playlists
 				WHERE user_id = $1
 				ORDER BY id ASC
@@ -495,7 +496,7 @@ export class PostgresYouplayerStore {
 					ON CONFLICT (user_id, name)
 					DO UPDATE SET updated_at = yp_playlists.updated_at
 					RETURNING id
-				`, [targetUserId, sourcePlaylist.name, playlistTitle(sourcePlaylist.name)]);
+				`, [targetUserId, sourcePlaylist.name, sourcePlaylist.title]);
 				const targetPlaylistId = targetPlaylist.rows[0].id;
 				const maxResult = await client.query(`
 					SELECT COALESCE(MAX(position), -1) AS max_position
@@ -736,6 +737,14 @@ export class PostgresYouplayerStore {
 			count: row.count,
 			updatedAt: row.updated_at
 		}));
+	}
+
+	async setPlaylistTitle(userId, playlistName, title) {
+		const result = await this.query(`
+			UPDATE yp_playlists SET title = $3, updated_at = NOW()
+			WHERE user_id = $1 AND name = $2
+		`, [userId, normalizePlaylistName(playlistName), normalizePlaylistTitle(title)]);
+		return result.rowCount > 0;
 	}
 
 	async deletePlaylist(userId, playlistName) {

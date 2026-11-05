@@ -20,6 +20,13 @@ test('playlist file transfer also persists new copies in the authentication-disa
     const { access, playlistsDir } = await local(t);
     await access.appendPlaylistItemsForRequest({}, 'Original.json', [first, second]);
     await access.appendPlaylistItemsForRequest({}, 'Vide.json', []);
+    await access.renamePlaylistForRequest({}, 'Original.json', 'Voyages');
+    assert.equal((await access.playlistSummariesForRequest({})).find(p => p.name === 'Original.json').title, 'Voyages');
+    for (const title of ['', '../bad', 'bad\\name', 'bad\nname', 'x'.repeat(101), {}]) {
+        await assert.rejects(access.renamePlaylistForRequest({}, 'Original.json', title), /invalide/);
+    }
+    await assert.rejects(access.renamePlaylistForRequest({}, LIKED_PLAYLIST, 'Autre'), /automatique/);
+    await assert.rejects(access.renamePlaylistForRequest({}, 'Missing.json', 'Absent'), /introuvable/);
     const routes = new Map();
     const app = {
         get: (path, ...handlers) => routes.set('GET ' + path, handlers.at(-1)),
@@ -31,6 +38,7 @@ test('playlist file transfer also persists new copies in the authentication-disa
     const res = { set() { return this; }, type() { return this; },
         send(value) { data = JSON.parse(value); }, json(value) { data = value; } };
     await routes.get('GET /playlist/export')({}, res);
+    assert.ok(data.playlists.some(p => p.name === 'Voyages.json'));
     await routes.get('POST /playlist/import')({ body: data }, res);
     assert.equal(data.imported.length, 2);
     const copy = data.imported.find(playlist => playlist.count === 2).name;

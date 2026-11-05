@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { orderLibrary, rediscoverPlaylist, SleepTimer } from '../src/library-tools.js';
 import { libraryView } from '../src/library-view.js';
+import { playlistView } from '../src/playlist-view.js';
 
 const playlists = [
 	{ name: 'ete.json', title: 'Été calme', count: 2 },
@@ -87,6 +88,8 @@ function searchFixture(t, query = 'ete') {
     globalThis.document = { getElementById: id => elements[id], createElement: () => ({}) };
     const app = {
         ...libraryView,
+        updatePlaylistRename: playlistView.updatePlaylistRename,
+        playlistRenameButton: { hidden: false }, playlistRenameForm: { hidden: false },
         currentUser: { id: 'first' },
         availablePlaylists: [{ name: 'one.json', title: 'Calme' }, { name: 'two.json', title: 'Rock' }],
         selectedPlaylists: [],
@@ -104,6 +107,8 @@ function searchFixture(t, query = 'ete') {
 test('library search matches titles, artists and playlist names while preserving source indexes', async t => {
     const { app, elements } = searchFixture(t);
     await app.searchLibraryTracks();
+    assert.equal(app.playlistRenameButton.hidden, true);
+    assert.equal(app.playlistRenameForm.hidden, true);
     assert.deepEqual(app.rendered.tracks.map(track => [track.__libraryPlaylist.name, track.__playlistIndex]),
         [['one.json', 8], ['two.json', 2]]);
     elements['library-search'].value = 'alice ete';

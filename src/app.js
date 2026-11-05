@@ -291,6 +291,7 @@ const App = {
 
     bindEvents() {
         this.bindPlaylistTransfer();
+        this.bindPlaylistRename();
         this.bindPageDiagnostics();
         this.bindAdminTabs();
         if (this.loginForm) {
