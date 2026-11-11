@@ -37,8 +37,15 @@ et l’artiste ; en cas de doute, il affiche les résultats à choisir.
 
 Le bouton **Paroles** consulte Spotify / Musixmatch via l’extension Spotify Bridge
 connectée à un compte Spotify. Le jeton Spotify reste dans l’extension et n’est
-pas transmis au serveur YouPlayer. Les paroles sont disponibles pour les morceaux
-ayant un lien Spotify ; leur absence n’interrompt pas la musique.
+pas transmis au serveur YouPlayer. Pour un morceau YouTube, l’ouverture des paroles
+cherche sa référence Spotify à partir du titre et de l’artiste principal. Les mentions
+de clip officiel sont ignorées, mais les versions live, remix et autres variantes
+restent distinctes. Une correspondance doit être unique, avec une durée compatible
+si celle du morceau est connue ; sinon, aucune référence n’est choisie automatiquement.
+Le lien Spotify retenu apparaît comme source des paroles, sans remplacer le lien
+YouTube ni modifier la playlist. Dans l’autre sens, un morceau Spotify conserve déjà
+sa référence pour les paroles pendant que le résolveur existant trouve l’audio YouTube.
+L’absence de correspondance ou de paroles n’interrompt pas la musique.
 Tant que le panneau reste ouvert, le morceau suivant déclenche une nouvelle recherche. Les paroles suivent
 la position audio uniquement si les durées diffèrent de deux secondes au maximum ;
 sinon, le texte reste disponible sans défilement automatique. Un réglage de décalage
@@ -134,6 +141,11 @@ Le guide complet des prérequis et du dépannage se trouve dans [INSTALL.md](INS
 2. Connectez-vous avec le compte **admin** créé pendant l'installation.
 3. Créez un compte **user** depuis l'administration.
 4. Utilisez ce compte **user** pour écouter de la musique.
+
+Dans **Admin → Musiques injouables**, l’administrateur retrouve les échecs de
+chargement ou de lecture signalés par le lecteur : titre, artiste, source,
+playlist et date. L’historique commence avec cette version et permet de consulter
+les entrées suivantes avec **Afficher la suite**.
 
 Le certificat initial est autosigné : votre navigateur peut afficher un
 avertissement. Configurez un domaine et un certificat valide avant d'exposer le

@@ -267,6 +267,7 @@
           <button id="admin-tab-integrations" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-integrations" aria-selected="true" tabindex="0">Intégrations</button>
           <button id="admin-tab-accounts" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-accounts" aria-selected="false" tabindex="-1">Comptes</button>
           <button id="admin-tab-history" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-history" aria-selected="false" tabindex="-1">Historique</button>
+          <button id="admin-tab-unplayable" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-unplayable" aria-selected="false" tabindex="-1">Musiques injouables</button>
           <button id="admin-tab-security" class="admin-tab" type="button" role="tab" aria-controls="admin-pane-security" aria-selected="false" tabindex="-1">Sécurité</button>
         </div>
         <div id="admin-pane-integrations" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-integrations" tabindex="0">
@@ -317,6 +318,16 @@
             <h2>Actions</h2>
             <div id="admin-audit-logs">Chargement...</div>
           </div>
+        </div>
+        <div id="admin-pane-unplayable" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-unplayable" tabindex="0" hidden>
+          <section class="admin-panel" aria-labelledby="admin-unplayable-title">
+            <h2 id="admin-unplayable-title">Musiques injouables</h2>
+            <p>Morceaux signalés après un échec de chargement ou de lecture automatique.</p>
+            <button id="admin-unplayable-refresh" type="button" class="btn-small">Actualiser</button>
+            <p id="admin-unplayable-status" role="status" aria-live="polite">Aucun chargement effectué.</p>
+            <ul id="admin-unplayable-list" class="admin-list"></ul>
+            <button id="admin-unplayable-more" type="button" class="btn-small" hidden>Afficher la suite</button>
+          </section>
         </div>
         <div id="admin-pane-security" class="admin-layout admin-tab-panel" role="tabpanel" aria-labelledby="admin-tab-security" tabindex="0" hidden>
           <section class="admin-panel" aria-labelledby="admin-security-title">

@@ -392,3 +392,61 @@ test('playlist selection leaves current audio and stream intact and replaces the
     assert.equal(app.queueEditPromise, null);
     assert.deepEqual(calls, ['clear-prefetch', 'current:0', 'prefetch:5']);
 });
+
+test('media and private-stream failures report the failed track without waiting for telemetry', async () => {
+	for (const special of [false, true]) {
+		const { app, calls } = playerHarness();
+		const reports = [];
+		app.currentId = '0';
+		app.lastPlaybackState = { current: { type: 'youtube', url: 'https://www.youtube.com/watch?v=abcdefghijk' } };
+		app.apiFetch = (endpoint, method, body) => { reports.push({ endpoint, method, body }); return new Promise(() => {}); };
+		if (!special) app.currentSpecialStream = null;
+		await (special ? app.handleSpecialStreamError() : app.handleMainAudioError());
+		assert.equal(reports.length, 1);
+		assert.equal(reports[0].endpoint, '/playback/unplayable');
+		assert.equal(reports[0].body.key, 'youtube:abcdefghijk');
+		assert.equal(reports[0].body.trackId, 0);
+		assert.equal(reports[0].body.reason, special ? 'stream_error' : 'media_error');
+		assert.deepEqual(calls, ['play:1']);
+	}
+});
+
+test('failed readiness and play attempts report each skipped track but autoplay blocks do not', async () => {
+	for (const failure of ['not_ready', 'play_failed', 'autoplay']) {
+		const { app } = playerHarness();
+		const reports = [];
+		let index = 0;
+		app.currentSpecialStream = null;
+		app.nextTrackPrefetch = null;
+		app.showPlayer = () => {};
+		app.updatePlaybackUi = data => { app.lastPlaybackState = data; };
+		app.waitForTrackReady = async () => failure === 'not_ready' ? null : '/play/fixture';
+		app.loadAndPlayMainSource = async () => {
+			app.lastPlayRejection = { name: failure === 'autoplay' ? 'NotAllowedError' : 'NotSupportedError' };
+			return false;
+		};
+		app.apiFetch = async (endpoint, method, body) => {
+			if (endpoint === '/playback/unplayable') { reports.push(body); return {}; }
+			assert.equal(endpoint, '/next_song');
+			return { currentId: index++, current: { type: 'youtube', id: 'abcdefghijk' }, queue: [], path: '/play/fixture' };
+		};
+		await app.nextSong();
+		assert.equal(reports.length, failure === 'autoplay' ? 0 : 3);
+		assert.deepEqual(reports.map(report => report.trackId), failure === 'autoplay' ? [] : [0, 1, 2]);
+		assert.equal(reports.every(report => report.reason === failure), true);
+	}
+});
+
+test('successful Spotify fallback and manual skips do not report an unplayable track', async () => {
+	const { app } = playerHarness();
+	const reports = [];
+	app.currentId = 0;
+	app.lastPlaybackState = { current: { type: 'spotify', url: 'https://open.spotify.com/track/' + 'A'.repeat(22) } };
+	app.apiFetch = async (...args) => { reports.push(args); return {}; };
+	app.waitForTrackReady = async () => '/play/0';
+	app.loadAndPlayMainSource = async () => true;
+	await app.handleSpecialStreamError();
+	assert.deepEqual(reports, []);
+	await app.advanceToNextSong('manual');
+	assert.deepEqual(reports, []);
+});

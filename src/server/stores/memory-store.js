@@ -314,8 +314,9 @@ export class MemoryYouplayerStore {
 		return this.loginEvents.slice(0, limit);
 	}
 
-	async listAuditLogs({ limit = 100 } = {}) {
-		return this.auditLogs.slice(0, limit);
+	async listAuditLogs({ limit = 100, offset = 0, action = null } = {}) {
+		const logs = action === null ? this.auditLogs : this.auditLogs.filter(log => log.action === action);
+		return logs.slice(offset, offset + limit);
 	}
 
 	playlistKey(userId, playlistName) {

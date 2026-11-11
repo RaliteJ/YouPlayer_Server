@@ -266,6 +266,12 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.savePlaybackPosition(forcePositionUpdate);
     },
 
+    reportUnplayableTrack(reason) {
+        const key = trackLikeKey(this.lastPlaybackState?.current);
+        if (this.currentId == null || !key) return;
+        void this.apiFetch('/playback/unplayable', 'POST', { trackId: Number(this.currentId), key, reason });
+    },
+
     async handleMainAudioError() {
         if (!this.lecteur?.currentSrc || this.currentId == null) return;
         if (this.spotifyStreamRecovery?.trackId === this.currentId) return;
@@ -280,6 +286,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         const errorKey = `${this.currentId}:${this.lecteur.currentSrc}`;
         if (this.handledPlaybackErrorKey === errorKey) return;
         this.handledPlaybackErrorKey = errorKey;
+        this.reportUnplayableTrack('media_error');
         this.consecutivePlaybackErrors += 1;
         console.error('[Player] media error', {
             trackId: this.currentId,
@@ -872,6 +879,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             }
         }
         this.showNotice('Le flux du premier titre a échoué. Passage au titre suivant.', true);
+        this.reportUnplayableTrack('stream_error');
         await this.advanceToNextSong('error');
     },
 
@@ -1209,6 +1217,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 });
                 const readyPath = await this.waitForTrackReady(newId);
                 if (!readyPath) {
+                    this.reportUnplayableTrack('not_ready');
                     this.consecutivePlaybackErrors += 1;
                     this.logNextDiagnostic('TRACK_NOT_READY', {
                         reason,
@@ -1234,6 +1243,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                         }, true);
                         return;
                     }
+                    this.reportUnplayableTrack('play_failed');
                     this.consecutivePlaybackErrors += 1;
                     this.logNextDiagnostic('ADVANCE_PLAY_FAILED', {
                         reason,

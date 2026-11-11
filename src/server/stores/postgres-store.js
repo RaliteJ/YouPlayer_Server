@@ -579,13 +579,14 @@ export class PostgresYouplayerStore {
 		return result.rows.map((row) => this.mapLoginEvent(row));
 	}
 
-	async listAuditLogs({ limit = 100 } = {}) {
+	async listAuditLogs({ limit = 100, offset = 0, action = null } = {}) {
 		const result = await this.query(`
 			SELECT id, user_id, action, resource_type, resource_id, details, created_at
 			FROM yp_audit_logs
+			WHERE ($2::text IS NULL OR action = $2)
 			ORDER BY created_at DESC, id DESC
-			LIMIT $1
-		`, [limit]);
+			LIMIT $1 OFFSET $3
+		`, [limit, action, offset]);
 		return result.rows.map((row) => this.mapAuditLog(row));
 	}
 

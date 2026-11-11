@@ -325,6 +325,79 @@ after(async () => {
 	delete process.env.YOUTUBE_API_KEY;
 });
 
+test('an automatically skipped broken audio file appears on the admin unplayable page', { timeout: 30000 }, async () => {
+    if (browserSetupError) throw browserSetupError;
+    const listener = await browser.createBrowserContext();
+    const manager = await browser.createBrowserContext();
+    const store = app.locals.youplayerStore;
+    const user = await store.createUser({ pseudo: 'browser-unplayable', password: 'password123' });
+    const admin = await store.createUser({ pseudo: 'browser-unplayable-admin', password: 'password123', role: 'admin' });
+    const title = '<img src=x onerror="window.failedTrackXss=true"> Broken fixture';
+    await writeFile(path.join(tempRoot, 'local_song', 'unplayable.mp3'), 'This is not audio');
+    const samples = 8000 * 60;
+    const wav = Buffer.alloc(44 + samples * 2);
+    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
+    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(samples * 2, 40);
+    await writeFile(path.join(tempRoot, 'local_song', 'unplayable-next.wav'), wav);
+    await store.appendPlaylistItems(user.id, 'Broken audio fixture', [
+        { type: 'local', title, artist: 'Fixture artist', url: 'unplayable.mp3' },
+        { type: 'local', title: 'Playable next fixture', url: 'unplayable-next.wav' }
+    ]);
+    const open = async (context, pseudo) => {
+        const page = await context.newPage();
+        page.setDefaultTimeout(6000);
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+            if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) void request.continue();
+            else void request.abort();
+        });
+        await page.goto(baseUrl);
+        await page.evaluate(async pseudo => {
+            const response = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pseudo, password: 'password123' }) });
+            if (!response.ok) throw new Error('Fixture login failed');
+        }, pseudo);
+        await page.reload({ waitUntil: 'networkidle0' });
+        return page;
+    };
+    try {
+        const page = await open(listener, user.pseudo);
+        const reported = [];
+        page.on('response', response => {
+            if (response.url().endsWith('/playback/unplayable')) reported.push(response.status());
+        });
+        const result = await page.evaluate(async () => {
+            const { App } = await import(document.querySelector('script[type="module"]').src);
+            window.failureFixtureApp = App;
+            const selection = await App.apiFetch('/playlist_used', 'POST', { arg: ['Broken audio fixture.json'], random: false });
+            await App.nextSong('select');
+            return { selection, currentId: App.currentId, rejection: App.lastPlayRejection?.name, apiError: App.lastApiError };
+        });
+        assert.equal(Number(result.currentId), 1, JSON.stringify(result));
+        await page.waitForFunction(() => Number(failureFixtureApp.currentId) === 1 && !failureFixtureApp.lecteur.paused);
+        assert.deepEqual(reported, [204]);
+        const reports = await store.listAuditLogs({ action: 'playback.unplayable' });
+        assert.equal(reports.filter(log => log.userId === user.id).length, 1);
+        assert.equal(reports.find(log => log.userId === user.id).details.reason, 'play_failed');
+        const adminPage = await open(manager, admin.pseudo);
+        await adminPage.click('#admin-tab-unplayable');
+        await adminPage.waitForFunction(() => document.querySelector('#admin-unplayable-list').textContent.includes('Broken fixture'));
+        assert.match(await adminPage.$eval('#admin-unplayable-list', element => element.textContent), /Fixture artist/);
+        assert.equal(await adminPage.$$eval('#admin-unplayable-list img', elements => elements.length), 0);
+        assert.equal(await adminPage.evaluate(() => window.failedTrackXss === true), false);
+        await adminPage.setViewport({ width: 390, height: 844 });
+        assert.equal(await adminPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        await adminPage.click('#admin-unplayable-refresh');
+        await adminPage.waitForFunction(() => !document.querySelector('#admin-unplayable-refresh').disabled);
+        assert.equal(await adminPage.$$eval('#admin-unplayable-list li', elements => elements.length), reports.length);
+    } finally {
+        await listener.close();
+        await manager.close();
+    }
+});
+
 test('settings playlist file export and import round trip through the real user interface', { timeout: 30000 }, async t => {
     if (browserSetupError) throw browserSetupError;
     const context = await browser.createBrowserContext();
@@ -2548,6 +2621,150 @@ test('Spotify lyrics use the extension bridge without any server lyrics fallback
         assert.ok(result.actions.includes('get-lyrics'));
         assert.equal(result.fallback, 0);
         assert.equal(result.fallbackText, '');
+    } finally { await page.close(); }
+});
+
+test('YouTube search starts audio and resolves Spotify lyrics only when the lyrics panel opens', { timeout: 20000 }, async () => {
+    if (browserSetupError) throw browserSetupError;
+    const page = await browser.newPage();
+    page.setDefaultTimeout(6000);
+    const wav = Buffer.alloc(44 + 8000 * 180 * 2);
+    wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4);
+    wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28);
+    wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+    wav.write('data', 36); wav.writeUInt32LE(wav.length - 44, 40);
+    try {
+        await page.coverage.startJSCoverage({ resetOnNavigation: false });
+        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.setRequestInterception(true);
+        page.on('request', request => {
+            if (new URL(request.url()).pathname === '/play/42') {
+                const range = /bytes=(\d+)-(\d*)/.exec(request.headers().range || '');
+                const start = range ? Number(range[1]) : 0;
+                const end = range?.[2] ? Math.min(Number(range[2]), wav.length - 1) : wav.length - 1;
+                return void request.respond({ status: range ? 206 : 200, contentType: 'audio/wav',
+                    headers: { 'Accept-Ranges': 'bytes', 'Content-Length': String(end - start + 1),
+                        ...(range ? { 'Content-Range': `bytes ${start}-${end}/${wav.length}` } : {}) },
+                    body: wav.subarray(start, end + 1) });
+            }
+            if (request.url().startsWith(baseUrl) || /^(blob:|data:)/.test(request.url())) void request.continue();
+            else void request.abort();
+        });
+        await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+        await page.evaluate(async () => {
+            const { App } = await import(document.querySelector('script[type="module"]').src);
+            window.youtubeLyricsApp = App;
+            window.lyricsBridgeActions = [];
+            const id = 'A'.repeat(22);
+            window.addEventListener('message', event => {
+                const message = event.data;
+                if (message?.source !== 'youplayer-app') return;
+                window.lyricsBridgeActions.push(message.action);
+                const data = message.action === 'status' ? { authenticated: true }
+                    : message.action === 'search' ? { tracks: { items: [
+                        { id: 'B'.repeat(22), name: 'La lumière', artists: [{ name: 'Un autre artiste' }], duration_ms: 180000 },
+                        { id, name: 'La lumière', artists: [{ name: 'Étoile' }], duration_ms: 180000 }
+                    ] } }
+                    : { available: true, found: true, timedLines: [{ time: 0, text: 'Première ligne' }, { time: 10, text: 'Deuxième ligne' }] };
+                window.postMessage({ source: 'youplayer-spotify-extension', requestId: message.requestId, ok: true, data }, location.origin);
+            });
+            window.youtubeAudioUrl = `${location.origin}/play/42`;
+            let selected;
+            App.currentUser = { id: 'youtube-lyrics-user', role: 'user' };
+            App.apiFetch = async (endpoint, method, body) => {
+                if (endpoint === '/send_search_youtube') return { items: [{
+                    id: { kind: 'youtube#video', videoId: 'chosen00001' },
+                    snippet: { title: 'Étoile - La lumière (Clip Officiel)', channelTitle: 'Une chaîne de clips' }
+                }] };
+                if (endpoint === '/add_song_ecoute') {
+                    selected = body.song;
+                    return { currentId: null, current: null, queue: [selected] };
+                }
+                if (endpoint.startsWith('/next_song')) return { currentId: 42, current: selected, queue: [] };
+                if (endpoint.startsWith('/play_status/')) return { status: 'ready', path: '/play/42' };
+                return endpoint === '/account_playback/restore' ? null : [];
+            };
+            App.showApp();
+            App.accountPlaybackReady = false;
+            App.crossfade.setDuration(0);
+            App.loadView('add_youtube');
+            document.getElementById('query_yt').value = 'Étoile La lumière';
+            await App.searchYoutube();
+        });
+        await page.click('.video-card .youtube-card-copy p');
+        await page.waitForFunction(() => !youtubeLyricsApp.lecteur.paused && youtubeLyricsApp.playerState.duration === 180);
+        assert.equal(await page.evaluate(() => lyricsBridgeActions.includes('search')), false);
+        await page.click('#actual_song');
+        await page.click('#lyrics-toggle');
+        await page.waitForFunction(() => document.querySelector('#lyrics-content .is-active')?.textContent === 'Première ligne');
+        assert.equal(await page.$eval('#lyrics-source', source => source.href), `https://open.spotify.com/track/${'A'.repeat(22)}`);
+        assert.equal(await page.$eval('#lyrics-sync', input => input.disabled), false);
+        const state = await page.evaluate(() => ({
+            audio: youtubeLyricsApp.lecteur.currentSrc, expected: youtubeAudioUrl,
+            track: youtubeLyricsApp.playerState.currentTrack.url, type: youtubeLyricsApp.playerState.currentTrack.type,
+            playing: !youtubeLyricsApp.lecteur.paused, players: document.querySelectorAll('audio').length,
+            searches: lyricsBridgeActions.filter(action => action === 'search').length
+        }));
+        assert.equal(state.audio, state.expected);
+        assert.equal(state.track, 'https://www.youtube.com/watch?v=chosen00001');
+        assert.equal(state.type, 'youtube');
+        assert.equal(state.playing, true);
+        assert.equal(state.players, 2);
+        assert.equal(state.searches, 1);
+        await page.evaluate(() => youtubeLyricsApp.seekPlayer(11));
+        await page.waitForFunction(() => document.querySelector('#lyrics-content .is-active')?.textContent === 'Deuxième ligne');
+        await page.click('#lyrics-toggle');
+        await page.click('#lyrics-toggle');
+        assert.equal(await page.evaluate(() => lyricsBridgeActions.filter(action => action === 'search').length), 1);
+        const coverage = await page.coverage.stopJSCoverage();
+        await writeFile('/tmp/youplayer-youtube-lyrics-browser-coverage.json', JSON.stringify(coverage.filter(entry => /\/(lyrics-view|client-utils|artist-view)\.js/.test(entry.url))));
+    } finally { await page.close(); }
+});
+
+test('late YouTube to Spotify searches cannot request lyrics after a track change or logout', { timeout: 15000 }, async () => {
+    if (browserSetupError) throw browserSetupError;
+    const page = await browser.newPage();
+    try {
+        await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+        const result = await page.evaluate(async () => {
+            const { App } = await import(document.querySelector('script[type="module"]').src);
+            const { spotifyBrowserBridge } = await import('/spotify-browser-bridge.js');
+            App.currentUser = { id: 'youtube-lyrics-race', role: 'user' };
+            App.apiFetch = async endpoint => endpoint === '/account_playback/restore' ? null : [];
+            App.showApp();
+            const searches = [], lyrics = [];
+            spotifyBrowserBridge.status = async () => ({ authenticated: true });
+            spotifyBrowserBridge.search = () => new Promise(resolve => searches.push(resolve));
+            spotifyBrowserBridge.getLyrics = async id => { lyrics.push(id); return { available: true, found: true, plainLyrics: id }; };
+            const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+            const select = index => App.updatePlaybackUi({ currentId: index,
+                current: { type: 'youtube', id: `chosen0000${index}`, title: 'Artiste - Titre' }, queue: [] });
+            const response = letter => ({ tracks: { items: [{ id: letter.repeat(22), name: 'Titre', artists: [{ name: 'Artiste' }], duration_ms: 180000 }] } });
+            select(0);
+            App.lyricsPanel.hidden = false;
+            const old = App.loadLyrics();
+            await settle();
+            select(1);
+            await settle();
+            searches[1](response('B'));
+            await settle();
+            searches[0](response('A'));
+            await old;
+            const text = App.lyricsContent.textContent;
+            select(2);
+            await settle();
+            App.currentUser = null;
+            App.showAuth();
+            searches[2](response('C'));
+            await settle();
+            return { text, lyrics, afterLogout: App.lyricsContent.textContent, closed: App.lyricsPanel.hidden };
+        });
+        assert.equal(result.text, 'B'.repeat(22));
+        assert.deepEqual(result.lyrics, ['B'.repeat(22)]);
+        assert.equal(result.afterLogout, '');
+        assert.equal(result.closed, true);
     } finally { await page.close(); }
 });
 

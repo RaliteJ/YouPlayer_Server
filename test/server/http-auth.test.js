@@ -1162,6 +1162,51 @@ test('admin-only routes expose users, login events and audit logs only to role=a
 });
 
 
+test('unplayable reports use session metadata and only admins can read their complete history', async () => {
+	const listener = createClient(), stranger = createClient(), admin = createClient(), anonymous = createClient();
+	await login(listener);
+	await login(stranger, 'second');
+	await login(admin, 'admin');
+	const song = { type: 'youtube', title: 'Unplayable <fixture>', artist: 'Synthetic artist', url: 'https://www.youtube.com/watch?v=abcdefghijk' };
+	await listener.request('/add_song_ecoute', { method: 'POST', body: { song } });
+	const state = await listener.request('/next_song');
+	const payload = { trackId: state.body.currentId, key: 'youtube:abcdefghijk', reason: 'stream_error', title: 'Forged title', token: 'must-not-persist' };
+	assert.equal((await anonymous.request('/playback/unplayable', { method: 'POST', body: payload })).status, 401);
+	assert.equal((await admin.request('/playback/unplayable', { method: 'POST', body: payload })).status, 403);
+	assert.equal((await listener.request('/playback/unplayable', { method: 'POST', body: payload, skipOrigin: true })).status, 403);
+	assert.equal((await stranger.request('/playback/unplayable', { method: 'POST', body: payload })).status, 404);
+	for (const invalid of [{ trackId: -1 }, { trackId: '0' }, { key: 'youtube:other' }, { reason: 'arbitrary raw error' }]) {
+		assert.ok([400, 409].includes((await listener.request('/playback/unplayable', { method: 'POST', body: { ...payload, ...invalid } })).status));
+	}
+	assert.equal((await listener.request('/playback/unplayable', { method: 'POST', body: payload })).status, 204);
+	assert.equal((await listener.request('/admin/unplayable_tracks')).status, 403);
+	assert.equal((await anonymous.request('/admin/unplayable_tracks')).status, 401);
+	const reports = await admin.request('/admin/unplayable_tracks');
+	assert.equal(reports.status, 200);
+	const report = reports.body.items.find(log => log.details.title === song.title);
+	assert.ok(report);
+	assert.equal(report.details.artist, song.artist);
+	assert.equal(report.details.reason, 'stream_error');
+	assert.equal(report.resourceId, payload.key);
+	assert.equal(JSON.stringify(report).includes('must-not-persist'), false);
+	assert.equal(JSON.stringify(report).includes('Forged title'), false);
+	const store = app.locals.youplayerStore;
+	for (let i = 0; i < 52; i++) {
+		await store.recordAuditLog({ action: 'playback.unplayable', details: { title: `Failure ${i}` } });
+		await store.recordAuditLog({ action: 'unrelated' });
+	}
+	const first = await admin.request('/admin/unplayable_tracks');
+	const second = await admin.request('/admin/unplayable_tracks?offset=50');
+	assert.equal(first.body.items.length, 50);
+	assert.equal(first.body.hasMore, true);
+	assert.equal(second.body.hasMore, false);
+	assert.ok(second.body.items.some(log => log.id === report.id));
+	assert.equal(first.body.items.some(log => log.action !== 'playback.unplayable'), false);
+	for (const offset of ['-1', '1.2', 'nope', '9007199254740992']) {
+		assert.equal((await admin.request(`/admin/unplayable_tracks?offset=${offset}`)).status, 400);
+	}
+});
+
 test('release checks require admin authentication and a trusted origin', async () => {
   const stranger = createClient(), user = createClient(), admin = createClient();
   await login(user, 'user');

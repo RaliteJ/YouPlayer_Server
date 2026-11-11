@@ -1,17 +1,50 @@
-import { trackLikeKey } from './client-utils.js';
+import { trackLikeKey, musicTrackIdentity, normalizeMusicText } from './client-utils.js';
 import { spotifyBrowserBridge } from './spotify-browser-bridge.js';
 
-export async function lookupSpotifyLyrics(track, bridge = spotifyBrowserBridge) {
+export function matchSpotifyLyricsTrack(track, results = []) {
+    const identity = musicTrackIdentity(track);
+    const title = normalizeMusicText(identity.title);
+    const artist = normalizeMusicText(identity.artist);
+    if (!title || !artist) return null;
+    const matches = new Map();
+    for (const candidate of results) {
+        if (!/^[A-Za-z0-9]{22}$/.test(candidate?.id || '')) continue;
+        if (normalizeMusicText(candidate.name) !== title) continue;
+        // The main performer must match; a guest or an uploader is not enough.
+        if (normalizeMusicText(candidate.artists?.[0]?.name) !== artist) continue;
+        const duration = Number(candidate.duration_ms);
+        if (!Number.isFinite(duration) || duration <= 0) continue;
+        const sourceDuration = Number(track.duration_ms);
+        if (sourceDuration > 0 && Math.abs(sourceDuration - duration) > Math.max(10000, sourceDuration * 0.05)) continue;
+        matches.set(candidate.id, candidate);
+    }
+    return matches.size === 1 ? [...matches.values()][0] : null;
+}
+
+export async function lookupSpotifyLyrics(track, bridge = spotifyBrowserBridge, { isCurrent = () => true } = {}) {
     if (!bridge) return null;
     let url;
-    try { url = new URL(track?.url); } catch { return null; }
-    const id = url.origin === 'https://open.spotify.com' && /^\/track\/([A-Za-z0-9]{22})$/.exec(url.pathname)?.[1];
-    if (!id) return null;
+    try { url = new URL(track?.url); } catch {}
+    let id = url?.origin === 'https://open.spotify.com' && /^\/track\/([A-Za-z0-9]{22})$/.exec(url.pathname)?.[1];
+    const youtube = /^youtube:[A-Za-z0-9_-]{11}$/.test(trackLikeKey(track));
+    if (track?.type === 'local' || (!id && !youtube)) return null;
+    let durationMs = track?.duration_ms;
     try {
-        if (!(await bridge.status())?.authenticated) return null;
+        if (!(await bridge.status())?.authenticated || !isCurrent()) return null;
+        if (!id) {
+            const identity = musicTrackIdentity(track);
+            if (!identity.title || !identity.artist) return null;
+            const data = await bridge.search(`${identity.artist} ${identity.title}`, { limit: 16 });
+            if (!isCurrent()) return null;
+            const match = matchSpotifyLyricsTrack(track, data?.tracks?.items);
+            if (!match) return null;
+            id = match.id;
+            durationMs = match.duration_ms;
+        }
         const data = await bridge.getLyrics(id);
-        if (!data?.available || !data.found) return null;
-        return { ...data, duration: Number(track.duration_ms) > 0 ? Number(track.duration_ms) / 1000 : null };
+        if (!isCurrent() || !data?.available || !data.found) return null;
+        return { ...data, sourceUrl: `https://open.spotify.com/track/${id}`,
+            duration: Number(durationMs) > 0 ? Number(durationMs) / 1000 : null };
     } catch { return null; }
 }
 
@@ -87,7 +120,9 @@ export const lyricsView = {
         const request = this.lyricsRequest = {};
         const user = this.currentUser?.id;
         this.lyricsStatus.textContent = 'Recherche des paroles Spotify…';
-        const data = await lookupSpotifyLyrics(this.playerState.currentTrack);
+        const data = await lookupSpotifyLyrics(this.playerState.currentTrack, spotifyBrowserBridge, {
+            isCurrent: () => this.lyricsRequest === request && this.currentUser?.id === user
+        });
         if (this.lyricsRequest !== request || this.currentUser?.id !== user) return;
         this.lyricsRequest = null;
         if (!data) {
@@ -97,7 +132,7 @@ export const lyricsView = {
             this.lyricsSync.disabled = true;
             this.lyricsOffset.disabled = true;
             if (this.lyricsSource) this.lyricsSource.hidden = true;
-            this.lyricsStatus.textContent = 'Aucune parole Spotify disponible. Vérifie que l’extension est connectée à Spotify.';
+            this.lyricsStatus.textContent = 'Aucune parole Spotify disponible ou aucune correspondance musicale fiable. Vérifie que l’extension est connectée à Spotify.';
             return;
         }
         this.lyricsData = data;

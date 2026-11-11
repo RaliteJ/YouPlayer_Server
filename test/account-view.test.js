@@ -41,6 +41,43 @@ function harness(fetch = async () => { throw new Error('Unexpected request'); })
 function form(values) {
 	return { values, resets: 0, reset() { this.resets++; } };
 }
+
+test('unplayable history paginates, escapes metadata and rejects late admin responses after logout', async () => {
+	const h = harness();
+	const list = { innerHTML: '', insertAdjacentHTML(_position, html) { this.innerHTML += html; } };
+	const elements = { 'admin-unplayable-list': list, 'admin-unplayable-status': {},
+		'admin-unplayable-more': {}, 'admin-unplayable-refresh': {} };
+	h.document.getElementById = id => elements[id];
+	h.view.escapeHtml = text => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+	const requests = [];
+	h.view.apiFetch = async endpoint => {
+		requests.push(endpoint);
+		return { items: [{ resourceId: 'youtube:abcdefghijk', createdAt: '2026-11-11T12:00:00Z',
+			details: { title: '<img src=x>', artist: '<script>', type: 'youtube', reason: 'stream_error' } }], hasMore: requests.length === 1 };
+	};
+	h.view.currentUser = { id: 'manager', role: 'user' };
+	await h.view.fetchUnplayableTracks();
+	assert.equal(requests.length, 0);
+	h.view.currentUser.role = 'admin';
+	await h.view.fetchUnplayableTracks();
+	assert.equal(elements['admin-unplayable-more'].hidden, false);
+	assert.match(list.innerHTML, /&lt;img/);
+	assert.doesNotMatch(list.innerHTML, /<script>/);
+	assert.match(list.innerHTML, /https:\/\/www.youtube.com\/watch\?v=abcdefghijk/);
+	await h.view.fetchUnplayableTracks(true);
+	assert.deepEqual(requests, ['/admin/unplayable_tracks?offset=0', '/admin/unplayable_tracks?offset=1']);
+	assert.equal(elements['admin-unplayable-more'].hidden, true);
+	assert.equal(h.view.unplayableOffset, 2);
+	let finish;
+	h.view.apiFetch = () => new Promise(resolve => { finish = resolve; });
+	const pending = h.view.fetchUnplayableTracks();
+	h.view.currentUser = null;
+	list.innerHTML = '';
+	finish({ items: [{ details: { title: 'Must not render' } }], hasMore: false });
+	await pending;
+	assert.equal(list.innerHTML, '');
+	assert.equal(elements['admin-unplayable-refresh'].disabled, false);
+});
 const event = form => ({ preventDefault() {}, currentTarget: form });
 const ok = data => ({ ok: true, json: async () => data });
 

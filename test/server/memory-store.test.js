@@ -200,6 +200,8 @@ test('event and audit logs are newest first and respect limits', async () => {
 
 	assert.deepEqual((await store.listLoginEvents({ limit: 1 })).map((event) => event.success), [true]);
 	assert.deepEqual((await store.listAuditLogs({ limit: 2 })).map((log) => log.action), ['second', 'first']);
+	assert.deepEqual((await store.listAuditLogs({ action: 'first', limit: 1 })).map(log => log.action), ['first']);
+	assert.deepEqual((await store.listAuditLogs({ offset: 1, limit: 1 })).map(log => log.action), ['first']);
 });
 
 test('importPlaylistsFromDirectory imports only json files for the selected user', async () => {

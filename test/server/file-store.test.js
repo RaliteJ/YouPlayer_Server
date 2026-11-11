@@ -40,6 +40,17 @@ test('playlist display names persist without changing tracks, selections or anot
 	assert.equal((await restarted.getPlaylistSummaries(target.id))[0].title, 'Mes voyages');
 });
 
+test('unplayable reports persist and paginate independently of other audit actions', async t => {
+	const { store, reopen } = await fixture(t);
+	await store.recordAuditLog({ action: 'playback.unplayable', details: { title: 'First failure' } });
+	await store.recordAuditLog({ action: 'unrelated' });
+	await store.recordAuditLog({ action: 'playback.unplayable', details: { title: 'Second failure' } });
+	await store.close();
+	const restored = await reopen();
+	assert.deepEqual((await restored.listAuditLogs({ action: 'playback.unplayable', limit: 1 })).map(log => log.details.title), ['Second failure']);
+	assert.deepEqual((await restored.listAuditLogs({ action: 'playback.unplayable', limit: 1, offset: 1 })).map(log => log.details.title), ['First failure']);
+});
+
 test('account playback persists through restart and rejects the former device after transfer', async t => {
 	const { store, reopen } = await fixture(t);
 	const alice = await store.createUser({ pseudo: 'resume-alice', password: 'synthetic-password' });

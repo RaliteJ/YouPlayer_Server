@@ -6,6 +6,19 @@ import os from 'node:os';
 import { FileYouplayerStore } from '../../src/server/stores/file-store.js';
 import { PostgresYouplayerStore } from '../../src/server/stores/postgres-store.js';
 
+test('PostgreSQL filters and paginates failure logs in the database', async () => {
+    const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });
+    store.query = async (sql, parameters) => {
+        assert.match(sql, /WHERE \(\$2::text IS NULL OR action = \$2\)/);
+        assert.match(sql, /LIMIT \$1 OFFSET \$3/);
+        assert.deepEqual(parameters, [51, 'playback.unplayable', 50]);
+        return { rows: [{ id: 123, action: 'playback.unplayable', details: { title: 'Fixture' } }] };
+    };
+    const logs = await store.listAuditLogs({ action: 'playback.unplayable', limit: 51, offset: 50 });
+    assert.equal(logs[0].id, '123');
+    assert.equal(logs[0].details.title, 'Fixture');
+});
+
 test('PostgreSQL renames only the owning account playlist, leaving its identity intact', async () => {
     const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });
     store.query = async (sql, values) => {
