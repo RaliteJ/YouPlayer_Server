@@ -1151,7 +1151,7 @@ test('admin-only routes expose users, login events and audit logs only to role=a
 	assert.equal((await userClient.request('/admin/integrations/check', { method: 'POST' })).status, 403);
 	assert.equal((await createClient().request('/admin/integrations/check', { method: 'POST' })).status, 401);
 	assert.equal((await adminClient.request('/admin/integrations/check', { method: 'POST', skipOrigin: true })).status, 403);
-	for (const route of ['/playlist', '/playlist_summaries', '/playback_state', '/sponsorblock?trackId=0', '/auth/spotify/start']) {
+	for (const route of ['/playlist', '/playlist_summaries', '/playback_state', '/sponsorblock?trackId=0', '/lyrics?trackId=0', '/auth/spotify/start']) {
 		assert.equal((await adminClient.request(route)).status, 403, route);
 	}
 	for (const route of ['/spotify_test', '/send_search_youtube', '/add_song_ecoute', '/update_playlist', '/upload_to_playlist', '/playlist/rename']) {
