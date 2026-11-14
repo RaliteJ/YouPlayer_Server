@@ -2203,6 +2203,8 @@ test('large Liked playlists render without waiting for likes, scroll in batches 
             else request.abort();
         });
         await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+        // Header transitions change the scroll viewport during the pagination measurement.
+        await page.addStyleTag({ content: '.sidebar, .logo, .session-box, .actions-add { transition: none !important; }' });
         await page.evaluate(async () => {
             const { App } = await import(document.querySelector('script[type="module"]').src);
             window.fixtureApp = App;
