@@ -8,6 +8,8 @@ src/musiq/
 src/node_modules/
 src/spotify/spotify-downloader/
 coverage/
+graphify-out/
+.vscode/
 backups/
 releases/
 .production-check-*/
