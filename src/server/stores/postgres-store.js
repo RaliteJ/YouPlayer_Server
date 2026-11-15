@@ -7,6 +7,7 @@ import { libraryPreferences, updateLibraryPreferences } from "../library-prefere
 import {
 	normalizePseudo,
 	normalizePlaylistName,
+	normalizePlaylistTitle,
 	normalizeRole,
 	playlistTitle,
 	publicUser,
@@ -482,7 +483,7 @@ export class PostgresYouplayerStore {
 			}
 
 			const playlistResult = await client.query(`
-				SELECT id, name
+				SELECT id, name, title
 				FROM yp_playlists
 				WHERE user_id = $1
 				ORDER BY id ASC
@@ -495,7 +496,7 @@ export class PostgresYouplayerStore {
 					ON CONFLICT (user_id, name)
 					DO UPDATE SET updated_at = yp_playlists.updated_at
 					RETURNING id
-				`, [targetUserId, sourcePlaylist.name, playlistTitle(sourcePlaylist.name)]);
+				`, [targetUserId, sourcePlaylist.name, sourcePlaylist.title]);
 				const targetPlaylistId = targetPlaylist.rows[0].id;
 				const maxResult = await client.query(`
 					SELECT COALESCE(MAX(position), -1) AS max_position
@@ -578,13 +579,14 @@ export class PostgresYouplayerStore {
 		return result.rows.map((row) => this.mapLoginEvent(row));
 	}
 
-	async listAuditLogs({ limit = 100 } = {}) {
+	async listAuditLogs({ limit = 100, offset = 0, action = null } = {}) {
 		const result = await this.query(`
 			SELECT id, user_id, action, resource_type, resource_id, details, created_at
 			FROM yp_audit_logs
+			WHERE ($2::text IS NULL OR action = $2)
 			ORDER BY created_at DESC, id DESC
-			LIMIT $1
-		`, [limit]);
+			LIMIT $1 OFFSET $3
+		`, [limit, action, offset]);
 		return result.rows.map((row) => this.mapAuditLog(row));
 	}
 
@@ -736,6 +738,14 @@ export class PostgresYouplayerStore {
 			count: row.count,
 			updatedAt: row.updated_at
 		}));
+	}
+
+	async setPlaylistTitle(userId, playlistName, title) {
+		const result = await this.query(`
+			UPDATE yp_playlists SET title = $3, updated_at = NOW()
+			WHERE user_id = $1 AND name = $2
+		`, [userId, normalizePlaylistName(playlistName), normalizePlaylistTitle(title)]);
+		return result.rowCount > 0;
 	}
 
 	async deletePlaylist(userId, playlistName) {

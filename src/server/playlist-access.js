@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { LIKED_PLAYLIST, trackLikeKey } from '../client-utils.js';
 import { updateLikedTracks } from './liked-tracks.js';
 import { getPlaylistSummary, listPlaylistFiles, PLAYLISTS_DIR, playlistPath as filePath, updateJsonFile } from './playlist-files.js';
-import { normalizePlaylistName } from './stores/store-utils.js';
+import { normalizePlaylistName, normalizePlaylistTitle } from './stores/store-utils.js';
 import { RequestValidationError } from './validation.js';
 
 export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLISTS_DIR }) {
@@ -50,6 +50,27 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 			playlist,
 			added: Array.isArray(items) ? items.length : 1
 		};
+	}
+
+	async function renamePlaylistForRequest(req, playlist, title) {
+		playlist = normalizePlaylistName(playlist);
+		title = normalizePlaylistTitle(title);
+		if (playlist === LIKED_PLAYLIST) throw new RequestValidationError('Cette playlist automatique ne peut pas être renommée');
+		if (authEnabled) {
+			if (!await store.setPlaylistTitle(req.session.userId, playlist, title)) throw new RequestValidationError('Playlist introuvable', 404);
+		} else {
+			const target = playlistPath(playlist);
+			let data;
+			try { data = JSON.parse(await fs_promises.readFile(target, 'utf8')); }
+			catch (error) {
+				if (error.code === 'ENOENT') throw new RequestValidationError('Playlist introuvable', 404);
+				throw error;
+			}
+			data.title = title;
+			data.updatedAt = new Date().toISOString();
+			await fs_promises.writeFile(target, JSON.stringify(data, null, 2), 'utf8');
+		}
+		return { name: playlist, title };
 	}
 
 	async function deletePlaylistForRequest(req, playlist) {
@@ -106,5 +127,5 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 	}
 	return { playlistFilesForRequest, playlistSummariesForRequest, playlistItemsForRequest,
 		appendPlaylistItemsForRequest, deletePlaylistForRequest, deletePlaylistItemForRequest,
-		playlistTracksForRequest, setTrackLikedForRequest };
+		playlistTracksForRequest, setTrackLikedForRequest, renamePlaylistForRequest };
 }

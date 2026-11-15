@@ -43,3 +43,16 @@ test('Spotify browser bridge exchanges playlist data without exposing a token', 
 	assert.equal(response.items[0].id, 'playlist-1');
 	bridge.destroy();
 });
+
+test('Spotify browser bridge requests lyrics by track ID without a bearer', async () => {
+	const windowObject = fakeWindow();
+	const bridge = createSpotifyBrowserBridge({ windowObject });
+	const request = bridge.getLyrics('A'.repeat(22));
+	assert.equal(windowObject.lastPosted.action, 'get-lyrics');
+	assert.equal(windowObject.lastPosted.trackId, 'A'.repeat(22));
+	assert.equal(windowObject.lastPosted.token, undefined);
+	windowObject.respond({ source: 'youplayer-spotify-extension', requestId: windowObject.lastPosted.requestId,
+		ok: true, data: { found: true, timedLines: [{ time: 0.81, text: 'Test' }] } });
+	assert.equal((await request).timedLines[0].time, 0.81);
+	bridge.destroy();
+});

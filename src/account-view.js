@@ -73,9 +73,14 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 if (panel) panel.hidden = !selected;
             }
             if (focus) tab.focus();
+            if (tab.id === 'admin-tab-unplayable') void this.fetchUnplayableTracks();
         },
 
         bindAdminTabs() {
+            const refresh = document.getElementById('admin-unplayable-refresh');
+            const more = document.getElementById('admin-unplayable-more');
+            if (refresh) refresh.onclick = () => this.fetchUnplayableTracks();
+            if (more) more.onclick = () => this.fetchUnplayableTracks(true);
             const tabs = Array.from(document.querySelectorAll('#view-admin [role="tab"]'));
             tabs.forEach((tab, index) => {
                 tab.onclick = () => this.selectAdminTab(tab);
@@ -95,6 +100,11 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         renderAuthState() {
             this.loadSponsorBlockPreference?.();
             const managementOnly = this.currentUser?.role === 'admin';
+            if (!managementOnly) {
+                const failures = document.getElementById('admin-unplayable-list');
+                if (failures) failures.textContent = '';
+                this.unplayableOffset = 0;
+            }
             document.body.classList.toggle('management-only', managementOnly);
             const preferenceUser = this.currentUser?.id ?? 'local';
             if (this.controlledPlaybackUser !== preferenceUser) {
@@ -486,6 +496,48 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 <strong>${this.escapeHtml(log.resourceType || '')}</strong>
             `);
             },
+
+        async fetchUnplayableTracks(append = false) {
+            const list = document.getElementById('admin-unplayable-list');
+            const status = document.getElementById('admin-unplayable-status');
+            const more = document.getElementById('admin-unplayable-more');
+            const refresh = document.getElementById('admin-unplayable-refresh');
+            if (this.currentUser?.role !== 'admin' || !list || this.unplayableLoading) return;
+            const userId = this.currentUser.id;
+            this.unplayableLoading = true;
+            refresh.disabled = more.disabled = true;
+            status.textContent = 'Chargement…';
+            try {
+                const offset = append ? this.unplayableOffset || 0 : 0;
+                const data = await this.apiFetch(`/admin/unplayable_tracks?offset=${offset}`);
+                if (this.currentUser?.id !== userId || this.currentUser?.role !== 'admin') return;
+                if (!data) {
+                    status.textContent = 'Chargement impossible. Réessaie dans un instant.';
+                    return;
+                }
+                const reasons = { not_ready: 'Chargement échoué ou expiré', play_failed: 'Lecture impossible',
+                    media_error: 'Erreur du lecteur audio', stream_error: 'Flux audio en échec' };
+                if (!append) list.innerHTML = '';
+                list.insertAdjacentHTML('beforeend', data.items.map(log => {
+                    const track = log.details;
+                    const youtube = /^youtube:([\w-]{11})$/.exec(log.resourceId);
+                    const spotify = /^spotify:track\/([A-Za-z0-9]{22})$/.exec(log.resourceId);
+                    const url = youtube ? `https://www.youtube.com/watch?v=${youtube[1]}`
+                        : spotify ? `https://open.spotify.com/track/${spotify[1]}` : '';
+                    return `<li><div><strong>${this.escapeHtml(track.title)}</strong>
+                        <p>${this.escapeHtml(track.artist || 'Artiste inconnu')} · ${this.escapeHtml(track.type)}</p>
+                        <p>${this.escapeHtml(reasons[track.reason] || 'Lecture impossible')} · ${this.escapeHtml(new Date(log.createdAt).toLocaleString('fr-FR'))}</p>
+                        ${track.playlist ? `<p>${this.escapeHtml(track.playlist)}</p>` : ''}
+                        ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">Ouvrir la source</a>` : ''}</div></li>`;
+                }).join(''));
+                this.unplayableOffset = offset + data.items.length;
+                more.hidden = !data.hasMore;
+                status.textContent = this.unplayableOffset ? `${this.unplayableOffset} échec(s) affiché(s).` : 'Aucune musique injouable signalée.';
+            } finally {
+                this.unplayableLoading = false;
+                refresh.disabled = more.disabled = false;
+            }
+        },
 
         async fetchReleaseStatus(check = false) {
             if (this.currentUser?.role !== 'admin' || !this.adminReleaseStatus || this.releaseChecking) return;

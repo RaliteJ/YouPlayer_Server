@@ -1,12 +1,9 @@
-import { escapeHtml, spotifyArtists } from './client-utils.js';
+import { escapeHtml, spotifyArtists, musicTrackIdentity } from './client-utils.js';
 
 export function artistLinksMarkup(track = {}) {
     track ||= {};
     const identities = spotifyArtists(track.spotifyArtists);
-    const rawTitle = track.title || track.name || '';
-    const parsed = track.type === 'youtube' && !track.artist ? /^(.+?)\s+(?:[-–—]|\/\/)\s+(.+)$/.exec(rawTitle) : null;
-    const title = (parsed?.[2] || rawTitle).replace(/\s*[([](?:official\s+(?:(?:music\s+)?video|audio)|clip officiel)[^\])]*[)\]]/gi, '').trim();
-    const name = (parsed?.[1] || track.artist || track.channelTitle || '').replace(/\s+-\s+Topic$/i, '').trim();
+    const { title, artist: name } = musicTrackIdentity(track);
     const artists = identities.length ? identities : [{ name }];
     return artists.filter(artist => artist.name).map(artist =>
         `<button type="button" class="track-artist-link" data-track-artist="${escapeHtml(artist.name)}" data-artist-id="${escapeHtml(artist.id || '')}" data-artist-track="${escapeHtml(title)}" aria-label="Voir ${escapeHtml(artist.name)} sur Spotify">${escapeHtml(artist.name)}</button>`

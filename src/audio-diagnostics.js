@@ -115,6 +115,7 @@ export const audioDiagnostics = {
 
     pauseAudioWithDiagnostics(audio, trigger, extra = {}) {
         if (!audio) return;
+        if (this.pendingPlay?.audio === audio) this.pendingPlay = null;
         this.crossfade?.cancel();
         const payload = {
             timestamp: this.diagnosticTimestamp(),

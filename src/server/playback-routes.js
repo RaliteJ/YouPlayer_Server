@@ -6,6 +6,7 @@ import { readNativeTransition, saveNextResponse } from './native-transitions.js'
 import { check_downloaded, chargement_video, deleteDownloadedTrack } from './download.js';
 import { normalizePlaylistName } from './stores/store-utils.js';
 import { logger } from './logger.js';
+import { createRateLimit } from './rate-limit.js';
 import { RequestValidationError, validatePlaybackCollection, resolveStoredFile, sanitizeTrackInput, validatePlaylistSelectionPayload } from './validation.js';
 import {
 	getUpcomingQueue,
@@ -29,6 +30,26 @@ export function registerPlaybackRoutes(app, {
 	const MUSIQ_DIR = config.musiqDir;
 	const LOCAL_SONG_DIR = config.localSongDir;
 	const AUTH_ENABLED = config.authEnabled;
+
+	app.post('/playback/unplayable', requireAuth, createRateLimit({ windowMs: 60_000, max: 60 }), async (req, res) => {
+		try {
+			const { trackId, key, reason } = req.body || {};
+			if (!Number.isSafeInteger(trackId) || trackId < 0
+				|| !['not_ready', 'play_failed', 'media_error', 'stream_error'].includes(reason)) {
+				throw new RequestValidationError('Signalement de lecture invalide');
+			}
+			const track = validateSessionTrack(req, trackId);
+			if (!key || trackLikeKey(track) !== key) throw new RequestValidationError('Ce morceau a changé', 409);
+			await recordAction(req, 'playback.unplayable', 'track', key, {
+				title: String(track.title || track.name || 'Titre inconnu').slice(0, 500),
+				artist: String(track.artist || '').slice(0, 250),
+				type: ['youtube', 'spotify', 'local'].includes(track.type) ? track.type : 'youtube',
+				playlist: String(track.__playlist || '').slice(0, 250),
+				reason
+			});
+			res.status(204).end();
+		} catch (error) { sendJsonError(res, error, 'Signalement impossible', 500); }
+	});
 	const { playlistItemsForRequest, playlistTracksForRequest, deletePlaylistForRequest } = playlistAccess;
 
 	function streamPrincipal(req) {

@@ -94,7 +94,7 @@ for (const method of [
 	"createUser", "changePassword", "setUserPassword", "attachSpotifyConnection",
 	"updateSpotifyTokens", "removeSpotifyConnection", "mergeUserInto",
 	"recordLoginEvent", "recordAuditLog", "ensurePlaylist", "appendPlaylistItems",
-	"setTrackLiked", "deletePlaylist", "deletePlaylistItem", "importPlaylistsFromDirectory", "updateLibraryPreferences",
+	"setTrackLiked", "setPlaylistTitle", "deletePlaylist", "deletePlaylistItem", "importPlaylistsFromDirectory", "updateLibraryPreferences",
 	"saveAccountPlayback", "claimAccountPlayback"
 ]) {
 	Object.defineProperty(FileYouplayerStore.prototype, method, {

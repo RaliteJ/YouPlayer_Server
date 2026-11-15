@@ -4,6 +4,51 @@ import { artistLinksMarkup } from './artist-view.js';
 
 // Keep App as the receiver for paging, gestures and playback actions.
 export const playlistView = {
+    bindPlaylistRename() {
+        this.playlistRenameButton = document.getElementById('playlist-rename');
+        this.playlistRenameForm = document.getElementById('playlist-rename-form');
+        const input = document.getElementById('playlist-rename-title');
+        this.playlistRenameButton?.addEventListener('click', () => {
+            const playlist = this.availablePlaylists.find(item => item.name === this.previewedPlaylist);
+            if (!playlist || playlist.name === LIKED_PLAYLIST) return;
+            this.playlistRenameForm.dataset.playlist = playlist.name;
+            input.value = playlist.title;
+            this.playlistRenameForm.hidden = false;
+            input.focus();
+            input.select();
+        });
+        document.getElementById('playlist-rename-cancel')?.addEventListener('click', () => {
+            this.playlistRenameForm.hidden = true;
+            this.playlistRenameButton.focus();
+        });
+        this.playlistRenameForm?.addEventListener('submit', async event => {
+            event.preventDefault();
+            const name = this.playlistRenameForm.dataset.playlist;
+            const userId = this.currentUser?.id;
+            const submit = this.playlistRenameForm.querySelector('[type="submit"]');
+            submit.disabled = true;
+            try {
+                const result = await this.apiFetch('/playlist/rename', 'POST', { playlist: name, title: input.value });
+                if (!result || userId !== this.currentUser?.id) return;
+                this.playlistRenameForm.hidden = true;
+                await this.fetchAvailablePlaylists();
+                if (userId !== this.currentUser?.id) return;
+                if (this.playerState.currentTrack) this.updatePlayerDetails(this.playerState.currentTrack);
+                const playlist = this.availablePlaylists.find(item => item.name === name);
+                if (playlist && this.previewedPlaylist === name) {
+                    await this.openPlaylistPreview(playlist);
+                    this.playlistRenameButton.focus();
+                }
+                this.showNotice('Playlist renommée.');
+            } finally { submit.disabled = false; }
+        });
+    },
+
+    updatePlaylistRename(playlist) {
+        if (this.playlistRenameButton) this.playlistRenameButton.hidden = !playlist?.name || playlist.name === LIKED_PLAYLIST;
+        if (this.playlistRenameForm) this.playlistRenameForm.hidden = true;
+    },
+
     playlistItemMarkup(item) {
         const title = this.escapeHtml(item.title || 'Titre inconnu');
         const artist = artistLinksMarkup(item);
@@ -94,6 +139,7 @@ export const playlistView = {
 
     renderPlaylistPreview(playlist, tracks = []) {
         if (!this.playlistPreviewList) return;
+        this.updatePlaylistRename(playlist);
 
         const title = playlist?.title || String(playlist?.name || '').replace(/\.json$/i, '') || 'Aperçu';
         const safeTracks = Array.isArray(tracks) ? tracks : [];
@@ -256,6 +302,7 @@ export const playlistView = {
     },
 
     resetPlaylistPreview(countLabel = 'Aucune playlist ouverte') {
+        this.updatePlaylistRename();
         this.previewedPlaylist = null;
         if (this.playlistPreviewTitle) this.playlistPreviewTitle.innerText = 'Aperçu';
         if (this.playlistPreviewCount) this.playlistPreviewCount.innerText = countLabel;
@@ -277,6 +324,7 @@ export const playlistView = {
 
     async openPlaylistPreview(playlist) {
         if (!playlist?.name || !this.playlistPreviewList) return;
+        this.updatePlaylistRename();
 
         this.librarySearchRevision = (this.librarySearchRevision || 0) + 1;
         this.previewedPlaylist = playlist.name;

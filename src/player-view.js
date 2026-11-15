@@ -168,6 +168,7 @@ export const playerView = {
         const title = track?.title || track?.name || fallbackTitle || 'Titre inconnu';
         const artist = track?.artist || track?.channelTitle || 'Artiste inconnu';
         const context = track?.album
+            || this.availablePlaylists?.find(playlist => playlist.name === track?.__playlist)?.title
             || String(track?.__playlist || '').replace(/\.json$/i, '')
             || 'YouPlayer';
 

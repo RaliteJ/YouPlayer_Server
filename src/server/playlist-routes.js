@@ -17,18 +17,27 @@ export function registerPlaylistRoutes(app, {
 }) {
 	const { playlistFilesForRequest, playlistItemsForRequest, playlistSummariesForRequest,
 		appendPlaylistItemsForRequest, deletePlaylistItemForRequest, playlistTracksForRequest,
-		setTrackLikedForRequest } = playlistAccess;
+		setTrackLikedForRequest, renamePlaylistForRequest } = playlistAccess;
+	app.post('/playlist/rename', requireAuth, async (req, res) => {
+		try {
+			const renamed = await renamePlaylistForRequest(req, req.body?.playlist, req.body?.title);
+			await recordAction(req, 'playlist.rename', 'playlist', renamed.name, { title: renamed.title });
+			res.json(renamed);
+		} catch (error) { sendJsonError(res, error, 'Renommage impossible', 400); }
+	});
 	app.get('/playlist/export', requireAuth, async (req, res) => {
 		try {
 			const playlists = [];
 			let skippedLocalTracks = 0;
+			const summaries = await playlistSummariesForRequest(req);
 			for (const name of await playlistFilesForRequest(req)) {
 				const items = [];
 				for (const track of await playlistItemsForRequest(req, name)) {
 					if (track.type === 'local') { skippedLocalTracks++; continue; }
 					items.push(sanitizeTrackInput(track, { allowLocal: false }));
 				}
-				playlists.push({ name, items });
+				const title = summaries.find(playlist => playlist.name === name)?.title;
+				playlists.push({ name: title ? `${title}.json` : name, items });
 			}
 			const archive = { format: PLAYLIST_ARCHIVE_FORMAT, version: 1, playlists, skippedLocalTracks };
 			validatePlaylistArchive(archive);

@@ -22,6 +22,13 @@ export function playlistTitle(name) {
 	return normalizePlaylistName(name).replace(/\.json$/i, "");
 }
 
+export function normalizePlaylistTitle(value) {
+	if (typeof value !== 'string' || !value.trim() || value.trim().length > 100 || /[\\/\x00-\x1f\x7f]/.test(value)) {
+		throw Object.assign(new Error('Nom de playlist invalide (100 caractères maximum)'), { statusCode: 400 });
+	}
+	return value.trim();
+}
+
 export function playlistImage(items = []) {
 	for (const item of items) {
 		const image = item?.albumCoverURL || item?.thumbnail || item?.image || item?.cover;

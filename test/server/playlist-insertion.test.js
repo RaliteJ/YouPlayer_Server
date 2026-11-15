@@ -6,6 +6,30 @@ import os from 'node:os';
 import { FileYouplayerStore } from '../../src/server/stores/file-store.js';
 import { PostgresYouplayerStore } from '../../src/server/stores/postgres-store.js';
 
+test('PostgreSQL filters and paginates failure logs in the database', async () => {
+    const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });
+    store.query = async (sql, parameters) => {
+        assert.match(sql, /WHERE \(\$2::text IS NULL OR action = \$2\)/);
+        assert.match(sql, /LIMIT \$1 OFFSET \$3/);
+        assert.deepEqual(parameters, [51, 'playback.unplayable', 50]);
+        return { rows: [{ id: 123, action: 'playback.unplayable', details: { title: 'Fixture' } }] };
+    };
+    const logs = await store.listAuditLogs({ action: 'playback.unplayable', limit: 51, offset: 50 });
+    assert.equal(logs[0].id, '123');
+    assert.equal(logs[0].details.title, 'Fixture');
+});
+
+test('PostgreSQL renames only the owning account playlist, leaving its identity intact', async () => {
+    const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });
+    store.query = async (sql, values) => {
+        assert.match(sql, /UPDATE yp_playlists SET title = \$3/);
+        assert.match(sql, /WHERE user_id = \$1 AND name = \$2/);
+        assert.deepEqual(values, ['owner', 'mix.json', 'Voyages']);
+        return { rowCount: 1 };
+    };
+    assert.equal(await store.setPlaylistTitle('owner', 'mix', ' Voyages '), true);
+});
+
 test('file storage persists newest individual tracks first after concurrent writes and reopening', async t => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'youplayer-insertion-'));
     t.after(() => rm(root, { recursive: true, force: true }));
@@ -76,19 +100,17 @@ test('background resolution preserves Spotify artist identities and never overwr
     assert.deepEqual(JSON.parse(await readFile(file)), shifted);
 });
 
-test('played video source stays inside its session and is removed with the private audio cache', async t => {
+test('private audio cleanup also removes legacy caption metadata', async t => {
     const { mkdir, writeFile } = await import('node:fs/promises');
-    const { downloadedYoutubeSource, deleteDownloadedTrack } = await import('../../src/server/download.js');
+    const { deleteDownloadedTrack } = await import('../../src/server/download.js');
     const root = await mkdtemp(path.join(os.tmpdir(), 'youplayer-caption-source-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     await mkdir(path.join(root, 'owner'));
     const source = 'https://www.youtube.com/watch?v=aaaaaaaaaaa';
     await writeFile(path.join(root, 'owner', 'queue-owned.mp3'), 'synthetic');
     await writeFile(path.join(root, 'owner', 'queue-owned.source.json'), JSON.stringify({ source }));
-    assert.equal(await downloadedYoutubeSource('queue-owned', 'owner', { musiqDir: root }), source);
-    assert.equal(await downloadedYoutubeSource('queue-owned', 'stranger', { musiqDir: root }), null);
-    assert.equal(await downloadedYoutubeSource('../owner/queue-owned', 'stranger', { musiqDir: root }), null);
     await deleteDownloadedTrack('queue-owned', 'owner', { musiqDir: root });
-    assert.equal(await downloadedYoutubeSource('queue-owned', 'owner', { musiqDir: root }), null);
     await assert.rejects(readFile(path.join(root, 'owner', 'queue-owned.mp3')), { code: 'ENOENT' });
+    await assert.rejects(readFile(path.join(root, 'owner', 'queue-owned.source.json')), { code: 'ENOENT' });
+    await assert.rejects(deleteDownloadedTrack('../owner/queue-owned', 'stranger', { musiqDir: root }));
 });

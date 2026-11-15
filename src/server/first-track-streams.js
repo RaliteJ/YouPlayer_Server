@@ -222,10 +222,11 @@ export function createFirstTrackStreamManager({
 		const nodeBinary = process.execPath || "node";
 		let ytDlp;
 		let ffmpeg;
-		try {
-			ytDlp = spawnProcess(ytDlpCommand, [
+		function spawnDownloader(fast) {
+			const child = spawnProcess(ytDlpCommand, [
 				"--js-runtimes", `node:${nodeBinary}`,
 				"--remote-components", "ejs:github",
+				...(fast ? ["--extractor-args", "youtube:player_client=visionos"] : []),
 				"--format", "bestaudio",
 				"--no-playlist",
 				"--no-cookies",
@@ -235,7 +236,11 @@ export function createFirstTrackStreamManager({
 				"--",
 				source
 			], commonOptions);
-			record.children.push(ytDlp);
+			record.children.push(child);
+			return child;
+		}
+		try {
+			ytDlp = spawnDownloader(true);
 			ffmpeg = spawnProcess(ffmpegCommand, [
 				"-hide_banner",
 				"-loglevel", "error",
@@ -270,17 +275,34 @@ export function createFirstTrackStreamManager({
 			});
 		};
 
-		ytDlp.on("error", (error) => fail("yt-dlp", error));
+		function connectDownloader(child, fast) {
+			let hasData = false;
+			child.stdout.once("data", () => { hasData = true; });
+			child.on("error", (error) => {
+				if (child === ytDlp) fail("yt-dlp", error);
+			});
+			child.stdin?.on?.("error", () => {});
+			child.stderr?.resume?.();
+			child.on("close", (code, signal) => {
+				if (!streams.has(streamId) || child !== ytDlp) return;
+				if (code === 0) {
+					ffmpeg.stdin.end();
+				} else if (fast && !hasData) {
+					// Retry only before audio starts, so a failure cannot replay the beginning.
+					try {
+						ytDlp = spawnDownloader(false);
+						connectDownloader(ytDlp, false);
+					} catch (error) { fail("yt-dlp", error); }
+				} else {
+					fail("yt-dlp", new Error(`sortie ${code ?? signal ?? "inconnue"}`));
+				}
+			});
+			// Keep FFmpeg waiting if the first client fails without producing audio.
+			child.stdout.pipe(ffmpeg.stdin, { end: false });
+		}
 		ffmpeg.on("error", (error) => fail("ffmpeg", error));
-		ytDlp.stdin?.on?.("error", () => {});
 		ffmpeg.stdin?.on?.("error", () => {});
-		ytDlp.stderr?.resume?.();
 		ffmpeg.stderr?.resume?.();
-
-		ytDlp.on("close", (code, signal) => {
-			if (!streams.has(streamId)) return;
-			if (code !== 0) fail("yt-dlp", new Error(`sortie ${code ?? signal ?? "inconnue"}`));
-		});
 		ffmpeg.on("close", (code, signal) => {
 			if (!streams.has(streamId)) return;
 			if (code === 0) {
@@ -299,7 +321,7 @@ export function createFirstTrackStreamManager({
 		response.once("close", () => {
 			if (!response.writableFinished) stopStream(streamId, "client_disconnected");
 		});
-		ytDlp.stdout.pipe(ffmpeg.stdin);
+		connectDownloader(ytDlp, true);
 		ffmpeg.stdout.pipe(response);
 		return record;
 	}

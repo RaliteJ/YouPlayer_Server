@@ -227,9 +227,6 @@ export async function download_youtube(arg, sessionID) {
 				resolve(stdout);
 			});
 		});
-		try {
-			await fs_promises.writeFile(cacheSourcePath(arg[1], sessionID, MUSIQ_DIR), JSON.stringify({ source: canonicalYoutubeSource(arg[0]) }), { mode: 0o600 });
-		} catch { logger.warn('Source des sous-titres non mémorisée'); }
 		return result;
 	} finally {
 		await clearDownloadInProgress(sessionID, arg[1]);
@@ -242,14 +239,6 @@ function cacheSourcePath(id, sessionID, musiqDir) {
 	if (path.basename(String(sessionID)) !== String(sessionID) || path.dirname(sessionRoot) !== root
 		|| path.basename(String(id)) !== String(id) || ['.', '..'].includes(String(id))) throw new Error('Chemin de cache audio invalide');
 	return path.join(sessionRoot, `${id}.source.json`);
-}
-
-export async function downloadedYoutubeSource(id, sessionID, { musiqDir = MUSIQ_DIR } = {}) {
-	try {
-		const file = cacheSourcePath(id, sessionID, musiqDir);
-		if ((await fs_promises.stat(file)).size > 4096) return null;
-		return canonicalYoutubeSource(JSON.parse(await fs_promises.readFile(file, 'utf8')).source);
-	} catch { return null; }
 }
 
 export async function deleteDownloadedTrack(id, sessionID, { musiqDir = MUSIQ_DIR } = {}) {

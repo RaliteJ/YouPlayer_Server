@@ -69,7 +69,7 @@ export async function getPlaylistSummary(file, playlistsDir = PLAYLISTS_DIR) {
 
 		return {
 			name: file,
-			title: file.replace(/\.json$/i, ""),
+			title: typeof obj.title === 'string' && obj.title.trim() ? obj.title : file.replace(/\.json$/i, ""),
 			image,
 			count: items.length,
 			updatedAt: obj.updatedAt || null

@@ -476,6 +476,35 @@ test('library preferences require auth, origin and playlist ownership and stay i
 	assert.deepEqual((await first.request('/playlist_preferences')).body, { pinned: [], recent: [] });
 });
 
+test('playlist rename validates input and isolates accounts while preserving contents and preferences', async () => {
+    const store = app.locals.youplayerStore;
+    const owner = await store.createUser({ pseudo: 'rename-owner', password: 'password123' });
+    const other = await store.createUser({ pseudo: 'rename-other', password: 'password123' });
+    const client = createClient(), second = createClient(), anonymous = createClient(), admin = createClient();
+    await login(client, 'rename-owner');
+    await login(second, 'rename-other');
+    await login(admin, 'admin');
+    const track = { type: 'local', url: 'rename-fixture.wav', title: 'À conserver' };
+    await store.appendPlaylistItems(owner.id, 'mix', [track]);
+    await store.appendPlaylistItems(other.id, 'mix', [track]);
+    await store.updateLibraryPreferences(owner.id, { action: 'pin', playlist: 'mix.json', enabled: true });
+    const body = { playlist: 'mix.json', title: '  Mes voyages  ' };
+    assert.equal((await anonymous.request('/playlist/rename', { method: 'POST', body })).status, 401);
+    assert.equal((await admin.request('/playlist/rename', { method: 'POST', body })).status, 403);
+    assert.equal((await client.request('/playlist/rename', { method: 'POST', body, headers: { Origin: 'https://evil.invalid' } })).status, 403);
+    assert.equal((await client.request('/playlist/rename', { method: 'POST', body })).status, 200);
+    assert.equal((await client.request('/playlist_summaries')).body.find(p => p.name === 'mix.json').title, 'Mes voyages');
+    assert.equal((await second.request('/playlist_summaries')).body.find(p => p.name === 'mix.json').title, 'mix');
+    assert.deepEqual(await store.getPlaylistItems(owner.id, 'mix'), [track]);
+    assert.deepEqual((await store.getLibraryPreferences(owner.id)).pinned, ['mix.json']);
+    assert.ok((await client.request('/playlist/export')).body.playlists.some(p => p.name === 'Mes voyages.json'));
+    for (const title of ['', 'x'.repeat(101), '../private', 'bad\\name', 'bad\nname', 42]) {
+        assert.equal((await client.request('/playlist/rename', { method: 'POST', body: { ...body, title } })).status, 400);
+    }
+    assert.equal((await client.request('/playlist/rename', { method: 'POST', body: { ...body, playlist: 'missing' } })).status, 404);
+    assert.equal((await client.request('/playlist/rename', { method: 'POST', body: { ...body, playlist: 'liked Youplayer.json' } })).status, 400);
+});
+
 test('playlist file transfer preserves order and artists across users, without replacing playlists or exposing local files', async () => {
     const store = app.locals.youplayerStore;
     const owner = await store.createUser({ pseudo: 'archive-owner', password: 'password123' });
@@ -1011,7 +1040,7 @@ test('POST /auth/password lets a user change their own password', async () => {
 test('playlist routes reject unauthenticated requests after auth is enabled', async () => {
 	const client = createClient();
 	assert.equal((await client.request('/sponsorblock?trackId=0')).status, 401);
-	assert.equal((await client.request('/lyrics?trackId=0')).status, 401);
+	assert.equal((await client.request('/playlist/rename', { method: 'POST', body: {} })).status, 401);
 	const list = await client.request('/playlist_summaries');
 	const preview = await client.request('/playlist_preview?playlist=anything.json');
 	const selection = await client.request('/playlist_used', {
@@ -1122,16 +1151,67 @@ test('admin-only routes expose users, login events and audit logs only to role=a
 	assert.equal((await userClient.request('/admin/integrations/check', { method: 'POST' })).status, 403);
 	assert.equal((await createClient().request('/admin/integrations/check', { method: 'POST' })).status, 401);
 	assert.equal((await adminClient.request('/admin/integrations/check', { method: 'POST', skipOrigin: true })).status, 403);
-	for (const route of ['/playlist', '/playlist_summaries', '/playback_state', '/sponsorblock?trackId=0', '/lyrics?trackId=0', '/auth/spotify/start']) {
+	for (const route of ['/playlist', '/playlist_summaries', '/playback_state', '/sponsorblock?trackId=0', '/auth/spotify/start']) {
 		assert.equal((await adminClient.request(route)).status, 403, route);
 	}
-	for (const route of ['/spotify_test', '/send_search_youtube', '/add_song_ecoute', '/update_playlist', '/upload_to_playlist']) {
+	for (const route of ['/spotify_test', '/send_search_youtube', '/add_song_ecoute', '/update_playlist', '/upload_to_playlist', '/playlist/rename']) {
 		assert.equal((await adminClient.request(route, { method: 'POST', body: {} })).status, 403, route);
 	}
 	assert.ok(logs.body.some((log) => log.action === 'auth.login'));
 
 });
 
+
+test('legacy server lyrics endpoint stays removed with Spotify lyrics handled by the browser bridge', async () => {
+	const listener = createClient();
+	await login(listener);
+	assert.equal((await listener.request('/lyrics?trackId=0')).status, 404);
+});
+
+test('unplayable reports use session metadata and only admins can read their complete history', async () => {
+	const listener = createClient(), stranger = createClient(), admin = createClient(), anonymous = createClient();
+	await login(listener);
+	await login(stranger, 'second');
+	await login(admin, 'admin');
+	const song = { type: 'youtube', title: 'Unplayable <fixture>', artist: 'Synthetic artist', url: 'https://www.youtube.com/watch?v=abcdefghijk' };
+	await listener.request('/add_song_ecoute', { method: 'POST', body: { song } });
+	const state = await listener.request('/next_song');
+	const payload = { trackId: state.body.currentId, key: 'youtube:abcdefghijk', reason: 'stream_error', title: 'Forged title', token: 'must-not-persist' };
+	assert.equal((await anonymous.request('/playback/unplayable', { method: 'POST', body: payload })).status, 401);
+	assert.equal((await admin.request('/playback/unplayable', { method: 'POST', body: payload })).status, 403);
+	assert.equal((await listener.request('/playback/unplayable', { method: 'POST', body: payload, skipOrigin: true })).status, 403);
+	assert.equal((await stranger.request('/playback/unplayable', { method: 'POST', body: payload })).status, 404);
+	for (const invalid of [{ trackId: -1 }, { trackId: '0' }, { key: 'youtube:other' }, { reason: 'arbitrary raw error' }]) {
+		assert.ok([400, 409].includes((await listener.request('/playback/unplayable', { method: 'POST', body: { ...payload, ...invalid } })).status));
+	}
+	assert.equal((await listener.request('/playback/unplayable', { method: 'POST', body: payload })).status, 204);
+	assert.equal((await listener.request('/admin/unplayable_tracks')).status, 403);
+	assert.equal((await anonymous.request('/admin/unplayable_tracks')).status, 401);
+	const reports = await admin.request('/admin/unplayable_tracks');
+	assert.equal(reports.status, 200);
+	const report = reports.body.items.find(log => log.details.title === song.title);
+	assert.ok(report);
+	assert.equal(report.details.artist, song.artist);
+	assert.equal(report.details.reason, 'stream_error');
+	assert.equal(report.resourceId, payload.key);
+	assert.equal(JSON.stringify(report).includes('must-not-persist'), false);
+	assert.equal(JSON.stringify(report).includes('Forged title'), false);
+	const store = app.locals.youplayerStore;
+	for (let i = 0; i < 52; i++) {
+		await store.recordAuditLog({ action: 'playback.unplayable', details: { title: `Failure ${i}` } });
+		await store.recordAuditLog({ action: 'unrelated' });
+	}
+	const first = await admin.request('/admin/unplayable_tracks');
+	const second = await admin.request('/admin/unplayable_tracks?offset=50');
+	assert.equal(first.body.items.length, 50);
+	assert.equal(first.body.hasMore, true);
+	assert.equal(second.body.hasMore, false);
+	assert.ok(second.body.items.some(log => log.id === report.id));
+	assert.equal(first.body.items.some(log => log.action !== 'playback.unplayable'), false);
+	for (const offset of ['-1', '1.2', 'nope', '9007199254740992']) {
+		assert.equal((await admin.request(`/admin/unplayable_tracks?offset=${offset}`)).status, 400);
+	}
+});
 
 test('release checks require admin authentication and a trusted origin', async () => {
   const stranger = createClient(), user = createClient(), admin = createClient();

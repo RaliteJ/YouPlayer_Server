@@ -29,6 +29,19 @@ export function normalizeMusicText(value = '') {
 		.replace(/[^\p{L}\p{N}]/gu, '');
 }
 
+export function musicTrackIdentity(track = {}) {
+	const rawTitle = track.title || track.name || '';
+	const parsed = track.type !== 'spotify' && track.type !== 'local'
+		? /^(.+?)\s+(?:[-–—]|\/\/)\s+(.+)$/.exec(rawTitle) : null;
+	return {
+		title: (parsed?.[2] || rawTitle)
+			.replace(/[([]\s*(?:(?:official\s+)?(?:music\s+video|audio|video|lyrics?|visualizer|hd|4k)|clip\s+officiel)\s*[)\]]/gi, '')
+			.replace(/\s+(?:official\s+(?:music\s+)?(?:video|audio)|clip\s+officiel)\s*$/i, '').trim(),
+		artist: (parsed?.[1] || track.artist || track.channelTitle || '')
+			.replace(/(?:\s*-\s*topic|\s*vevo|\s+official)\s*$/i, '').trim()
+	};
+}
+
 export function matchSpotifyArtist({ name, title }, tracks = [], artists = []) {
 	if (!normalizeMusicText(name)) return null;
 	const matches = new Map();

@@ -19,6 +19,38 @@ async function fixture(t) {
 	return { directory, filePath, reopen, store: await reopen() };
 }
 
+test('playlist display names persist without changing tracks, selections or another account', async t => {
+	const { store, reopen } = await fixture(t);
+	const first = await store.createUser({ pseudo: 'rename-first', password: 'synthetic-password' });
+	const second = await store.createUser({ pseudo: 'rename-second', password: 'synthetic-password' });
+	await store.appendPlaylistItems(first.id, 'mix', [{ title: 'Original' }]);
+	await store.appendPlaylistItems(second.id, 'mix', [{ title: 'Private' }]);
+	await store.updateLibraryPreferences(first.id, { action: 'pin', playlist: 'mix.json', enabled: true });
+	assert.equal(await store.setPlaylistTitle(first.id, 'mix', '  Mes voyages  '), true);
+	assert.equal(await store.setPlaylistTitle(first.id, 'missing', 'Absent'), false);
+	await store.close();
+	const restarted = await reopen();
+	assert.equal((await restarted.getPlaylistSummaries(first.id))[0].title, 'Mes voyages');
+	assert.equal((await restarted.getPlaylistSummaries(second.id))[0].title, 'mix');
+	assert.deepEqual(await restarted.listPlaylistFiles(first.id), ['mix.json']);
+	assert.deepEqual(await restarted.getPlaylistItems(first.id, 'mix'), [{ title: 'Original' }]);
+	assert.deepEqual((await restarted.getLibraryPreferences(first.id)).pinned, ['mix.json']);
+	const target = await restarted.createUser({ pseudo: 'rename-merged', password: 'synthetic-password' });
+	await restarted.mergeUserInto(first.id, target.id);
+	assert.equal((await restarted.getPlaylistSummaries(target.id))[0].title, 'Mes voyages');
+});
+
+test('unplayable reports persist and paginate independently of other audit actions', async t => {
+	const { store, reopen } = await fixture(t);
+	await store.recordAuditLog({ action: 'playback.unplayable', details: { title: 'First failure' } });
+	await store.recordAuditLog({ action: 'unrelated' });
+	await store.recordAuditLog({ action: 'playback.unplayable', details: { title: 'Second failure' } });
+	await store.close();
+	const restored = await reopen();
+	assert.deepEqual((await restored.listAuditLogs({ action: 'playback.unplayable', limit: 1 })).map(log => log.details.title), ['Second failure']);
+	assert.deepEqual((await restored.listAuditLogs({ action: 'playback.unplayable', limit: 1, offset: 1 })).map(log => log.details.title), ['First failure']);
+});
+
 test('account playback persists through restart and rejects the former device after transfer', async t => {
 	const { store, reopen } = await fixture(t);
 	const alice = await store.createUser({ pseudo: 'resume-alice', password: 'synthetic-password' });

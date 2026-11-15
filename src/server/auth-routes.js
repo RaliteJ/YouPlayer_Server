@@ -257,18 +257,18 @@ export function registerAuthRoutes(app, {
 		res.json(await store.listUsers());
 	});
 
-	function requireIntegrationAdmin(req, res, next) {
+	function requireAdminSession(req, res, next) {
 		if (!req.session?.userId || req.session.role !== 'admin') {
 			return res.status(403).json({ error: 'Acces admin requis' });
 		}
 		next();
 	}
 	const integrationRateLimit = createRateLimit({ windowMs: 60_000, max: 4, message: 'Attends avant de verifier a nouveau les connexions' });
-	app.get('/admin/integrations', requireAdmin, requireIntegrationAdmin, (_req, res) => {
+	app.get('/admin/integrations', requireAdmin, requireAdminSession, (_req, res) => {
 		res.setHeader('Cache-Control', 'no-store');
 		res.json(integrationStatus.snapshot());
 	});
-	app.post('/admin/integrations/check', requireAdmin, requireIntegrationAdmin, integrationRateLimit, async (_req, res) => {
+	app.post('/admin/integrations/check', requireAdmin, requireAdminSession, integrationRateLimit, async (_req, res) => {
 		res.setHeader('Cache-Control', 'no-store');
 		try { res.json(await integrationStatus.check()); }
 		catch { res.status(503).json({ error: 'Verification des connexions indisponible' }); }
@@ -306,6 +306,15 @@ export function registerAuthRoutes(app, {
 
 	app.get("/admin/audit_logs", requireAdmin, async (_req, res) => {
 		res.json(await store.listAuditLogs({ limit: 200 }));
+	});
+
+	app.get('/admin/unplayable_tracks', requireAdmin, requireAdminSession, async (req, res) => {
+		const offset = Number(req.query.offset || 0);
+		if (!Number.isSafeInteger(offset) || offset < 0) {
+			return res.status(400).json({ error: 'Pagination invalide' });
+		}
+		const logs = await store.listAuditLogs({ action: 'playback.unplayable', limit: 51, offset });
+		res.set('Cache-Control', 'no-store').json({ items: logs.slice(0, 50), hasMore: logs.length > 50 });
 	});
 
 }

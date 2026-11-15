@@ -49,6 +49,80 @@ function playerHarness() {
 	return { app, calls, requests };
 }
 
+test('replacing a pending source with a private stream does not retry the old source or report a failure', async () => {
+	const { app } = playerHarness();
+	const notices = [], prefetched = [], sources = [];
+	const audio = app.lecteur;
+	app.currentSpecialStream = null;
+	app.showNotice = message => notices.push(message);
+	app.requestWakeLock = () => {};
+	app.prefetchUpcomingTrack = queue => prefetched.push(queue);
+	let rejectOld;
+	audio.play = () => {
+		sources.push(audio.src);
+		return sources.length === 1 ? new Promise((resolve, reject) => { rejectOld = reject; }) : Promise.resolve();
+	};
+	audio.load = () => {
+		if (rejectOld) {
+			rejectOld(Object.assign(new Error('Media fetching was aborted'), { name: 'AbortError' }));
+			rejectOld = null;
+		}
+	};
+	audio.removeAttribute = () => { audio.src = ''; };
+	const old = app.loadAndPlayMainSource('/play/0');
+	await app.startSpecialPlayback({ stream_id: 'selected', audio_url: '/audio/selected', queue: [] });
+	assert.equal(await old, null);
+	assert.deepEqual(sources, ['https://player.test/play/0', 'https://player.test/audio/selected']);
+	assert.deepEqual(notices, []);
+	assert.equal(prefetched.length, 1);
+	assert.equal(app.lastPlayRejection, null);
+	assert.equal(audio.src, 'https://player.test/audio/selected');
+});
+
+test('an intentional pause cancels a pending play without reporting an audio failure', async () => {
+	const { app } = playerHarness();
+	const notices = [];
+	app.showNotice = message => notices.push(message);
+	let rejectPlay;
+	app.lecteur.play = () => new Promise((resolve, reject) => { rejectPlay = reject; });
+	app.lecteur.pause = () => rejectPlay(Object.assign(new Error('Paused'), { name: 'AbortError' }));
+	const playing = app.playAudioWithDiagnostics(app.lecteur);
+	app.pauseAudioWithDiagnostics(app.lecteur, 'play-pause-control');
+	assert.equal(await playing, null);
+	assert.deepEqual(notices, []);
+});
+
+test('a real failure of the current play attempt still reports the audio error', async () => {
+	const { app } = playerHarness();
+	const notices = [];
+	app.showNotice = message => notices.push(message);
+	const error = Object.assign(new Error('Unsupported audio'), { name: 'NotSupportedError' });
+	app.lecteur.play = () => Promise.reject(error);
+	assert.equal(await app.playAudioWithDiagnostics(app.lecteur), false);
+	assert.equal(app.lastPlayRejection, error);
+	assert.deepEqual(notices, ['La lecture audio n’a pas pu démarrer.']);
+});
+
+for (const outcome of ['resolve', 'reject']) {
+	test(`an obsolete play that ${outcome}s cannot overwrite the current attempt's error`, async () => {
+		const { app } = playerHarness();
+		const notices = [];
+		app.showNotice = message => notices.push(message);
+		let finishOld;
+		app.lecteur.play = () => new Promise((resolve, reject) => {
+			finishOld = () => outcome === 'resolve' ? resolve() : reject(Object.assign(new Error('Replaced'), { name: 'AbortError' }));
+		});
+		const old = app.playAudioWithDiagnostics(app.lecteur);
+		const error = Object.assign(new Error('Unsupported audio'), { name: 'NotSupportedError' });
+		app.lecteur.play = () => Promise.reject(error);
+		assert.equal(await app.playAudioWithDiagnostics(app.lecteur), false);
+		finishOld();
+		assert.equal(await old, null);
+		assert.equal(app.lastPlayRejection, error);
+		assert.equal(notices.length, 1);
+	});
+}
+
 test('a failed playlist selection does not discard the next queued selection', async () => {
 	const { app } = playerHarness();
 	const selections = [];
@@ -317,4 +391,62 @@ test('playlist selection leaves current audio and stream intact and replaces the
     assert.equal(app.currentSpecialStream, stream);
     assert.equal(app.queueEditPromise, null);
     assert.deepEqual(calls, ['clear-prefetch', 'current:0', 'prefetch:5']);
+});
+
+test('media and private-stream failures report the failed track without waiting for telemetry', async () => {
+	for (const special of [false, true]) {
+		const { app, calls } = playerHarness();
+		const reports = [];
+		app.currentId = '0';
+		app.lastPlaybackState = { current: { type: 'youtube', url: 'https://www.youtube.com/watch?v=abcdefghijk' } };
+		app.apiFetch = (endpoint, method, body) => { reports.push({ endpoint, method, body }); return new Promise(() => {}); };
+		if (!special) app.currentSpecialStream = null;
+		await (special ? app.handleSpecialStreamError() : app.handleMainAudioError());
+		assert.equal(reports.length, 1);
+		assert.equal(reports[0].endpoint, '/playback/unplayable');
+		assert.equal(reports[0].body.key, 'youtube:abcdefghijk');
+		assert.equal(reports[0].body.trackId, 0);
+		assert.equal(reports[0].body.reason, special ? 'stream_error' : 'media_error');
+		assert.deepEqual(calls, ['play:1']);
+	}
+});
+
+test('failed readiness and play attempts report each skipped track but autoplay blocks do not', async () => {
+	for (const failure of ['not_ready', 'play_failed', 'autoplay']) {
+		const { app } = playerHarness();
+		const reports = [];
+		let index = 0;
+		app.currentSpecialStream = null;
+		app.nextTrackPrefetch = null;
+		app.showPlayer = () => {};
+		app.updatePlaybackUi = data => { app.lastPlaybackState = data; };
+		app.waitForTrackReady = async () => failure === 'not_ready' ? null : '/play/fixture';
+		app.loadAndPlayMainSource = async () => {
+			app.lastPlayRejection = { name: failure === 'autoplay' ? 'NotAllowedError' : 'NotSupportedError' };
+			return false;
+		};
+		app.apiFetch = async (endpoint, method, body) => {
+			if (endpoint === '/playback/unplayable') { reports.push(body); return {}; }
+			assert.equal(endpoint, '/next_song');
+			return { currentId: index++, current: { type: 'youtube', id: 'abcdefghijk' }, queue: [], path: '/play/fixture' };
+		};
+		await app.nextSong();
+		assert.equal(reports.length, failure === 'autoplay' ? 0 : 3);
+		assert.deepEqual(reports.map(report => report.trackId), failure === 'autoplay' ? [] : [0, 1, 2]);
+		assert.equal(reports.every(report => report.reason === failure), true);
+	}
+});
+
+test('successful Spotify fallback and manual skips do not report an unplayable track', async () => {
+	const { app } = playerHarness();
+	const reports = [];
+	app.currentId = 0;
+	app.lastPlaybackState = { current: { type: 'spotify', url: 'https://open.spotify.com/track/' + 'A'.repeat(22) } };
+	app.apiFetch = async (...args) => { reports.push(args); return {}; };
+	app.waitForTrackReady = async () => '/play/0';
+	app.loadAndPlayMainSource = async () => true;
+	await app.handleSpecialStreamError();
+	assert.deepEqual(reports, []);
+	await app.advanceToNextSong('manual');
+	assert.deepEqual(reports, []);
 });

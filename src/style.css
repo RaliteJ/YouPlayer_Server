@@ -401,6 +401,9 @@ body.auth-required .main {
   white-space: nowrap;
 }
 
+#playlist-rename-form { margin-bottom: 12px; }
+#playlist-rename-title { display: block; width: 100%; box-sizing: border-box; margin: 8px 0; }
+
 #playlist-preview-count {
   color: var(--text-muted);
   font-size: 13px;
@@ -1772,6 +1775,11 @@ li:hover {
   color: var(--text-muted);
   font-size: 12px;
   flex-shrink: 0;
+}
+
+#admin-unplayable-list li {
+  display: block;
+  overflow-wrap: anywhere;
 }
 
 .admin-users-list {

@@ -61,6 +61,9 @@ export function createSpotifyBrowserBridge({ windowObject = globalThis.window } 
 		getArtist(artistId) {
 			return request("get-artist", { artistId }, 30000);
 		},
+		getLyrics(trackId) {
+			return request("get-lyrics", { trackId }, 15000);
+		},
 		openSpotify() {
 			return request("open-spotify", {}, 3000);
 		},
