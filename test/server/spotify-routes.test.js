@@ -135,21 +135,11 @@ test('playlist HTTP fallback preserves the original error if both paths fail', a
 	assert.equal(failed.errors[0], original);
 });
 
-test('personal playlists refresh an expired user token once, but do not retry other errors', async () => {
-	for (const status of [401, 403]) {
-		const refreshes = []; let requests = 0;
-		const h = harness({
-			spotifyAccessTokenForUser: async (userId, options) => {
-				assert.equal(userId, 'synthetic-user'); refreshes.push(Boolean(options?.forceRefresh)); return 'synthetic';
-			},
-			fetchSpotifyCurrentUserPlaylists: async () => {
-				if (++requests === 1) throw Object.assign(new Error('Synthetic denied'), { spotifyStatus: status });
-				return { items: [] };
-			}
-		});
-		assert.equal((await h.request({ action: 'me_playlists' })).statusCode, status === 401 ? 200 : 400);
-		assert.deepEqual(refreshes, status === 401 ? [false, true] : [false]);
-	}
+test('personal playlists are refused without reading or renewing server credentials', async () => {
+ const h = harness();
+ const response = await h.request({ action: 'me_playlists' });
+ assert.equal(response.statusCode, 410);
+ assert.equal(h.unexpectedCalls.length, 0);
 });
 
 test('album details try user, anonymous and Pathfinder HTTP in order', async () => {

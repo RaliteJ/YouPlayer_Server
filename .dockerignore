@@ -32,6 +32,7 @@
 !src/downloads/
 !src/downloads/.gitkeep
 !src/downloads/youplayer-spotify-bridge.xpi
+!src/downloads/youplayer-spotify-bridge-chromium.zip
 
 !src/spotify_login_sandbox/
 !src/spotify_login_sandbox/**

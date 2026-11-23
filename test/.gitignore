@@ -2,6 +2,8 @@
 *
 !music-features.test.js
 !spotify-lyrics.test.js
+!spotify-extension-package.test.js
+!youtube-discovery.test.js
 !server/playlist-insertion.test.js
 
 # Versioned release tests; keep the local virtual environment ignored.

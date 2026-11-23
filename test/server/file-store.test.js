@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FileYouplayerStore } from '../../src/server/stores/file-store.js';
 import { bootstrapFileAdmin, createYouplayerStore, seedTestStore } from '../../src/server/youplayer-store.js';
+import { trackLikeKey } from '../../src/client-utils.js';
 
 async function fixture(t) {
 	const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -40,6 +41,24 @@ test('playlist display names persist without changing tracks, selections or anot
 	assert.equal((await restarted.getPlaylistSummaries(target.id))[0].title, 'Mes voyages');
 });
 
+test('credential versions persist and stale concurrent deletions never remove another track', async t => {
+    const { store, reopen } = await fixture(t);
+    const user = await store.createUser({ pseudo: 'versioned', password: 'synthetic-password' });
+    assert.equal(user.authVersion, 0);
+    assert.equal((await store.changePassword(user.id, 'synthetic-password', 'synthetic-password-two')).authVersion, 1);
+    assert.equal((await store.setUserPassword(user.id, 'synthetic-password-three')).authVersion, 2);
+    assert.equal((await (await reopen()).findUserById(user.id)).authVersion, 2);
+    const tracks = ['A', 'B', 'C'].map((title, index) => ({ type: 'youtube', id: `abcdefghij${index}`, title }));
+    await store.appendPlaylistItems(user.id, 'mix', tracks);
+    const removed = await Promise.allSettled([
+        store.deletePlaylistItem(user.id, 'mix', 0, trackLikeKey(tracks[0])),
+        store.deletePlaylistItem(user.id, 'mix', 1, trackLikeKey(tracks[1]))
+    ]);
+    assert.equal(removed[0].value.title, 'A');
+    assert.equal(removed[1].reason.statusCode, 409);
+    assert.deepEqual((await (await reopen()).getPlaylistItems(user.id, 'mix')).map(track => track.title), ['B', 'C']);
+});
+
 test('unplayable reports persist and paginate independently of other audit actions', async t => {
 	const { store, reopen } = await fixture(t);
 	await store.recordAuditLog({ action: 'playback.unplayable', details: { title: 'First failure' } });
@@ -49,6 +68,28 @@ test('unplayable reports persist and paginate independently of other audit actio
 	const restored = await reopen();
 	assert.deepEqual((await restored.listAuditLogs({ action: 'playback.unplayable', limit: 1 })).map(log => log.details.title), ['Second failure']);
 	assert.deepEqual((await restored.listAuditLogs({ action: 'playback.unplayable', limit: 1, offset: 1 })).map(log => log.details.title), ['First failure']);
+});
+
+test('manual Spotify sources persist per account with old account files staying compatible', async t => {
+	const { store, reopen, filePath } = await fixture(t);
+	const alice = await store.createUser({ pseudo: 'source-alice', password: 'synthetic-password' });
+	const bob = await store.createUser({ pseudo: 'source-bob', password: 'synthetic-password' });
+	// Old account records never carried the field: reads default to none.
+	assert.deepEqual(await store.getUserSpotifySources(alice.id), {});
+	const spotifyId = 'A'.repeat(22);
+	const entry = await store.setUserSpotifySource(alice.id, spotifyId, { videoId: 'abcdefghijk', revision: 'revision-one' });
+	assert.deepEqual(entry, { videoId: 'abcdefghijk', revision: 'revision-one' });
+	await store.setUserSpotifySource(alice.id, spotifyId, { videoId: null, revision: 'revision-two' });
+	assert.deepEqual((await store.getUserSpotifySources(alice.id))[spotifyId], { videoId: null, revision: 'revision-two' });
+	assert.deepEqual(await store.getUserSpotifySources(bob.id), {}, 'the other account is untouched');
+	const stored = JSON.parse(await readFile(filePath, 'utf8'));
+	const savedUsers = new Map(stored.users);
+	assert.match(JSON.stringify(savedUsers.get(String(alice.id))), /revision-two/);
+	assert.doesNotMatch(JSON.stringify(savedUsers.get(String(bob.id))), /revision-two/);
+	await store.close();
+	const restored = await reopen();
+	assert.deepEqual((await restored.getUserSpotifySources(alice.id))[spotifyId], { videoId: null, revision: 'revision-two' });
+	assert.deepEqual(await restored.getUserSpotifySources(bob.id), {});
 });
 
 test('account playback persists through restart and rejects the former device after transfer', async t => {
@@ -68,7 +109,7 @@ test('account playback persists through restart and rejects the former device af
 	assert.equal(await restarted.saveAccountPlayback(alice.id, snapshot, 'phone', true), true, 'explicit playback may reclaim ownership');
 });
 
-test('file store restores accounts, password changes, isolated playlists, tokens and logs', async (t) => {
+test('file store restores accounts, password changes, isolated playlists and logs while preserving legacy data', async (t) => {
 	const { store, filePath, reopen } = await fixture(t);
 	const first = await store.createUser({ pseudo: 'first', password: 'initial-test-password' });
 	const second = await store.createUser({ pseudo: 'second', password: 'another-test-password' });
@@ -78,12 +119,13 @@ test('file store restores accounts, password changes, isolated playlists, tokens
 	await store.deletePlaylistItem(first.id, 'mix', 1);
 	await store.updateLibraryPreferences(first.id, { action: 'pin', playlist: 'mix.json', enabled: true });
 	await store.updateLibraryPreferences(first.id, { action: 'visit', playlist: 'mix.json' });
-	await store.attachSpotifyConnection(first.id, {
-		accountId: 'synthetic-account', accessTokenEncrypted: 'v1:encrypted-test-token'
-	});
 	await store.recordLoginEvent({ userId: first.id, pseudo: 'first', success: true });
 	await store.recordAuditLog({ userId: first.id, action: 'synthetic-action' });
 	await store.close();
+	const legacyConnection = { accountId: 'synthetic-account', accessTokenEncrypted: 'v1:encrypted-test-token' };
+	const legacySnapshot = JSON.parse(await readFile(filePath, 'utf8'));
+	legacySnapshot.users.find(([id]) => id === first.id)[1].spotifyConnection = legacyConnection;
+	await writeFile(filePath, JSON.stringify(legacySnapshot), 'utf8');
 	const restarted = await reopen();
 	assert.deepEqual(await restarted.getLibraryPreferences(first.id), { pinned: ['mix.json'], recent: ['mix.json'] });
 	assert.deepEqual(await restarted.getLibraryPreferences(second.id), { pinned: [], recent: [] });
@@ -91,7 +133,7 @@ test('file store restores accounts, password changes, isolated playlists, tokens
 	assert.equal((await restarted.authenticate('first', 'changed-test-password')).id, first.id);
 	assert.deepEqual(await restarted.getPlaylistItems(first.id, 'mix'), [{ title: 'First' }]);
 	assert.deepEqual(await restarted.getPlaylistItems(second.id, 'mix'), [{ title: 'Second' }]);
-	assert.equal((await restarted.getSpotifyConnection(first.id, { includeTokens: true })).accessTokenEncrypted, 'v1:encrypted-test-token');
+	assert.deepEqual((await restarted.authenticate('first', 'changed-test-password')).spotify, { connected: false });
 	assert.equal((await restarted.listLoginEvents()).length, 1);
 	assert.equal((await restarted.listAuditLogs()).length, 1);
 	assert.equal((await stat(filePath)).mode & 0o777, 0o600);
@@ -102,10 +144,10 @@ test('file store restores accounts, password changes, isolated playlists, tokens
 	assert.notEqual(third.id, first.id);
 	assert.notEqual(third.id, second.id);
 	await restarted.deletePlaylist(first.id, 'mix');
-	await restarted.removeSpotifyConnection(first.id);
 	const again = await reopen();
 	assert.deepEqual(await again.listPlaylistFiles(first.id), []);
-	assert.equal(await again.getSpotifyConnection(first.id), null);
+	const saved = JSON.parse(await readFile(filePath, 'utf8'));
+	assert.deepEqual(saved.users.find(([id]) => id === first.id)[1].spotifyConnection, legacyConnection);
 });
 
 test('concurrent writes do not lose playlist items or allow duplicate accounts', async (t) => {

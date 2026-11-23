@@ -25,44 +25,14 @@ function harness(overrides = {}) {
     });
 }
 
-test('catalog tokens stay associated with their own user and missing accounts are rejected', async () => {
-    const calls = [];
-    const catalog = harness({ store: { getSpotifyConnection: async (id, options) => {
-        calls.push([id, options]);
-        return id === 'missing' ? null : connection(id);
-    } } });
-    assert.equal(await catalog.spotifyAccessTokenForUser('first'), 'first');
-    assert.equal(await catalog.spotifyAccessTokenForUser('second'), 'second');
-    await assert.rejects(catalog.spotifyAccessTokenForUser(null), { statusCode: 401 });
-    await assert.rejects(catalog.spotifyAccessTokenForUser('missing'), { statusCode: 409 });
-    assert.equal(calls[0][1].includeTokens, true);
-});
-
-test('expired access tokens are refreshed and persisted encrypted for the same user', async () => {
-    const writes = [];
-    const catalog = harness({ store: {
-        getSpotifyConnection: async () => connection('expired', { expiresAt: new Date(0).toISOString() }),
-        updateSpotifyTokens: async (id, tokens) => writes.push([id, tokens])
-    } });
-    assert.equal(await catalog.spotifyAccessTokenForUser('first'), 'renewed');
-    assert.equal(writes[0][0], 'first');
-    assert.equal(writes[0][1].accessTokenEncrypted, encrypted('renewed'));
-});
-
-test('invalid_grant removes only the expired connection and missing refresh tokens fail locally', async () => {
-    const removed = [];
-    const catalog = harness({
-        store: {
-            getSpotifyConnection: async id => connection('expired', {
-                expiresAt: new Date(0).toISOString(), refreshTokenEncrypted: id === 'no-refresh' ? '' : encrypted('refresh')
-            }),
-            removeSpotifyConnection: async id => removed.push(id)
-        },
-        refreshSpotifyAccessToken: async () => { throw Object.assign(new Error('synthetic'), { oauthCode: 'invalid_grant' }); }
-    });
-    await assert.rejects(catalog.spotifyAccessTokenForUser('first'), { statusCode: 409 });
-    await assert.rejects(catalog.spotifyAccessTokenForUser('no-refresh'), { statusCode: 409 });
-    assert.deepEqual(removed, ['first']);
+test('catalog never reads, renews or removes historical personal Spotify tokens', async () => {
+    const unexpected = () => { throw new Error('Personal credentials must not be used'); };
+    const catalog = harness({ store: { getSpotifyConnection: unexpected, updateSpotifyTokens: unexpected,
+        removeSpotifyConnection: unexpected }, decryptSpotifyToken: unexpected, refreshSpotifyAccessToken: unexpected,
+        fetchSpotifyCatalogSearch: async token => { assert.equal(token, 'application'); return result(); } });
+    assert.ok(await catalog.spotifySearchForUser('first', 'query'));
+    assert.ok(await catalog.spotifyAlbumForUser('first', 'album'));
+    assert.equal(catalog.spotifyAccessTokenForUser, undefined);
 });
 
 test('application token loads are shared, cached and retryable after failure', async () => {

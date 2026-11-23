@@ -78,6 +78,10 @@ Si l’installation échoue après le démarrage, elle conserve les données. Ne
 supprimer les volumes pour la relancer. Examiner l’état et le diagnostic local
 `.updates/host/last-command.log` ; voir [UPDATES.md](UPDATES.md). Ces journaux sont privés.
 
+Pour afficher les étapes du script d'installation sans afficher les identifiants,
+lancez `YOUPLAYER_INSTALL_DEBUG=1 ./install.sh podman` (ou remplacez `podman`
+par `docker`).
+
 Un dossier neuf sur le même compte ne constitue pas une machine vierge : les
 conteneurs, volumes et le service systemd sont communs à ce compte. Le refus
 d’installation précise si un fichier d’état ou une unité existe déjà. Examiner

@@ -5,19 +5,29 @@ import { fileURLToPath } from "node:url";
 import { extensionFile } from "./spotify-extension-path.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const artifact = join(root, "src/downloads/youplayer-spotify-bridge.xpi");
+const chromium = process.argv.includes("--chromium");
+const artifactName = chromium ? "youplayer-spotify-bridge-chromium.zip" : "youplayer-spotify-bridge.xpi";
+const artifact = join(root, "src/downloads", artifactName);
 const { runtimeFiles: files } = await import(extensionFile("runtime-files.mjs"));
 const manifest = JSON.parse(await readFile(extensionFile("manifest.json"), "utf8"));
 const metadata = JSON.parse(await readFile(extensionFile("package.json"), "utf8"));
 if (manifest.version !== metadata.version) throw new Error("Versions manifeste/package de l'extension incoherentes");
 const contents = await Promise.all(files.map((name) => readFile(extensionFile(name))));
+if (chromium) {
+	delete manifest.browser_specific_settings;
+	manifest.background = { service_worker: "background.js", type: "module" };
+	manifest.minimum_chrome_version = "111";
+	manifest.icons = { 48: "icons/youplayer-48.png", 128: "icons/youplayer-128.png" };
+	manifest.action.default_icon = manifest.icons;
+	contents[files.indexOf("manifest.json")] = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
+}
 
 if (process.argv.includes("--check")) {
 	const entries = execFileSync("unzip", ["-Z1", artifact], { encoding: "utf8" }).trim().split("\n").sort();
-	if (JSON.stringify(entries) !== JSON.stringify(files)) throw new Error("Contenu du XPI different de la liste des sources");
+	if (JSON.stringify(entries) !== JSON.stringify([...files].sort())) throw new Error("Contenu du paquet different de la liste des sources");
 	for (const [index, name] of files.entries()) {
 		if (!execFileSync("unzip", ["-p", artifact, name]).equals(contents[index])) {
-			throw new Error(`XPI non synchronise : ${name}. Executer npm --prefix src run extension:build`);
+			throw new Error(`Paquet non synchronise : ${name}. Executer npm --prefix src run extension:build${chromium ? " -- --chromium" : ""}`);
 		}
 	}
 	console.log(`Extension ${manifest.version} : paquet conforme aux sources locales`);
@@ -36,7 +46,7 @@ if (process.argv.includes("--check")) {
 		});
 		await mkdir(dirname(artifact), { recursive: true });
 		await rename(temporary, artifact);
-		console.log(`Extension ${manifest.version} construite dans src/downloads/youplayer-spotify-bridge.xpi`);
+		console.log(`Extension ${manifest.version} construite dans src/downloads/${artifactName}`);
 	} finally {
 		await rm(staging, { recursive: true, force: true });
 	}

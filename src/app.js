@@ -194,6 +194,9 @@ const App = {
         this.playerArtwork = document.getElementById('player-artwork');
         this.miniPlayerOpen = document.getElementById('miniPlayerOpen');
         this.miniPlayPause = document.getElementById('miniPlayPause');
+        this.miniShuffle = document.getElementById('miniShuffle');
+        this.miniPrev = document.getElementById('miniPrev');
+        this.miniNext = document.getElementById('miniNext');
         this.nowPlayingOverlay = document.getElementById('now-playing-overlay');
         this.nowPlayingClose = document.getElementById('nowPlayingClose');
         this.overlayArtwork = document.getElementById('overlay-artwork');
@@ -347,6 +350,10 @@ const App = {
         this.nowPlayingClose?.addEventListener('click', () => this.closeNowPlaying());
         this.bindNowPlayingSwipeToClose();
         this.miniPlayPause?.addEventListener('click', () => this.togglePlayback());
+        this.miniShuffle?.addEventListener('click', () =>
+            this.setShuffleMode(!document.getElementById('shuffle-mode').checked));
+        this.miniPrev?.addEventListener('click', () => this.previousTrack());
+        this.miniNext?.addEventListener('click', () => this.advanceToNextSong('manual'));
         this.overlayPlayPause?.addEventListener('click', () => this.togglePlayback());
         this.playerSeek?.addEventListener('input', (e) => this.seekPlayer(Number(e.target.value)));
 
@@ -597,13 +604,16 @@ const App = {
 
     showNotice(message, isError = false) {
         if (!this.appNotice || !message) return;
+        // Floating error banners overlay and block the interface (e.g. the
+        // close control); errors are reported inline or via dedicated
+        // surfaces instead, so they never reveal this banner.
+        if (isError) return;
         clearTimeout(this.noticeTimer);
         this.appNotice.innerText = message;
-        this.appNotice.classList.toggle('is-error', isError);
         this.appNotice.hidden = false;
         this.noticeTimer = setTimeout(() => {
             this.appNotice.hidden = true;
-        }, isError ? 7000 : 3500);
+        }, 3500);
     },
 
     apiErrorMessage(fallback = 'Action impossible.') {
@@ -652,6 +662,9 @@ const App = {
 
     // --- APPELS API ---
     async apiFetch(endpoint, method = 'GET', body = null) {
+        const user = this.currentUser?.id;
+        const revision = this.accountRevision || 0;
+        const isCurrent = () => user === this.currentUser?.id && revision === (this.accountRevision || 0);
         this.lastApiError = null;
         const options = { method, credentials: 'include' };
         const diagnosticRequest = this.isPlaybackDiagnosticEndpoint(endpoint);
@@ -673,6 +686,7 @@ const App = {
 
         try {
             const response = await fetch(`${API_URL}${endpoint}`, options);
+            if (!isCurrent()) return null;
             if (response.status === 401) {
                 this.lastApiError = { status: 401 };
                 if (diagnosticRequest) {
@@ -711,6 +725,7 @@ const App = {
             const data = contentType && contentType.includes("application/json")
                 ? await response.json()
                 : await response.text();
+            if (!isCurrent()) return null;
 
             if (diagnosticRequest) {
                 this.logNextDiagnostic('REQUEST_SUCCESS', {
@@ -723,6 +738,7 @@ const App = {
             }
             return data;
         } catch (error) {
+            if (!isCurrent()) return null;
             if (diagnosticRequest) {
                 this.logNextDiagnostic('REQUEST_ERROR', {
                     requestId,

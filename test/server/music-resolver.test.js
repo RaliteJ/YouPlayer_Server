@@ -315,3 +315,399 @@ test('audio cache deletion removes only the requested file in its own session', 
 		await rm(musiqDir, { recursive: true, force: true });
 	}
 });
+
+test('a forced manual source drives both pipelines without the automatic resolver', async () => {
+	const spotifyTrack = {
+		...song, type: 'spotify', id: 'wrong000001', url: 'https://open.spotify.com/track/' + 'B'.repeat(22)
+	};
+	const forced = { ...spotifyTrack, __sourceOverride: 'forced00001' };
+	let autoCalls = 0;
+	const autoResolver = async () => { autoCalls++; throw new Error('Ne doit pas être appelé'); };
+	const canonical = 'https://www.youtube.com/watch?v=forced00001';
+
+	assert.equal(await resolveYoutubeStreamSource(forced, { resolveTrack: autoResolver }), canonical);
+
+	const downloads = [];
+	assert.equal(await download_spotify([spotifyTrack.url, 'forced-track'], 'synthetic-session', forced, {
+		resolveTrack: autoResolver,
+		downloadYoutube: async ([source, destination], session) => {
+			downloads.push({ source, destination, session });
+			return 'downloaded';
+		}
+	}), 'downloaded');
+	assert.deepEqual(downloads, [{
+		source: canonical, destination: 'forced-track', session: 'synthetic-session'
+	}], 'the forced download calls yt-dlp directly with the exact source');
+	assert.equal(autoCalls, 0);
+	assert.equal(forced.id, 'wrong000001', 'the Spotify identity of the track is preserved');
+	assert.equal(spotifyTrack.__sourceOverride, undefined, 'session items never carry the override');
+
+	await assert.rejects(download_spotify([spotifyTrack.url, 'failed-track'], 'synthetic-session', {
+		...forced, __sourceOverride: 'banned00001'
+	}, {
+		resolveTrack: autoResolver,
+		// No silent alternative: a failing forced source stays a failure.
+		downloadYoutube: async () => { throw new Error('Source indisponible'); }
+	}), /Source indisponible/);
+	assert.equal(autoCalls, 0);
+});
+
+const julSong = { title: 'Alors la zone', artist: 'Jul', duration_ms: 206000 };
+function youtubeMusicVideo(overrides = {}) {
+	// Simplified real shape from ytmusic-api 5.3.1 VideoParser.parseSearchResult.
+	return { type: 'VIDEO', videoId: '0jYCePaBl2A', name: 'Alors la zone', artist: { artistId: 'jul-topic', name: 'JuL' }, duration: 206, ...overrides };
+}
+
+test('YouTube Music videos are matched after song results, without yt-dlp', async () => {
+	const calls = [];
+	let inits = 0;
+	let ytDlpCalls = 0;
+	const match = await searchMusicTrack(julSong, {
+		getMusicClient: async () => {
+			inits += 1;
+			return {
+				searchSongs: async () => { calls.push('songs'); return [candidate()]; },
+				searchVideos: async () => { calls.push('videos'); return [youtubeMusicVideo()]; }
+			};
+		},
+		searchVideos: async () => { ytDlpCalls++; return { videos: [] }; }
+	});
+	assert.equal(match.videoId, '0jYCePaBl2A');
+	assert.deepEqual(calls, ['songs', 'videos'], 'the video search runs right after the song search');
+	assert.equal(inits, 1, 'the music client is acquired once per lookup');
+	assert.equal(ytDlpCalls, 0, 'a YouTube Music video match avoids the yt-dlp fallback');
+});
+
+test('a failed music client initialization is never retried within the same lookup', async () => {
+	let inits = 0;
+	const match = await searchMusicTrack(julSong, {
+		getMusicClient: async () => {
+			inits += 1;
+			throw new Error('initialization failed');
+		},
+		searchVideos: async () => ({ videos: [{ videoId: 'correct0001', title: 'Jul - Alors la zone', seconds: 206 }] })
+	});
+	assert.equal(inits, 1, 'the dependency is initialized at most once');
+	assert.equal(match.videoId, 'correct0001', 'the general YouTube fallback stays available');
+});
+
+const julAlbumSong = { title: 'La miss', artist: 'Jul', album: 'Indépendance', duration_ms: 241000 };
+function albumEntry(overrides = {}) {
+	// Simplified real shape from ytmusic-api 5.3.1 searchAlbums results.
+	return { albumId: 'MPREb_tGpxSJ6rn2s', name: 'Indépendance', artist: { name: 'JuL' }, ...overrides };
+}
+
+test('an exact YouTube Music album track is matched after videos, without yt-dlp', async () => {
+	const calls = [];
+	let inits = 0;
+	let ytDlpCalls = 0;
+	const match = await searchMusicTrack(julAlbumSong, {
+		getMusicClient: async () => {
+			inits += 1;
+			return {
+				searchSongs: async () => { calls.push('songs'); return [candidate()]; },
+				searchVideos: async () => { calls.push('videos'); return [youtubeMusicVideo({ name: 'La miss (Live)' })]; },
+				searchAlbums: async query => {
+					calls.push(`albums:${query}`);
+					return [albumEntry({ albumId: 'wrong11111a', name: 'Indépendances' }), albumEntry()];
+				},
+				getAlbum: async albumId => {
+					calls.push(`album:${albumId}`);
+					return {
+						name: 'Indépendance',
+						artist: { name: 'JuL' },
+						songs: [{ videoId: 'p3sDHWA51ag', name: 'La miss', artist: { name: 'JuL' }, duration: 242, album: { name: 'Indépendance' } }]
+					};
+				}
+			};
+		},
+		searchVideos: async () => { ytDlpCalls++; return { videos: [] }; }
+	});
+	assert.equal(match.videoId, 'p3sDHWA51ag');
+	assert.equal(match.duration, 242, 'the matched song keeps its album detail');
+	assert.deepEqual(calls, ['songs', 'videos', 'albums:Jul Indépendance', 'album:MPREb_tGpxSJ6rn2s']);
+	assert.equal(inits, 1, 'the music client is acquired once per lookup');
+	assert.equal(ytDlpCalls, 0, 'a verified album match avoids the yt-dlp fallback');
+});
+
+test('the album branch only trusts exact ones and keeps the fallback for everything else', async () => {
+	const rejected = await searchMusicTrack(julAlbumSong, {
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [
+				albumEntry({ name: 'Indépendance', artist: { name: 'Autre artiste' } }),
+				albumEntry({ name: 'Autre album' })
+			],
+			getAlbum: async () => { throw new Error('must not be called'); }
+		}),
+		searchVideos: async () => ({ videos: [{ videoId: 'correct0001', title: 'Jul - La miss', seconds: 241 }] })
+	});
+	assert.equal(rejected.videoId, 'correct0001', 'a homonymous album never reaches the detail');
+
+	const mismatchedDetail = await searchMusicTrack(julAlbumSong, {
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [albumEntry()],
+			getAlbum: async () => ({ name: 'Autre nom', artist: { name: 'JuL' }, songs: [] })
+		}),
+		searchVideos: async () => ({ videos: [{ videoId: 'correct0001', title: 'Jul - La miss', seconds: 241 }] })
+	});
+	assert.equal(mismatchedDetail.videoId, 'correct0001', 'an unverifiable detail never provides songs');
+
+	const explicitCredit = await searchMusicTrack(julAlbumSong, {
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [albumEntry()],
+			getAlbum: async () => ({
+				name: 'Indépendance',
+				artist: { name: 'JuL' },
+				songs: [{ videoId: 'p3sDHWA51ag', name: 'La miss', artist: { name: 'Autre artiste' }, duration: 242 }]
+			})
+		}),
+		searchVideos: async () => ({ videos: [{ videoId: 'correct0001', title: 'Jul - La miss', seconds: 241 }] })
+	});
+	assert.equal(explicitCredit.videoId, 'correct0001', 'an explicit song credit is never overwritten');
+
+	const inherited = await searchMusicTrack(julAlbumSong, {
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [albumEntry()],
+			getAlbum: async () => ({
+				name: 'Indépendance',
+				artist: { name: 'JuL' },
+				songs: [{ videoId: 'p3sDHWA51ag', name: 'La miss', duration: 242 }]
+			})
+		}),
+		searchVideos: async () => { throw new Error('unavailable'); }
+	});
+	assert.equal(inherited.videoId, 'p3sDHWA51ag', 'a song without credit inherits from the verified album');
+
+	const excluded = await searchMusicTrack(julAlbumSong, {
+		excludeIds: ['p3sDHWA51ag'],
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [albumEntry()],
+			getAlbum: async () => ({
+				name: 'Indépendance',
+				artist: { name: 'JuL' },
+				songs: [{ videoId: 'p3sDHWA51ag', name: 'La miss', artist: { name: 'JuL' }, duration: 242 }]
+			})
+		}),
+		searchVideos: async () => ({ videos: [{ videoId: 'correct0001', title: 'Jul - La miss', seconds: 241 }] })
+	});
+	assert.equal(excluded.videoId, 'correct0001', 'an excluded album song is skipped');
+
+	const noAlbum = await searchMusicTrack(julSong, {
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => { throw new Error('videos unavailable'); },
+			searchAlbums: async () => { throw new Error('must not be called'); },
+			getAlbum: async () => { throw new Error('must not be called'); }
+		}),
+		searchVideos: async () => ({ videos: [{ videoId: 'correct0001', title: 'Jul - Alors la zone', seconds: 206 }] })
+	});
+	assert.equal(noAlbum.videoId, 'correct0001', 'a track without an album never queries albums');
+});
+
+function rawAlbumShelf(rows) {
+	return {
+		contents: {
+			twoColumnBrowseResultsRenderer: {
+				secondaryContents: {
+					sectionListRenderer: {
+						contents: [
+							{
+								musicShelfRenderer: {
+									contents: rows.map(row => ({
+										musicResponsiveListItemRenderer: {
+											playlistItemData: { videoId: row.videoId },
+											flexColumns: [{
+												musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: row.title }] } }
+											}]
+										}
+									}))
+								}
+							}
+						]
+					}
+				}
+			}
+		}
+	};
+}
+
+test('album songs with empty names are refilled from the verified shelf rows once', async () => {
+	const calls = [];
+	let ytDlpCalls = 0;
+	const match = await searchMusicTrack(julAlbumSong, {
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [albumEntry()],
+			getAlbum: async () => ({
+				name: 'Indépendance',
+				artist: { name: 'JuL' },
+				songs: [
+					// 5.3.1 parseAlbumSong keeps the name empty without musicVideoType.
+					{ videoId: 'p3sDHWA51ag', name: '', artist: { name: 'JuL' }, duration: 242 },
+					{ videoId: 'other000001', name: 'La mi', artist: { name: 'JuL' }, duration: 242, album: { name: 'Indépendance' } }
+				]
+			}),
+			constructRequest: async (endpoint, payload) => {
+				calls.push([endpoint, payload]);
+				return rawAlbumShelf([
+					{ videoId: 'p3sDHWA51ag', title: 'La miss' },
+					{ videoId: 'other000001', title: 'La miss' }
+				]);
+			}
+		}),
+		searchVideos: async () => { ytDlpCalls++; return { videos: [] }; }
+	});
+	assert.equal(match.videoId, 'p3sDHWA51ag', 'only the unnamed song takes the shelf title');
+	assert.equal(calls.length, 1, 'at most one raw browse happens');
+	assert.deepEqual(calls[0], ['browse', { browseId: 'MPREb_tGpxSJ6rn2s' }]);
+	assert.equal(ytDlpCalls, 0);
+});
+
+test('the refill stays bounded and never bypasses identity, duration or exclusions', async () => {
+	const ytDlpCandidate = { videoId: 'correct0001', title: 'Jul - La miss', seconds: 241 };
+	const ytDlp = async () => ({ videos: [ytDlpCandidate] });
+	const makeClient = (albumSongs, raw, counter) => ({
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [albumEntry()],
+			getAlbum: async () => ({ name: 'Indépendance', artist: { name: 'JuL' }, songs: albumSongs }),
+			constructRequest: async (endpoint, payload) => {
+				counter.count += 1;
+				if (raw === 'throw') throw new Error('raw browse unavailable');
+				return raw;
+			}
+		}),
+		searchVideos: ytDlp
+	});
+
+	// Named songs never trigger the raw browse.
+	let namedCounter = { count: 0 };
+	const named = await searchMusicTrack(julAlbumSong, makeClient(
+		[{ videoId: 'p3sDHWA51ag', name: 'La miss', artist: { name: 'JuL' }, duration: 242 }],
+		rawAlbumShelf([]), namedCounter
+	));
+	assert.equal(named.videoId, 'p3sDHWA51ag');
+	assert.equal(namedCounter.count, 0);
+
+	// A missing runtime shim falls back without errors.
+	const absent = await searchMusicTrack(julAlbumSong, {
+		getMusicClient: async () => ({
+			searchSongs: async () => [],
+			searchVideos: async () => [],
+			searchAlbums: async () => [albumEntry()],
+			getAlbum: async () => ({ name: 'Indépendance', artist: { name: 'JuL' }, songs: [{ videoId: 'p3sDHWA51ag', name: '', artist: { name: 'JuL' }, duration: 242 }] })
+		}),
+		searchVideos: ytDlp
+	});
+	assert.equal(absent.videoId, 'correct0001');
+
+	// A failing or empty raw browse keeps the general fallback.
+	let failingCounter = { count: 0 };
+	const failing = await searchMusicTrack(julAlbumSong, makeClient(
+		[{ videoId: 'p3sDHWA51ag', name: '', artist: { name: 'JuL' }, duration: 242 }],
+		'throw', failingCounter
+	));
+	assert.equal(failing.videoId, 'correct0001');
+	assert.equal(failingCounter.count, 1);
+
+	let bareCounter = { count: 0 };
+	const bare = await searchMusicTrack(julAlbumSong, makeClient(
+		[{ videoId: 'p3sDHWA51ag', name: '', artist: { name: 'JuL' }, duration: 242 }],
+		{ contents: {} }, bareCounter
+	));
+	assert.equal(bare.videoId, 'correct0001');
+	assert.equal(bareCounter.count, 1);
+
+	// Refilled titles keep passing variant, duration and exclusion checks.
+	let variantCounter = { count: 0 };
+	const variant = await searchMusicTrack(julAlbumSong, makeClient(
+		[{ videoId: 'p3sDHWA51ag', name: '', artist: { name: 'JuL' }, duration: 242 }],
+		rawAlbumShelf([{ videoId: 'p3sDHWA51ag', title: 'La miss (Live)' }]), variantCounter
+	));
+	assert.equal(variant.videoId, 'correct0001', 'an alternative version is still rejected');
+
+	let durationCounter = { count: 0 };
+	const wrongDuration = await searchMusicTrack(julAlbumSong, makeClient(
+		[{ videoId: 'p3sDHWA51ag', name: '', artist: { name: 'JuL' }, duration: 300 }],
+		rawAlbumShelf([{ videoId: 'p3sDHWA51ag', title: 'La miss' }]), durationCounter
+	));
+	assert.equal(wrongDuration.videoId, 'correct0001', 'a different recording is still rejected');
+
+	let excludedCounter = { count: 0 };
+	const excluded = await searchMusicTrack(julAlbumSong, {
+		...makeClient([{ videoId: 'p3sDHWA51ag', name: '', artist: { name: 'JuL' }, duration: 242 }],
+			rawAlbumShelf([{ videoId: 'p3sDHWA51ag', title: 'La miss' }]), excludedCounter),
+		excludeIds: ['p3sDHWA51ag']
+	});
+	assert.equal(excluded.videoId, 'correct0001', 'an excluded id never comes back through the refill');
+	assert.equal(excludedCounter.count, 0, 'excluded songs never trigger the raw browse');
+});
+
+test('independent search failures keep the remaining fallbacks available', async () => {
+	let videoSearchInits = 0;
+	const videoMatch = await searchMusicTrack(julSong, {
+		getMusicClient: async () => {
+			videoSearchInits += 1;
+			return {
+				searchSongs: async () => { throw new Error('songs unavailable'); },
+				searchVideos: async () => [youtubeMusicVideo()]
+			};
+		},
+		searchVideos: async () => { throw new Error('must not be called'); }
+	});
+	assert.equal(videoMatch.videoId, '0jYCePaBl2A');
+	assert.equal(videoSearchInits, 1, 'a mid-search failure still reuses the acquired client');
+
+	let ytDlpInits = 0;
+	const ytDlpMatch = await searchMusicTrack(julSong, {
+		getMusicClient: async () => {
+			ytDlpInits += 1;
+			return {
+				searchSongs: async () => [],
+				searchVideos: async () => { throw new Error('videos unavailable'); }
+			};
+		},
+		searchVideos: async () => ({ videos: [{ videoId: 'correct0001', title: 'Jul - Alors la zone', seconds: 206 }] })
+	});
+	assert.equal(ytDlpMatch.videoId, 'correct0001');
+	assert.equal(ytDlpInits, 1);
+});
+
+test('YouTube Music video results follow the same identity, duration and exclusion checks', async () => {
+	let ytDlpCalls = 0;
+	const options = {
+		searchVideos: async () => {
+			ytDlpCalls++;
+			return { videos: [{ videoId: 'correct0001', title: 'Jul - Alors la zone', seconds: 206 }] };
+		}
+	};
+	const badArtist = await searchMusicTrack(julSong, {
+		...options,
+		getMusicClient: async () => ({ searchSongs: async () => [], searchVideos: async () => [youtubeMusicVideo({ artist: { name: 'Autre artiste' } })] })
+	});
+	assert.equal(badArtist.videoId, 'correct0001', 'a wrong artist video is rejected');
+	const badDuration = await searchMusicTrack(julSong, {
+		...options,
+		getMusicClient: async () => ({ searchSongs: async () => [], searchVideos: async () => [youtubeMusicVideo({ duration: 300 })] })
+	});
+	assert.equal(badDuration.videoId, 'correct0001', 'a different recording is rejected by the duration check');
+	const excluded = await searchMusicTrack(julSong, {
+		...options,
+		excludeIds: ['0jYCePaBl2A'],
+		getMusicClient: async () => ({ searchSongs: async () => [], searchVideos: async () => [youtubeMusicVideo()] })
+	});
+	assert.equal(excluded.videoId, 'correct0001', 'an excluded video id is skipped');
+	assert.equal(ytDlpCalls, 3);
+});

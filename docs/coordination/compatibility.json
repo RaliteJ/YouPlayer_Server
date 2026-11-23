@@ -1,0 +1,79 @@
+{
+  "observed_at": "2026-11-15",
+  "scope": "Relevé de sources locales modifiées ; aucune preuve de publication, déploiement, session Spotify réelle ou téléphone.",
+  "repositories": {
+    "server": {
+      "directory": "YouPlayer_Server",
+      "head": "e5989cbb6f3d01accce342501b4cd1c35e6c69da",
+      "worktree": "modified"
+    },
+    "bridge": {
+      "directory": "YouPlayer-Spotify-Bridge",
+      "head": "fe1349dc9c674b0ad2049747ae976eb724edff92",
+      "worktree": "modified"
+    },
+    "app": {
+      "directory": "YouPlayer_App",
+      "head": "4520b20481642404dcd7ca3acdaad22c99b7d38c",
+      "worktree": "modified"
+    }
+  },
+  "versions": {
+    "server_package": "1.0.0 (champ package.json, pas une version de release)",
+    "bridge_source": "0.5.5",
+    "app_version_name": "0.2.0",
+    "app_version_code": 3,
+    "app_embedded_bridge": "0.5.5.1"
+  },
+  "shared_modules": {
+    "spotify-client.js": {
+      "sha256": {
+        "bridge": "3ba510603d9170e51e1be7b4717ef85a84866bb06bbc7321062240e900b84c83",
+        "app": "3ba510603d9170e51e1be7b4717ef85a84866bb06bbc7321062240e900b84c83",
+        "server_zip": "3ba510603d9170e51e1be7b4717ef85a84866bb06bbc7321062240e900b84c83"
+      },
+      "identical": true
+    },
+    "spotify-pathfinder.js": {
+      "sha256": {
+        "bridge": "dfa2e0e1ea0c5e6c94cd39d78c96a27fdf361b20750b16e2872c5b7ffd8dc02f",
+        "app": "dfa2e0e1ea0c5e6c94cd39d78c96a27fdf361b20750b16e2872c5b7ffd8dc02f",
+        "server_zip": "dfa2e0e1ea0c5e6c94cd39d78c96a27fdf361b20750b16e2872c5b7ffd8dc02f"
+      },
+      "identical": true
+    },
+    "spotify-normalizers.js": {
+      "sha256": {
+        "bridge": "a33c9fbee55b4e3421f03dea7469ca3446f8ea474600198d014bc8ba6a942a2b",
+        "app": "a33c9fbee55b4e3421f03dea7469ca3446f8ea474600198d014bc8ba6a942a2b",
+        "server_zip": "a33c9fbee55b4e3421f03dea7469ca3446f8ea474600198d014bc8ba6a942a2b"
+      },
+      "identical": true
+    },
+    "spotify-session.js": {
+      "sha256": {
+        "bridge": "60b9ebb4622b00f65364c044236911d493b80a84fcc5d5efd6e65e56e870c030",
+        "app": "60b9ebb4622b00f65364c044236911d493b80a84fcc5d5efd6e65e56e870c030",
+        "server_zip": "60b9ebb4622b00f65364c044236911d493b80a84fcc5d5efd6e65e56e870c030"
+      },
+      "identical": true
+    },
+    "spotify-content.js": {
+      "sha256": {
+        "bridge": "59d93a0641be96d06b855a4ee131bd0094276cccc838115124a9a928a3de25c8",
+        "app": "59d93a0641be96d06b855a4ee131bd0094276cccc838115124a9a928a3de25c8",
+        "server_zip": "59d93a0641be96d06b855a4ee131bd0094276cccc838115124a9a928a3de25c8"
+      },
+      "identical": true
+    },
+    "spotify-hook.js": {
+      "sha256": {
+        "bridge": "d3fd75e31c37a39a41098b5b50cf2913d9afb1960d175e075cc6e8ec1186fb30",
+        "app": "d3fd75e31c37a39a41098b5b50cf2913d9afb1960d175e075cc6e8ec1186fb30",
+        "server_zip": "d3fd75e31c37a39a41098b5b50cf2913d9afb1960d175e075cc6e8ec1186fb30"
+      },
+      "identical": true
+    }
+  },
+  "server_chromium_zip_sha256": "2fce18c38a8321c08b13293bc4653f9d7e44f81b88e51d735904869c5a39de5c"
+}

@@ -4,12 +4,15 @@ src/local_song/*
 !src/local_song/.gitkeep
 src/downloads/*
 !src/downloads/.gitkeep
+!src/downloads/youplayer-spotify-bridge-chromium.zip
 src/musiq/
 src/node_modules/
 src/spotify/spotify-downloader/
 coverage/
 graphify-out/
 .vscode/
+.codex/
+docs/coordination/AVANCEMENT-*.md
 backups/
 releases/
 .production-check-*/

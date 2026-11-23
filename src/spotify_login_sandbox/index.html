@@ -100,7 +100,7 @@
   <main>
     <header>
       <h1>Sandbox Spotify WebPlayer</h1>
-      <p>Tests de connexion sans API Spotify Developer. Les tokens ne sont jamais affiches en clair.</p>
+      <p>Diagnostic anonyme du lecteur web Spotify.</p>
     </header>
 
     <section>
@@ -117,21 +117,6 @@
           <h3>Anonyme</h3>
           <p>Capture un token WebPlayer sans connexion.</p>
           <button data-mode="anonymous">Tester</button>
-        </div>
-        <div class="probe">
-          <h3>Identifiants headless</h3>
-          <p>Utilise YOUPLAYER_SPOTIFY_WEB_USERNAME/PASSWORD dans Chromium headless.</p>
-          <button data-mode="credentials-headless">Tester</button>
-        </div>
-        <div class="probe">
-          <h3>Profil persistant</h3>
-          <p>Reutilise un profil Chromium dedie si une session Spotify existe deja.</p>
-          <button data-mode="persistent-headless">Tester</button>
-        </div>
-        <div class="probe">
-          <h3>Manuel visible</h3>
-          <p>Tente d'ouvrir Chromium visible pour connexion manuelle. Fonctionne seulement si l'affichage graphique est disponible.</p>
-          <button data-mode="manual-visible">Tester</button>
         </div>
       </div>
     </section>
@@ -188,7 +173,7 @@
             body: JSON.stringify({
               mode,
               source: sourceInput.value,
-              timeoutMs: mode === "manual-visible" ? 180000 : 50000
+              timeoutMs: 50000
             })
           }));
           await refreshStatus();

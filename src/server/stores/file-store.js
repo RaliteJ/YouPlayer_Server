@@ -91,10 +91,10 @@ export class FileYouplayerStore extends MemoryYouplayerStore {
 }
 
 for (const method of [
-	"createUser", "changePassword", "setUserPassword", "attachSpotifyConnection",
-	"updateSpotifyTokens", "removeSpotifyConnection", "mergeUserInto",
+	"createUser", "changePassword", "setUserPassword", "mergeUserInto",
 	"recordLoginEvent", "recordAuditLog", "ensurePlaylist", "appendPlaylistItems",
 	"setTrackLiked", "setPlaylistTitle", "deletePlaylist", "deletePlaylistItem", "importPlaylistsFromDirectory", "updateLibraryPreferences",
+	"setUserSpotifySource",
 	"saveAccountPlayback", "claimAccountPlayback"
 ]) {
 	Object.defineProperty(FileYouplayerStore.prototype, method, {

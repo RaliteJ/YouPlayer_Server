@@ -15,6 +15,7 @@ const ROOT_DIR = dirname(__dirname);
 const PLAYLISTS_DIR = path.join(ROOT_DIR, "playlists");
 const MUSIQ_DIR = process.env.YOUPLAYER_MUSIQ_DIR || "/var/www/html/musiq";
 const pendingDownloads = new Map();
+const activeDownloads = new Map();
 
 function downloadKey(sessionID, id) {
 	return JSON.stringify([String(sessionID), String(id)]);
@@ -38,7 +39,7 @@ async function clearDownloadFailed(sessionID, id) {
 }
 
 async function markDownloadInProgress(sessionID, id) {
-	await fs_promises.writeFile(downloadInProgressPath(sessionID, id), String(Date.now()), { flag: "wx" });
+	await fs_promises.writeFile(downloadInProgressPath(sessionID, id), String(Date.now()));
 }
 
 async function clearDownloadInProgress(sessionID, id) {
@@ -129,7 +130,25 @@ export function youtubeDownloadArgs(source, sessionID, id, { nodeBinary = proces
 	];
 }
 
+// Manual source override carried by the transient playback copy. Only a
+// valid YouTube video id on a Spotify track is accepted and turned into the
+// canonical watch URL.
+function forcedYoutubeSource(song) {
+	if (song?.type !== 'spotify') return null;
+	const videoId = String(song?.__sourceOverride || '');
+	return /^[A-Za-z0-9_-]{11}$/.test(videoId) ? videoId : null;
+}
+
+function canonicalWatchUrl(videoId) {
+	return `https://www.youtube.com/watch?v=${videoId}`;
+}
+
 export async function resolveYoutubeStreamSource(song = {}, { resolveTrack = resolveMusicTrack } = {}) {
+	const forced = forcedYoutubeSource(song);
+	if (forced) {
+		// A forced source bypasses the automatic resolver and any search.
+		return canonicalYoutubeSource(canonicalWatchUrl(forced));
+	}
 	if (song.type === "spotify") {
 		const track = await resolveTrack(song);
 		return canonicalYoutubeSource(track.id);
@@ -174,6 +193,12 @@ export async function download_spotify(arg, sessionID, song = {}, {
 	resolveTrack = resolveMusicTrack, downloadYoutube = download_youtube
 } = {}){
 	logger.debug("Argument recu: download_spotify", arg[1]);
+	const forced = forcedYoutubeSource(song);
+	if (forced) {
+		// Forced source: no automatic resolution, no playlist rewrite and no
+		// silent alternative version; a failure remains a failed download.
+		return downloadYoutube([canonicalWatchUrl(forced), arg[1]], sessionID);
+	}
 	const excludeIds = [];
 	for (let attempt = 0; attempt < 3; attempt++) {
 		const track = await resolveTrack(song, { excludeIds: [...excludeIds] });
@@ -197,22 +222,22 @@ export async function download_spotify(arg, sessionID, song = {}, {
 	}
 }
 
-export async function download_youtube(arg, sessionID) {
+export function download_youtube(arg, sessionID) {
+	const key = downloadKey(sessionID, arg[1]);
+	if (activeDownloads.has(key)) return activeDownloads.get(key);
+	const operation = performYoutubeDownload(arg, sessionID).finally(() => activeDownloads.delete(key));
+	activeDownloads.set(key, operation);
+	return operation;
+}
+
+async function performYoutubeDownload(arg, sessionID) {
 	logger.debug("Argument reçu download_youtube:", arg[1]);
 	if (typeof arg[0] !== "string" || arg[0].trim() === "" || arg[0] === "undefined") {
 		throw new Error(`URL YouTube invalide: ${arg[0]}`);
 	}
 		fs.mkdirSync(path.join(MUSIQ_DIR, String(sessionID)), { recursive: true });
 	await clearDownloadFailed(sessionID, arg[1]);
-	try {
-		await markDownloadInProgress(sessionID, arg[1]);
-	} catch (err) {
-		if (err?.code === "EEXIST") {
-			logger.debug("Téléchargement déjà en cours:", sessionID, arg[1]);
-			return;
-		}
-		throw err;
-	}
+	await markDownloadInProgress(sessionID, arg[1]);
 
 	try {
 		const result = await new Promise((resolve, reject) => {
@@ -258,8 +283,8 @@ export async function deleteDownloadedTrack(id, sessionID, { musiqDir = MUSIQ_DI
 export function check_downloaded(id, sessionID) {
 	if (
 		pendingDownloads.has(downloadKey(sessionID, id))
+		|| activeDownloads.has(downloadKey(sessionID, id))
 		|| fs.existsSync(path.join(MUSIQ_DIR, String(sessionID), `${id}.mp3`))
-		|| fs.existsSync(downloadInProgressPath(sessionID, id))
 	) {
 		return true
 	}

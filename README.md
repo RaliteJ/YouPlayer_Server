@@ -155,6 +155,28 @@ Les intégrations YouTube et Spotify sont facultatives et se configurent dans
 `.env`. Ne partagez jamais ce fichier, les journaux, les sauvegardes ou les données
 des utilisateurs.
 
+L’extension Spotify Bridge est accessible dans **Paramètres → Compte Spotify personnel** :
+Firefox propose un lien vers Mozilla Add-ons ; Chrome propose un ZIP à glisser
+depuis le gestionnaire de fichiers dans `chrome://extensions`, après avoir activé
+le **Mode développeur**. Chrome extrait lui-même le ZIP. Cette installation
+manuelle sur ordinateur est gratuite. Revenez ensuite sur YouPlayer en HTTPS et
+cliquez sur **Associer cet onglet YouPlayer** dans le popup de l’extension.
+Si le glisser-déposer échoue, extrayez le ZIP dans un dossier permanent, cliquez
+sur **Charger l’extension non empaquetée** et sélectionnez le dossier contenant
+`manifest.json`. Avec cette méthode, remplacez les fichiers du dossier puis cliquez
+sur **Recharger** pour mettre à jour l’extension.
+
+Le ZIP Chromium est inclus dans ce dépôt et dans l’image frontend. Pour le reconstruire
+depuis les sources du pont, sans modifier ce dernier :
+
+```bash
+YOUPLAYER_EXTENSION_DIR=../../YouPlayer-Spotify-Bridge/browser-extension npm --prefix src run extension:build -- --chromium
+YOUPLAYER_EXTENSION_DIR=../../YouPlayer-Spotify-Bridge/browser-extension npm --prefix src run extension:check -- --chromium
+```
+
+Ces commandes se lancent depuis la racine du dépôt ; le chemin du pont est relatif
+au répertoire `src` utilisé par npm.
+
 ## Mise à jour
 
 Pour une installation issue d'une release :
@@ -192,7 +214,7 @@ npm --prefix src test
 - [Installation](INSTALL.md)
 - [Mises à jour et récupération](UPDATES.md)
 - [Exploitation, sauvegarde et restauration](PRODUCTION.md)
-- [Règles de contribution](AGENTS.md)
+- [Directives de coordination](docs/coordination/DIRECTIVES.md)
 
 ## Licence
 

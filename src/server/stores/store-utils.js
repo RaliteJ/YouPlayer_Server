@@ -39,28 +39,15 @@ export function playlistImage(items = []) {
 	return "";
 }
 
-function publicSpotifyConnection(user) {
-	const spotify = user.spotify || user.spotifyConnection || {};
-	if (!spotify || Object.keys(spotify).length === 0) {
-		return { connected: false };
-	}
-
-	return {
-		connected: true,
-		displayName: spotify.displayName || spotify.display_name || "",
-		scopes: Array.isArray(spotify.scopes) ? spotify.scopes : [],
-		expiresAt: spotify.expiresAt || spotify.expires_at || null
-	};
-}
-
 export function publicUser(user) {
 	if (!user) return null;
-	const spotify = publicSpotifyConnection(user);
+	const spotify = { connected: false };
 	return {
 		id: String(user.id),
 		pseudo: user.pseudo,
 		displayName: user.displayName || user.display_name || "",
 		role: user.role,
+		authVersion: Number(user.authVersion ?? user.auth_version) || 0,
 		authLevel: spotify.connected ? "spotify" : "local",
 		spotify
 	};

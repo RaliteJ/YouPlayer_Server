@@ -3,11 +3,8 @@ import { getSpotifyAnonymousToken as defaultAnonymousToken } from './spotify.js'
 import { logger as defaultLogger } from './logger.js';
 
 export function createSpotifyCatalog({
-	config, store, logger = defaultLogger,
+	config, logger = defaultLogger,
 	oauthEnabled = spotifyOAuth.spotifyOAuthConfigured(config),
-	decryptSpotifyToken = spotifyOAuth.decryptSpotifyToken,
-	refreshSpotifyAccessToken = spotifyOAuth.refreshSpotifyAccessToken,
-	spotifyTokenUpdateFromRefresh = spotifyOAuth.spotifyTokenUpdateFromRefresh,
 	fetchSpotifyClientCredentialsToken = spotifyOAuth.fetchSpotifyClientCredentialsToken,
 	fetchSpotifyCatalogSearch = spotifyOAuth.fetchSpotifyCatalogSearch,
 	fetchSpotifyAlbum = spotifyOAuth.fetchSpotifyAlbum,
@@ -15,56 +12,6 @@ export function createSpotifyCatalog({
 }) {
 	let spotifyApplicationTokenCache = { value: "", expiresAt: 0 };
 	let spotifyApplicationTokenPromise = null;
-
-	async function refreshSpotifyTokenForUser(userId, connection) {
-		const encryptedRefreshToken = connection?.refreshTokenEncrypted || "";
-		if (!encryptedRefreshToken) {
-			const error = new Error("Reconnecte ton compte Spotify pour renouveler l'autorisation");
-			error.statusCode = 409;
-			throw error;
-		}
-
-		const refreshToken = decryptSpotifyToken(encryptedRefreshToken, config.spotifyTokenSecret);
-		let tokenData;
-		try {
-			tokenData = await refreshSpotifyAccessToken(config, refreshToken);
-		} catch (err) {
-			if (err?.oauthCode === "invalid_grant") {
-				await store.removeSpotifyConnection(userId);
-				const expired = new Error("Autorisation Spotify expiree, reconnecte ton compte");
-				expired.statusCode = 409;
-				throw expired;
-			}
-			throw err;
-		}
-		const tokenUpdate = spotifyTokenUpdateFromRefresh(tokenData, connection, config);
-		await store.updateSpotifyTokens(userId, tokenUpdate);
-		return decryptSpotifyToken(tokenUpdate.accessTokenEncrypted, config.spotifyTokenSecret);
-	}
-
-	async function spotifyAccessTokenForUser(userId, { forceRefresh = false } = {}) {
-		if (!userId) {
-			const error = new Error("Compte YouPlayer requis");
-			error.statusCode = 401;
-			throw error;
-		}
-		const connection = await store.getSpotifyConnection(userId, { includeTokens: true });
-		if (!connection) {
-			const error = new Error("Connecte d'abord ton compte Spotify");
-			error.statusCode = 409;
-			throw error;
-		}
-
-		const expiresAt = Date.parse(connection.expiresAt || "");
-		const accessToken = connection.accessTokenEncrypted
-			? decryptSpotifyToken(connection.accessTokenEncrypted, config.spotifyTokenSecret)
-			: "";
-		const stillValid = !Number.isFinite(expiresAt) || expiresAt > Date.now() + 60_000;
-		if (!forceRefresh && accessToken && stillValid) {
-			return accessToken;
-		}
-		return refreshSpotifyTokenForUser(userId, connection);
-	}
 
 	async function spotifyApplicationAccessToken({ forceRefresh = false } = {}) {
 		if (!oauthEnabled) return "";
@@ -96,13 +43,6 @@ export function createSpotifyCatalog({
 	}
 
 	async function spotifyCatalogTokenForUser(userId, { forceRefresh = false } = {}) {
-		const connection = await store.getSpotifyConnection(userId);
-		if (connection) {
-			return {
-				accessToken: await spotifyAccessTokenForUser(userId, { forceRefresh }),
-				source: "user"
-			};
-		}
 		const accessToken = await spotifyApplicationAccessToken({ forceRefresh });
 		return accessToken ? { accessToken, source: "application" } : null;
 	}
@@ -202,5 +142,5 @@ export function createSpotifyCatalog({
 		}
 	}
 
-	return { spotifyAccessTokenForUser, spotifySearchForUser, spotifyAlbumForUser, spotifyAlbumFromAnonymousWebToken };
+	return { spotifySearchForUser, spotifyAlbumForUser, spotifyAlbumFromAnonymousWebToken };
 }

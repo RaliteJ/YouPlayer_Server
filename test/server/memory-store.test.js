@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { MemoryYouplayerStore } from '../../src/server/stores/memory-store.js';
+import { createYouplayerStore } from '../../src/server/youplayer-store.js';
 
 async function withTempDir(fn) {
 	const dir = await mkdtemp(path.join(os.tmpdir(), 'youplayer-memory-store-'));
@@ -37,6 +38,7 @@ test('createUser normalizes pseudos, defaults role and hides password hashes', a
 		pseudo: 'user',
 		displayName: 'Test User',
 		role: 'user',
+		authVersion: 0,
 		authLevel: 'local',
 		spotify: {
 			connected: false
@@ -91,54 +93,25 @@ test('listUsers returns public users sorted by pseudo', async () => {
 	assert.equal((await store.listUsers())[0].passwordHash, undefined);
 });
 
-test('spotify connections are attached without exposing encrypted tokens publicly', async () => {
-	const { store, user } = await createStoreWithUsers();
-	const connected = await store.attachSpotifyConnection(user.id, {
-		accountId: 'spotify-account-1',
-		displayName: 'Compte Spotify test',
-		scopes: ['playlist-read-private'],
-		accessTokenEncrypted: 'encrypted-access',
-		refreshTokenEncrypted: 'encrypted-refresh',
-		expiresAt: '2030-01-01T00:00:00.000Z'
-	});
-
-	assert.equal(connected.authLevel, 'spotify');
-	assert.equal(connected.spotify.connected, true);
-	assert.equal(connected.spotify.displayName, 'Compte Spotify test');
-	assert.equal(connected.spotify.accessTokenEncrypted, undefined);
-
-	const connection = await store.getSpotifyConnection(user.id, { includeTokens: true });
-	assert.equal(connection.accountId, 'spotify-account-1');
-	assert.equal(connection.accessTokenEncrypted, 'encrypted-access');
-	await assert.rejects(() => store.attachSpotifyConnection('2', {
-		accountId: 'spotify-account-1',
-		accessTokenEncrypted: 'other-access'
-	}), /deja lie/);
-	assert.equal((await store.removeSpotifyConnection(user.id)).authLevel, 'local');
-});
-
-test('memory store persists only encrypted Spotify connections in a private file', async () => {
+test('server startup leaves the historical Spotify connections file unread', async () => {
 	await withTempDir(async (dir) => {
-		const connectionsFile = path.join(dir, 'private', 'spotify-connections.json');
-		const first = new MemoryYouplayerStore({ spotifyConnectionsFile: connectionsFile });
-		await first.init();
-		const user = await first.createUser({ pseudo: 'user', password: 'password123' });
-		await first.attachSpotifyConnection(user.id, {
-			accountId: 'spotify-account-1',
-			displayName: 'Compte Spotify test',
-			scopes: ['playlist-read-private'],
-			accessTokenEncrypted: 'v1:encrypted-access',
-			refreshTokenEncrypted: 'v1:encrypted-refresh',
-			expiresAt: '2030-01-01T00:00:00.000Z'
-		});
-
-		assert.equal((await stat(connectionsFile)).mode & 0o777, 0o600);
-		const second = new MemoryYouplayerStore({ spotifyConnectionsFile: connectionsFile });
-		await second.init();
-		const restored = await second.createUser({ pseudo: 'user', password: 'password123' });
-		const connection = await second.getSpotifyConnection(restored.id, { includeTokens: true });
-		assert.equal(connection.accountId, 'spotify-account-1');
-		assert.equal(connection.accessTokenEncrypted, 'v1:encrypted-access');
+		const connectionsFile = path.join(dir, 'spotify-connections.json');
+		await writeFile(connectionsFile, 'historical private data', 'utf8');
+		const previous = process.env.YOUPLAYER_SPOTIFY_CONNECTIONS_FILE;
+		const previousStore = process.env.YOUPLAYER_STORE;
+		process.env.YOUPLAYER_SPOTIFY_CONNECTIONS_FILE = connectionsFile;
+		process.env.YOUPLAYER_STORE = 'memory';
+		try {
+			const store = await createYouplayerStore();
+			const user = await store.createUser({ pseudo: 'user', password: 'password123' });
+			assert.equal((await store.findUserById(user.id)).spotifyConnection, undefined);
+			assert.equal(await readFile(connectionsFile, 'utf8'), 'historical private data');
+		} finally {
+			if (previous === undefined) delete process.env.YOUPLAYER_SPOTIFY_CONNECTIONS_FILE;
+			else process.env.YOUPLAYER_SPOTIFY_CONNECTIONS_FILE = previous;
+			if (previousStore === undefined) delete process.env.YOUPLAYER_STORE;
+			else process.env.YOUPLAYER_STORE = previousStore;
+		}
 	});
 });
 

@@ -1,7 +1,7 @@
 import fs, { promises as fs_promises } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { LIKED_PLAYLIST, trackLikeKey } from '../client-utils.js';
+import { LIKED_PLAYLIST, trackLikeKey, spotifyTrackIdForSource, youtubeVideoIdForSource } from '../client-utils.js';
 import { readNativeTransition, saveNextResponse } from './native-transitions.js';
 import { check_downloaded, chargement_video, deleteDownloadedTrack } from './download.js';
 import { normalizePlaylistName } from './stores/store-utils.js';
@@ -13,9 +13,12 @@ import {
 	buildControlledQueue,
 	getPlaybackCacheEvictions,
 	gestion_ecoute as dequeueNextTrack,
+	insertListenNextTrack,
 	listen_after as listenAfterQueue,
 	order_playlist,
 	playbackState,
+	popPlaybackQueueTrack,
+	preserveListenNextOrder,
 	rememberCurrentTrack,
 	takePreviousTrack,
 	preloadUpcomingSongs as preloadQueueSongs,
@@ -49,6 +52,65 @@ export function registerPlaybackRoutes(app, {
 			});
 			res.status(204).end();
 		} catch (error) { sendJsonError(res, error, 'Signalement impossible', 500); }
+	});
+
+	// Manual track sources are per account and per Spotify track. No stored
+	// URL ever reaches a download: only a validated video id does, through the
+	// canonical YouTube watch URL rebuilt below.
+	const spotifySourceIdPattern = /^[A-Za-z0-9]{22}$/;
+	const sourceMutationLimit = createRateLimit({ windowMs: 60_000, max: 30 });
+	const canonicalSourceUrl = videoId => `https://www.youtube.com/watch?v=${videoId}`;
+
+	function requireSourceAccount(req) {
+		const userId = req.session?.userId ?? null;
+		if (userId === null) throw new RequestValidationError('Compte requis', 401);
+		return userId;
+	}
+
+	function requireSourceTrackId(req) {
+		const trackId = String(req.params?.trackId || '');
+		if (!spotifySourceIdPattern.test(trackId)) throw new RequestValidationError('Morceau Spotify invalide');
+		return trackId;
+	}
+
+	app.get('/playback/source/:trackId', requireAuth, async (req, res) => {
+		try {
+			const userId = requireSourceAccount(req);
+			const trackId = requireSourceTrackId(req);
+			const sources = await store.getUserSpotifySources(userId);
+			const entry = sources[trackId];
+			res.set('Cache-Control', 'no-store');
+			res.json({ url: entry?.videoId ? canonicalSourceUrl(entry.videoId) : null });
+		} catch (error) { sendJsonError(res, error, 'Source du morceau indisponible', 500); }
+	});
+
+	// Saving or clearing a source never starts a download or playback.
+	app.put('/playback/source/:trackId', requireAuth, sourceMutationLimit, async (req, res) => {
+		try {
+			const userId = requireSourceAccount(req);
+			const trackId = requireSourceTrackId(req);
+			const videoId = youtubeVideoIdForSource(req.body?.url);
+			if (!videoId) throw new RequestValidationError('Lien YouTube ou YouTube Music invalide');
+			const revision = randomUUID();
+			await store.setUserSpotifySource(userId, trackId, { videoId, revision });
+			res.set('Cache-Control', 'no-store');
+			res.json({ url: canonicalSourceUrl(videoId) });
+		} catch (error) { sendJsonError(res, error, 'Source du morceau indisponible', 500); }
+	});
+
+	app.delete('/playback/source/:trackId', requireAuth, sourceMutationLimit, async (req, res) => {
+		try {
+			const userId = requireSourceAccount(req);
+			const trackId = requireSourceTrackId(req);
+			const sources = await store.getUserSpotifySources(userId);
+			if (sources[trackId]) {
+				// Tombstone: the automatic search resumes with a fresh cache
+				// generation, never reusing a forced source's old files.
+				await store.setUserSpotifySource(userId, trackId, { videoId: null, revision: randomUUID() });
+			}
+			res.set('Cache-Control', 'no-store');
+			res.json({ url: null });
+		} catch (error) { sendJsonError(res, error, 'Source du morceau indisponible', 500); }
 	});
 	const { playlistItemsForRequest, playlistTracksForRequest, deletePlaylistForRequest } = playlistAccess;
 
@@ -93,21 +155,53 @@ export function registerPlaybackRoutes(app, {
 
 	function isDownloadPendingOrDone(id, sessionId) {
 		return check_downloaded(id, sessionId)
-			|| fs.existsSync(path.join(MUSIQ_DIR, sessionId, `${id}.webm`))
 			|| fs.existsSync(path.join(MUSIQ_DIR, sessionId, `${id}.failed`));
 	}
 
 	function preloadUpcomingSongs(req, count = 1) {
 		preloadQueueSongs(req, count,
 			id => isDownloadPendingOrDone(trackCacheId(req, id), req.sessionID),
-			(song, id) => chargement_video(song, trackCacheId(req, id), req.sessionID));
+			(song, id) => chargement_video(trackForPlayback(req, id) ?? song, trackCacheId(req, id), req.sessionID));
+	}
+
+	// Manual sources are a per-request snapshot of the account attached to
+	// this request; nothing is stored on the queue items and a change made
+	// from another session is visible on the next request.
+	async function ensurePlaybackSources(req) {
+		if (req.playbackSources !== undefined) return;
+		const userId = req.session?.userId ?? null;
+		req.playbackSources = userId === null ? null : await store.getUserSpotifySources(userId);
 	}
 
 	// Temporary tracks can move when a playlist is edited. Their downloads must
 	// keep the same filename, including while a conversion is still in flight.
+	// A saved manual source adds the entry's revision suffix so an older
+	// generation of .mp3/.failed is never reused, tombstone included. Only a
+	// server-generated UUID revision ever becomes part of a cache path.
 	function trackCacheId(req, id) {
 		const queueId = req.session.items?.[id]?.__queueId;
-		return queueId ? `queue-${queueId}` : id;
+		const base = queueId ? `queue-${queueId}` : id;
+		const sources = req.playbackSources;
+		if (!sources) return base;
+		const revision = sources[spotifyTrackIdForSource(req.session.items?.[id] || null)]?.revision;
+		return typeof revision === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(revision)
+			? `${base}-${revision}`
+			: base;
+	}
+
+	// Transient copy built only at the download and private-stream boundaries:
+	// the override comes exclusively from this request's authenticated source
+	// snapshot. Any raw override field on the stored item is stripped from the
+	// copy, so only the valid store lookup can provide the source.
+	function trackForPlayback(req, id) {
+		const track = req.session.items?.[id];
+		if (!track) return track;
+		const sources = req.playbackSources;
+		const videoId = sources ? sources[spotifyTrackIdForSource(track)]?.videoId : null;
+		const copy = { ...track };
+		delete copy.__sourceOverride;
+		if (videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)) copy.__sourceOverride = videoId;
+		return copy;
 	}
 
 	function hasPendingSpecialTrack(req) {
@@ -178,6 +272,7 @@ export function registerPlaybackRoutes(app, {
 		await fs_promises.mkdir(sessionMusicDir, { recursive: true });
 		req.session.stable_playlist_indices = false;
 		req.session.list_order = [];
+		req.session.listen_next_range = null;
 		req.session.items = [];
 		req.session.ecoute_actuelle = null;
 		req.session.playback_history = [];
@@ -207,6 +302,7 @@ export function registerPlaybackRoutes(app, {
 				req.session.list_order = (typeof random === "boolean" ? random : req.session.random)
 					? order_playlist(selectedIds) : selectedIds.reverse();
 				req.session.queue_initialized = true;
+				req.session.listen_next_range = null;
 				req.session.first_track_special_pending = false;
 			} else {
 				await initializeSession(req);
@@ -251,6 +347,7 @@ export function registerPlaybackRoutes(app, {
 			if (deletedActivePlaylist) {
 				req.session.items = [];
 				req.session.list_order = [];
+				req.session.listen_next_range = null;
 				req.session.ecoute_actuelle = null;
 				req.session.queue_initialized = false;
 			}
@@ -269,6 +366,7 @@ export function registerPlaybackRoutes(app, {
 			throw new RequestValidationError("Aucune playlist sélectionnée.");
 		}
 		await refreshSessionTracks(req);
+		await ensurePlaybackSources(req);
 		if (typeof enabled === "boolean") {
 			req.session.random = enabled;
 		}
@@ -276,11 +374,11 @@ export function registerPlaybackRoutes(app, {
 			req.session.random = !req.session.random;
 		}
 		if (req.session.random === true){
-			req.session.list_order = order_playlist(req.session.list_order);
+			preserveListenNextOrder(req, rest => order_playlist(rest));
 		}
 		else{
-			req.session.list_order = req.session.list_order.toSorted((a, b) => req.session.stable_playlist_indices
-				? req.session.items[b].__selectionIndex - req.session.items[a].__selectionIndex : b - a);
+			preserveListenNextOrder(req, rest => rest.toSorted((a, b) => req.session.stable_playlist_indices
+				? req.session.items[b].__selectionIndex - req.session.items[a].__selectionIndex : b - a));
 		}
 		if (!hasPendingSpecialTrack(req)) {
 			preloadUpcomingSongs(req, 1);
@@ -345,6 +443,7 @@ export function registerPlaybackRoutes(app, {
 		});
 
 		try{
+			await ensurePlaybackSources(req);
 			const readiness = await getTrackPlaybackReadiness(req, trackId);
 			logAudioHttp("READINESS", { status: readiness.status });
 			if (readiness.status === "special_stream") {
@@ -462,6 +561,7 @@ export function registerPlaybackRoutes(app, {
 	app.post('/account_playback/restore', requireAuth, async (req, res) => {
 		try {
 			if (!AUTH_ENABLED) return res.status(204).end();
+			await ensurePlaybackSources(req);
 			const snapshot = await store.claimAccountPlayback(req.session.userId, req.sessionID);
 			if (!snapshot) return res.status(204).end();
 			const sameTrack = trackLikeKey(playbackState(req).current) === trackLikeKey(snapshot.current);
@@ -476,6 +576,7 @@ export function registerPlaybackRoutes(app, {
 				req.session.ecoute_actuelle = 0;
 				req.session.list_order = req.session.items.map((_, index) => index).slice(1).reverse();
 				req.session.queue_initialized = true;
+				req.session.listen_next_range = null;
 				req.session.stable_playlist_indices = true;
 				req.session.first_track_special_pending = false;
 				req.session.random = snapshot.random === true;
@@ -497,6 +598,7 @@ export function registerPlaybackRoutes(app, {
 
 	app.post('/resume_playback', requireAuth, async (req, res) => {
 		try {
+			await ensurePlaybackSources(req);
 			const { trackId, trackKey, position = 0, playing = false } = req.body || {};
 			if (!Number.isInteger(trackId) || trackId < 0 || typeof trackKey !== 'string'
 				|| !Number.isFinite(position) || position < 0 || position > 86400 || typeof playing !== 'boolean') {
@@ -514,6 +616,7 @@ export function registerPlaybackRoutes(app, {
 
 	async function changeSong(req, res, previous = false) {
 	    try {
+	        await ensurePlaybackSources(req);
 	        const transition = readNativeTransition(req);
 	        if (transition?.receipt) return res.json(transition.receipt.data);
 	        if (transition && transition.previous !== String(req.session.ecoute_actuelle ?? null)) {
@@ -554,7 +657,7 @@ export function registerPlaybackRoutes(app, {
 				&& firstTrack);
 			req.session.first_track_special_pending = false;
 			const id = previous ? previousId : useSpecialStream
-				? req.session.list_order.pop()
+				? popPlaybackQueueTrack(req)
 				: gestion_ecoute(req);
 			if (!previous) rememberCurrentTrack(req);
 			if (useSpecialStream) {
@@ -568,7 +671,7 @@ export function registerPlaybackRoutes(app, {
 			const specialStream = useSpecialStream
 				? firstTrackStreams.createStream({
 					owner: streamPrincipal(req),
-					track: req.session.items[id],
+					track: trackForPlayback(req, id),
 					nextEnabled: config.firstTrackSpecialNext
 				})
 				: null;
@@ -576,7 +679,7 @@ export function registerPlaybackRoutes(app, {
 			const pendingPlaybackStream = !specialStream && readiness.status === "pending"
 				? firstTrackStreams.createStream({
 					owner: streamPrincipal(req),
-					track: req.session.items[id],
+					track: trackForPlayback(req, id),
 					nextEnabled: true
 				})
 				: null;
@@ -600,6 +703,7 @@ export function registerPlaybackRoutes(app, {
 
 	app.post("/prefetched_next", requireAuth, async (req, res) => {
 		try {
+			await ensurePlaybackSources(req);
 			const transitionId = String(req.body?.transitionId || "");
 			const expectedTrackId = Number(req.body?.expectedTrackId);
 			const previousTrackId = req.body?.previousTrackId === null
@@ -722,7 +826,7 @@ export function registerPlaybackRoutes(app, {
     function listen_after(req, id) {
 		listenAfterQueue(req, id,
 			trackId => isDownloadPendingOrDone(trackCacheId(req, trackId), req.sessionID),
-			(song, trackId) => chargement_video(song, trackCacheId(req, trackId), req.sessionID));
+			(song, trackId) => chargement_video(trackForPlayback(req, trackId) ?? song, trackCacheId(req, trackId), req.sessionID));
 	}
 
 	async function prepareResumedPlayback(req, position, playing) {
@@ -732,7 +836,7 @@ export function registerPlaybackRoutes(app, {
 		const readiness = await getTrackPlaybackReadiness(req, id);
 		if (playing && readiness.status === 'pending') {
 			return specialStreamResponse(req, firstTrackStreams.createStream({
-				owner: streamPrincipal(req), track: req.session.items[id],
+				owner: streamPrincipal(req), track: trackForPlayback(req, id),
 				startPosition: position, nextEnabled: true
 			}));
 		}
@@ -814,6 +918,7 @@ export function registerPlaybackRoutes(app, {
 		}
 
 		try {
+			await ensurePlaybackSources(req);
 			const readiness = await getTrackPlaybackReadiness(req, trackId);
 			if (readiness.status === "special_stream") {
 				return res.status(409).json({
@@ -873,8 +978,10 @@ export function registerPlaybackRoutes(app, {
 
 	app.post("/add_song_ecoute", requireAuth, async (req, res) => {
 		try {
-			const { arg, song, playlist, index, key, controlled, collection, collectionIndex } = req.body || {};
+			await ensurePlaybackSources(req);
+			const { arg, song, playlist, index, key, controlled, collection, collectionIndex, enqueue } = req.body || {};
 			if (controlled !== undefined && typeof controlled !== 'boolean') throw new RequestValidationError('Lecture invalide.');
+			if (enqueue !== undefined && typeof enqueue !== 'boolean') throw new RequestValidationError('Lecture invalide.');
 			const remoteTracks = collection === undefined ? null : validatePlaybackCollection(collection, collectionIndex);
 			if (remoteTracks && (playlist !== undefined || arg !== undefined)) throw new RequestValidationError('Collection invalide.');
 			let track = song === undefined ? null : sanitizeTrackInput(song, { allowLocal: false });
@@ -930,6 +1037,7 @@ export function registerPlaybackRoutes(app, {
 			if (collectionIds) {
 				req.session.stable_playlist_indices = true;
 				req.session.list_order = buildControlledQueue(collectionIds, id, controlled === true ? req.session.ecoute_actuelle : null);
+				req.session.listen_next_range = null;
 				req.session.playback_collection = collectionIds;
 				req.session.queue_initialized = true;
 				req.session.random = false;
@@ -937,6 +1045,8 @@ export function registerPlaybackRoutes(app, {
 				for (const [index, item] of req.session.items.entries()) {
 					if (item.__queueId && item.__playlist !== LIKED_PLAYLIST) item.__retained = !selected.has(index);
 				}
+			} else if (enqueue === true) {
+				insertListenNextTrack(req, id);
 			} else req.session.list_order.push(id);
 			const pending = hasPendingSpecialTrack(req);
 			if (!pending) listen_after(req, id);

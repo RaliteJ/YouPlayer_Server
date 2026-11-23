@@ -4,8 +4,6 @@ import puppeteer from 'puppeteer';
 import { createHash } from 'node:crypto';
 import { logger } from './logger.js';
 
-const SPOTIFY_SANDBOX_PROFILE_DIR = process.env.YOUPLAYER_SPOTIFY_SANDBOX_PROFILE_DIR || "/tmp/youplayer-spotify-web-profile";
-let spotifyWebLoginDisabledUntil = 0;
 const BROWSER_DISABLED_MESSAGE = "Les diagnostics Spotify par navigateur sont desactives sur cette installation.";
 
 function spotifyBrowserEnabled() {
@@ -16,24 +14,8 @@ function requireSpotifyBrowser() {
 	if (!spotifyBrowserEnabled()) throw new Error(BROWSER_DISABLED_MESSAGE);
 }
 
-function spotifyWebCredentials({ force = false } = {}) {
-	if (!force && Date.now() < spotifyWebLoginDisabledUntil) {
-		return null;
-	}
-	const username = String(process.env.YOUPLAYER_SPOTIFY_WEB_USERNAME || "").trim();
-	const password = String(process.env.YOUPLAYER_SPOTIFY_WEB_PASSWORD || "");
-	return username && password ? { username, password } : null;
-}
-
-function pauseSpotifyWebLoginAttempts() {
-	spotifyWebLoginDisabledUntil = Date.now() + 5 * 60 * 1000;
-}
-
-export function browserLaunchOptions({ headless = true, persistentProfile = false } = {}) {
-	return {
-		headless,
-		userDataDir: persistentProfile ? SPOTIFY_SANDBOX_PROFILE_DIR : undefined
-	};
+export function browserLaunchOptions() {
+	return { headless: true };
 }
 
 function summarizeBearerToken(token = "") {
@@ -70,60 +52,10 @@ function getSpotifyTokenSourceUrl(source = "search") {
 	return `https://open.spotify.com/playlist/${value}`;
 }
 
-async function loginSpotifyWebPlayer(page, options = {}) {
-	const credentials = spotifyWebCredentials(options);
-	if (!credentials) {
-		return false;
-	}
-
-	logger.debug("Connexion Spotify WebPlayer avant capture du token");
-	await page.goto("https://accounts.spotify.com/login", {
-		waitUntil: "domcontentloaded",
-		timeout: 45000
-	});
-
-	await page.click("#onetrust-accept-btn-handler").catch(() => {});
-
-	const usernameSelector = "#login-username, #username, input[autocomplete='username'], input[name='username'], input[type='email'], input[type='text']";
-	const passwordSelector = "#login-password, #password, input[autocomplete='current-password'], input[name='password'], input[type='password']";
-	await page.waitForSelector(usernameSelector, { timeout: 20000 });
-	await page.click(usernameSelector, { clickCount: 3 });
-	await page.type(usernameSelector, credentials.username, { delay: 15 });
-
-	if (!await page.$(passwordSelector)) {
-		await Promise.race([
-			Promise.allSettled([
-				page.click("#login-button, button[data-testid='login-button'], button[type='submit']"),
-				page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 10000 })
-			]),
-			new Promise((resolve) => setTimeout(resolve, 10000))
-		]);
-	}
-
-	await page.waitForSelector(passwordSelector, { timeout: 15000 });
-	await page.click(passwordSelector, { clickCount: 3 });
-	await page.type(passwordSelector, credentials.password, { delay: 15 });
-
-	await Promise.race([
-		Promise.allSettled([
-			page.click("#login-button, button[data-testid='login-button'], button[type='submit']"),
-			page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 })
-		]),
-		new Promise((resolve) => setTimeout(resolve, 15000))
-	]);
-
-	return true;
-}
-
 export function spotifyLoginSandboxStatus() {
 	return {
 		browserEnabled: spotifyBrowserEnabled(),
 		disabledReason: spotifyBrowserEnabled() ? "" : BROWSER_DISABLED_MESSAGE,
-		credentialsConfigured: Boolean(spotifyWebCredentials({ force: true })),
-		headlessLoginPaused: Date.now() < spotifyWebLoginDisabledUntil,
-		displayAvailable: Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
-		executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || "",
-		persistentProfileDir: SPOTIFY_SANDBOX_PROFILE_DIR,
 		anonymousTokenCached: Boolean(cachedSpotifyAnonymousToken())
 	};
 }
@@ -138,27 +70,14 @@ export async function runSpotifyLoginSandboxProbe({
 	const safeSource = String(source || "search").trim() || "search";
 	const safeTimeout = Math.min(180000, Math.max(5000, Number(timeoutMs) || 45000));
 
-	const modes = new Set(["anonymous", "credentials-headless", "persistent-headless", "manual-visible"]);
-	if (!modes.has(safeMode)) {
-		throw new Error("Mode de sandbox Spotify inconnu");
-	}
-
-	const manualVisible = safeMode === "manual-visible";
-	const persistentProfile = safeMode === "persistent-headless" || manualVisible;
+	if (safeMode !== "anonymous") throw new Error("Seul le diagnostic Spotify anonyme est disponible.");
 	let browser = null;
 
 	try {
 		requireSpotifyBrowser();
-		browser = await puppeteer.launch(browserLaunchOptions({
-			headless: manualVisible ? false : true,
-			persistentProfile
-		}));
+		browser = await puppeteer.launch(browserLaunchOptions());
 		const page = await browser.newPage();
 		await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36');
-
-		if (safeMode === "credentials-headless") {
-			await loginSpotifyWebPlayer(page, { force: true });
-		}
 
 		let settled = false;
 		let bearerToken = "";
@@ -174,7 +93,7 @@ export async function runSpotifyLoginSandboxProbe({
 				const rawToken = request.headers()?.authorization;
 				if (!rawToken || !rawToken.includes("Bearer") || settled) return;
 				bearerToken = rawToken.replace(/^Bearer\s+/i, "").trim();
-				if (safeMode === 'anonymous') rememberSpotifyAnonymousToken(bearerToken);
+				rememberSpotifyAnonymousToken(bearerToken);
 				settled = true;
 				clearTimeout(timer);
 				resolve(bearerToken);
@@ -197,9 +116,7 @@ export async function runSpotifyLoginSandboxProbe({
 			source: safeSource,
 			durationMs: Date.now() - startedAt,
 			token: summarizeBearerToken(bearerToken),
-			finalUrl: page.url(),
-			manualVisible,
-			persistentProfile
+			finalUrl: page.url()
 		};
 	} catch (err) {
 		return {
@@ -207,9 +124,7 @@ export async function runSpotifyLoginSandboxProbe({
 			mode: safeMode,
 			source: safeSource,
 			durationMs: Date.now() - startedAt,
-			error: err.message,
-			manualVisible,
-			persistentProfile
+			error: err.message
 		};
 	} finally {
 		await browser?.close().catch(() => {});

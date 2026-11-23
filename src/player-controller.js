@@ -150,7 +150,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             else audio.addEventListener('loadedmetadata', seek, { once: true });
             this.userPausedAudio = saved.playing !== true;
             if (saved.playing === true) {
-                const played = await this.playAudioWithDiagnostics(audio, { trigger: 'restore-playback' });
+                const played = await this.playCurrentTrackWithReporting(audio, { trigger: 'restore-playback' });
                 if (played === null) return;
             }
             void this.prefetchUpcomingTrack(resumed.queue || []);
@@ -196,6 +196,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             this.userPausedAudio = false;
             this.consecutivePlaybackErrors = 0;
             this.handledPlaybackErrorKey = null;
+            this.playFailureReportedKey = null;
             this.playerState.playing = true;
             this.playerState.loading = false;
             this.updateMediaPlaybackState('playing');
@@ -266,10 +267,72 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.savePlaybackPosition(forcePositionUpdate);
     },
 
-    reportUnplayableTrack(reason) {
-        const key = trackLikeKey(this.lastPlaybackState?.current);
-        if (this.currentId == null || !key) return;
-        void this.apiFetch('/playback/unplayable', 'POST', { trackId: Number(this.currentId), key, reason });
+    reportUnplayableTrack(reason, target = {}) {
+        const trackId = target.trackId ?? this.currentId;
+        const key = trackLikeKey(target.track ?? this.lastPlaybackState?.current);
+        if (trackId == null || !key) return;
+        void this.apiFetch('/playback/unplayable', 'POST', { trackId: Number(trackId), key, reason });
+    },
+
+    playFailureSourceKey(audio, trackId) {
+        const source = audio?.currentSrc || audio?.src || '';
+        if (trackId == null || !source) return '';
+        return `${Number(trackId)}:${source}`;
+    },
+
+    // Distinct from handledPlaybackErrorKey: a promise-side failure claim must
+    // never suppress the media error path's own notices or advance rules.
+    claimPlayFailureReport(failureKey) {
+        if (!failureKey) return false;
+        if (this.playFailureReportedKey === failureKey) return false;
+        this.playFailureReportedKey = failureKey;
+        return true;
+    },
+
+    // Definitive play() rejections publish one failure entry per source, with
+    // the track and account identities captured before playback started so a
+    // concurrent change cancels the report instead of misattributing it.
+    async playCurrentTrackWithReporting(audio, context = {}) {
+        if (!audio) return false;
+        const trackId = this.currentId;
+        const track = this.lastPlaybackState?.current;
+        const trackKey = trackLikeKey(track);
+        const ownerId = this.currentUser?.id ?? null;
+        const generation = this.accountPlaybackGeneration || 0;
+        const source = audio.currentSrc || audio.src || '';
+        const stream = this.currentSpecialStream;
+        const played = await this.playAudioWithDiagnostics(audio, context);
+        // Only the captured context may publish a failure: same track (id and
+        // key), same player source, same account and generation, and for the
+        // special stream the very same stream object.
+        if (played !== false
+            || Number(this.currentId) !== Number(trackId)
+            || trackKey === ''
+            || trackLikeKey(this.lastPlaybackState?.current) !== trackKey
+            || source === ''
+            || (audio.currentSrc || audio.src || '') !== source
+            || (this.currentUser?.id ?? null) !== ownerId
+            || (this.accountPlaybackGeneration || 0) !== generation) {
+            return played;
+        }
+        if (stream
+            && this.currentSpecialStream === stream
+            && audio === this.specialPlayer
+            && this.lastPlayRejection?.name !== 'NotAllowedError'
+            && this.lastPlayRejection?.name !== 'AbortError') {
+            // The still-current special stream owns the failure routine
+            // (Spotify recovery plus a single report and its advance rules);
+            // a later error event would otherwise add a duplicate entry or a
+            // false positive once Spotify has recovered.
+            await this.handleSpecialStreamError();
+            return played;
+        }
+        if (this.lastPlayRejection?.name !== 'NotAllowedError'
+            && this.lastPlayRejection?.name !== 'AbortError'
+            && this.claimPlayFailureReport(this.playFailureSourceKey(audio, trackId))) {
+            this.reportUnplayableTrack('play_failed', { trackId, track });
+        }
+        return played;
     },
 
     async handleMainAudioError() {
@@ -286,7 +349,8 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         const errorKey = `${this.currentId}:${this.lecteur.currentSrc}`;
         if (this.handledPlaybackErrorKey === errorKey) return;
         this.handledPlaybackErrorKey = errorKey;
-        this.reportUnplayableTrack('media_error');
+        // Keep the existing error handling; only the duplicate report is claimed.
+        if (this.claimPlayFailureReport(errorKey)) this.reportUnplayableTrack('media_error');
         this.consecutivePlaybackErrors += 1;
         console.error('[Player] media error', {
             trackId: this.currentId,
@@ -317,11 +381,24 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             return;
         }
         const trackId = this.currentId;
+        const track = this.lastPlaybackState?.current;
+        const ownerId = this.currentUser?.id ?? null;
+        const generation = this.accountPlaybackGeneration || 0;
         this.nextSongLoading = true;
         try {
             await this.stopSpecialPlayback('finished', { preserveAudio: true });
             const path = await this.waitForTrackReady(trackId);
-            if (!path || this.currentId !== trackId) return;
+            if (!path) {
+                // Identity is still reliable: the same account still has the
+                // same current track that never became ready.
+                if (this.currentId === trackId
+                    && (this.currentUser?.id ?? null) === ownerId
+                    && (this.accountPlaybackGeneration || 0) === generation) {
+                    this.reportUnplayableTrack('not_ready', { trackId, track });
+                }
+                return;
+            }
+            if (this.currentId !== trackId) return;
             await this.loadAndPlayMainSource(path, { trigger: 'repeat-current-track', nextTrackId: trackId });
         } finally {
             this.nextSongLoading = false;
@@ -352,7 +429,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         const player = this.activeAudioPlayer();
         if (!player) return;
         player.currentTime = 0;
-        void this.playAudioWithDiagnostics(player, { trigger: 'restart-current-track' });
+        return this.playCurrentTrackWithReporting(player, { trigger: 'restart-current-track' });
     },
 
     async playAudioWithDiagnostics(audio, context = {}, { reportRejection = true } = {}) {
@@ -466,6 +543,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.pendingPlaybackSeek = false;
         this.crossfade?.cancel();
         this.handledPlaybackErrorKey = null;
+        this.playFailureReportedKey = null;
         this.lastPositionStateSecond = -1;
         this.playerState.loading = true;
         const nextUrl = `${API_URL}${path}`;
@@ -742,6 +820,8 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             audioUrl: data.audio_url,
             nextEnabled: data.first_track_next_enabled !== false
         };
+        // A new stream is a new attempt and may report a failure again.
+        this.playFailureReportedKey = null;
         if (this.audioBackgroundDebug) {
             const payload = {
                 event: 'active',
@@ -765,6 +845,9 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         });
         this.specialPlayer.loop = false;
         this.specialPlayer.src = nextUrl;
+        const stream = this.currentSpecialStream;
+        const ownerId = this.currentUser?.id ?? null;
+        const generation = this.accountPlaybackGeneration || 0;
         const playResolved = await this.playAudioWithDiagnostics(this.specialPlayer, {
             trigger: 'start-special-playback',
             streamId: data.stream_id
@@ -774,6 +857,19 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             streamId: data.stream_id,
             playResolved
         }, !playResolved);
+        if (playResolved === false
+            && this.currentSpecialStream === stream
+            && (this.currentUser?.id ?? null) === ownerId
+            && (this.accountPlaybackGeneration || 0) === generation
+            && this.lastPlayRejection?.name !== 'NotAllowedError'
+            && this.lastPlayRejection?.name !== 'AbortError') {
+            // A lone terminal rejection must not be lost: run the exact same
+            // failure routine as the stream's error event (Spotify recovery plus
+            // a single report and the event advance rules). The per-stream
+            // guard keeps a later error event from repeating it.
+            await this.handleSpecialStreamError();
+            return;
+        }
         this.requestWakeLock();
         this.prefetchUpcomingTrack(data.queue || []);
     },
@@ -854,6 +950,10 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
 
     async handleSpecialStreamError() {
         if (!this.currentSpecialStream || this.suppressSpecialPlayerEvents) return;
+        // One failure routine per stream: a play() rejection and its media
+        // error event must not repeat the recovery, the report or the advance.
+        if (this.currentSpecialStream.failureHandled) return;
+        this.currentSpecialStream.failureHandled = true;
         this.logNextDiagnostic('SPECIAL_ERROR_HANDLER_START', {
             streamId: this.currentSpecialStream.id
         }, true);
@@ -897,6 +997,9 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
         this.nextSongLoading = true;
         let failedTransition = false;
         let autoplayBlocked = false;
+        let failedTrack = null;
+        const playbackOwnerId = this.currentUser?.id ?? null;
+        const playbackGeneration = this.accountPlaybackGeneration || 0;
 
         try {
             const previousTrackId = this.currentId === null ? null : Number(this.currentId);
@@ -933,6 +1036,19 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             if (!playResolved) {
                 autoplayBlocked = this.lastPlayRejection?.name === 'NotAllowedError';
                 failedTransition = !autoplayBlocked;
+                if (failedTransition && this.lastPlayRejection?.name !== 'AbortError') {
+                    // Capture the failed element, account and source identity
+                    // before any advance can change the playback scope. An
+                    // abort keeps the existing sync and advance control without
+                    // reporting anything.
+                    failedTrack = {
+                        trackId: prefetched.trackId,
+                        track: prefetched.track,
+                        ownerId: playbackOwnerId,
+                        generation: playbackGeneration,
+                        failureKey: this.playFailureSourceKey(this.lecteur, prefetched.trackId)
+                    };
+                }
                 if (failedTransition) this.consecutivePlaybackErrors += 1;
                 this.logNextDiagnostic(
                     autoplayBlocked ? 'ADVANCE_WAITING_FOR_USER_PLAY' : 'ADVANCE_PLAY_FAILED',
@@ -965,6 +1081,19 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
             await this.syncPrefetchedTransitions();
         }
         if (failedTransition) {
+            // Report only after the transition sync accepted this element; a
+            // rejected sync keeps the queue authoritative elsewhere.
+            if (failedTrack
+                && this.pendingPrefetchedTransitions.length === 0
+                && Number(this.currentId) === Number(failedTrack.trackId)
+                && (this.currentUser?.id ?? null) === failedTrack.ownerId
+                && (this.accountPlaybackGeneration || 0) === failedTrack.generation
+                && this.claimPlayFailureReport(failedTrack.failureKey)) {
+                this.reportUnplayableTrack('play_failed', {
+                    trackId: failedTrack.trackId,
+                    track: failedTrack.track
+                });
+            }
             if (this.consecutivePlaybackErrors >= 3) {
                 this.showNotice('Plusieurs musiques sont indisponibles. Lecture arrêtée.', true);
                 return;
@@ -1037,13 +1166,14 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 body.collection = collection;
                 body.collectionIndex = collectionIndex;
             }
+            if (!playNow) body.enqueue = true;
             const response = await this.apiFetch('/add_song_ecoute', 'POST', body);
             if (!response?.queue) return;
             startPlayback = playNow || response.currentId === null || this.activeAudioPlayer()?.ended === true;
             this.updatePlaybackUi({ ...this.lastPlaybackState, ...response });
             this.clearNextTrackPrefetch();
             if (!response.first_track_special_pending && !startPlayback) void this.prefetchUpcomingTrack(response.queue);
-            if (!playNow) this.showNotice(startPlayback ? 'Musique ajoutée à la file de lecture.' : 'Musique ajoutée juste après le morceau en cours.');
+            if (!playNow) this.showNotice(startPlayback ? 'Musique ajoutée à la file de lecture.' : 'Musique ajoutée aux prochains titres.');
         }).finally(() => {
             if (this.queueEditPromise === task) this.queueEditPromise = null;
         });
@@ -1337,7 +1467,7 @@ export function createPlayerController({ apiUrl: API_URL, fetchImpl = (...args) 
                 this.activeAudioPlayer(),
                 'media-session-pause'
             )),
-            play: withDiagnosticLog('play', () => this.playAudioWithDiagnostics(
+            play: withDiagnosticLog('play', () => this.playCurrentTrackWithReporting(
                 this.activeAudioPlayer(),
                 { trigger: 'media-session-play' }
             )),

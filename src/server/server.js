@@ -181,7 +181,7 @@ function cleanupSessionAfterInactivity(sessionId, sessionStore) {
 }
 
 app.use((req, res, next) => {
-	if (process.env.NODE_ENV !== "test" && req.sessionID && req.sessionStore) {
+	if (process.env.NODE_ENV !== "test" && req.session?.userId && req.sessionID && req.sessionStore) {
 		cleanupSessionAfterInactivity(req.sessionID, req.sessionStore);
 	}
 	next();
@@ -220,6 +220,7 @@ const STATIC_FILE_ALLOWLIST = new Map([
 	["/account-view.js", "account-view.js"],
 	["/spotify-browser-bridge.js", "spotify-browser-bridge.js"],
 	["/spotify-explorer.js", "spotify-explorer.js"],
+	["/downloads/youplayer-spotify-bridge-chromium.zip", "downloads/youplayer-spotify-bridge-chromium.zip"],
 	["/style.css", "style.css"],
 	["/manifest.webmanifest", "manifest.webmanifest"],
 	["/icons/icon-192.png", "icons/icon-192.png"],
@@ -249,24 +250,25 @@ function uploadLocalAudio(req, res, next) {
 	});
 }
 
-function requireAuth(req, res, next) {
-	if (!AUTH_ENABLED || req.session?.userId) {
+async function requireAuth(req, res, next) {
+	if (!AUTH_ENABLED) return next();
+	if (!req.session?.userId) return res.status(401).json({ error: "Authentification requise" });
+	try {
+		const user = await youplayerStore.findUserById(req.session.userId);
+		if (!user || (Number(req.session.authVersion) || 0) !== (Number(user.authVersion) || 0)) {
+			firstTrackStreams.stopForSession(req.sessionID, "session_revoked");
+			return req.session.destroy(() => res.status(401).json({ error: "Session expirée, reconnecte-toi" }));
+		}
+		req.session.role = user.role;
 		return next();
-	}
-	return res.status(401).json({ error: "Authentification requise" });
+	} catch (error) { return sendJsonError(res, error, "Session indisponible", 503); }
 }
 
 function requireAdmin(req, res, next) {
-	if (!AUTH_ENABLED) {
-		return next();
-	}
-	if (!req.session?.userId) {
-		return res.status(401).json({ error: "Authentification requise" });
-	}
-	if (req.session.role !== "admin") {
-		return res.status(403).json({ error: "Acces admin requis" });
-	}
-	return next();
+	return requireAuth(req, res, () => {
+		if (AUTH_ENABLED && req.session.role !== "admin") return res.status(403).json({ error: "Acces admin requis" });
+		next();
+	});
 }
 
 function requireListener(req, res, next) {

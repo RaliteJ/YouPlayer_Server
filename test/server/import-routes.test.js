@@ -81,6 +81,21 @@ test('successful Spotify imports use the authenticated request and normalized ta
 	assert.equal(h.actions[0][0].session.userId, 'synthetic-user');
 });
 
+test('Spotify imports discard URL parameters before fetching or auditing', async () => {
+	const h = harness({ importSpotifyPlaylist: async url => {
+		assert.equal(url, 'https://open.spotify.com/playlist/synthetic');
+		return { name: 'Test', tracks: [track] };
+	} });
+	const res = await h.request('/spotify_import_playlist', {
+		url: 'https://open.spotify.com/playlist/synthetic?token=synthetic-secret#fragment'
+	});
+	assert.equal(res.statusCode, 200);
+	assert.equal(h.actions[0][4].source, 'https://open.spotify.com/playlist/synthetic');
+	for (const url of ['https://open.spotify.com.evil.test/playlist/synthetic', 'https://user:pass@open.spotify.com/playlist/synthetic']) {
+		assert.equal((await h.request('/spotify_import_playlist', { url })).statusCode, 400);
+	}
+});
+
 test('browser imports validate the entire batch before writing and strip queue metadata', async () => {
 	const h = harness();
 	for (const items of [[], Array(51).fill(track), [track, { type: 'local', url: 'file.mp3' }]]) {

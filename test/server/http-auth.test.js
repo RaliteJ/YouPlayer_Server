@@ -359,6 +359,126 @@ test('account playback moves between sessions with the full queue and isolated o
 	assert.equal((await reopened.request('/account_playback/restore', { method: 'POST', body: {} })).body.resume.position, 44);
 });
 
+test('listen-next requests queue in arrival order ahead of the pending normal track', async () => {
+	const client = createClient();
+	const store = app.locals.youplayerStore;
+	const user = await store.createUser({ pseudo: 'listen-next-fifo', password: 'listen-password123' });
+	await login(client, 'listen-next-fifo', 'listen-password123');
+	const tracks = [
+		{ type: 'local', title: 'Normal A', url: 'listen-next-a.mp3' },
+		{ type: 'local', title: 'Normal D', url: 'listen-next-d.mp3' },
+		{ type: 'local', title: 'Next B', url: 'listen-next-b.mp3' },
+		{ type: 'local', title: 'Next C', url: 'listen-next-c.mp3' }
+	];
+	for (const track of tracks) {
+		await writeFile(path.join(tempRoot, 'local_song', track.url), 'synthetic audio');
+	}
+	await store.appendPlaylistItems(user.id, 'listen-next-fifo', tracks);
+	await client.request('/playlist_used', { method: 'POST', body: { arg: ['listen-next-fifo.json'], random: false } });
+	const playing = await client.request('/next_song');
+	assert.equal(playing.status, 200);
+	assert.equal(playing.body.current.title, 'Normal A');
+	const first = await client.request('/add_song_ecoute', { method: 'POST', body: { arg: 2, enqueue: true } });
+	assert.equal(first.status, 200);
+	assert.deepEqual(first.body.queue.map(track => track.title), ['Next B', 'Normal D', 'Next B', 'Next C']);
+	const second = await client.request('/add_song_ecoute', { method: 'POST', body: { arg: 3, enqueue: true } });
+	assert.equal(second.status, 200);
+	assert.deepEqual(second.body.queue.map(track => track.title), ['Next B', 'Next C', 'Normal D', 'Next B', 'Next C']);
+	const upcoming = [];
+	for (let i = 0; i < 3; i++) {
+		const response = await client.request('/next_song');
+		assert.equal(response.status, 200);
+		upcoming.push(response.body.current.title);
+	}
+	assert.deepEqual(upcoming, ['Next B', 'Next C', 'Normal D']);
+	// The natural occurrences of the queued tracks still follow in playlist order.
+	const trailing = [];
+	for (let i = 0; i < 2; i++) {
+		const response = await client.request('/next_song');
+		trailing.push(response.body.current.title);
+	}
+	assert.deepEqual(trailing, ['Next B', 'Next C']);
+	assert.equal((await client.request('/add_song_ecoute', { method: 'POST', body: { arg: 1, enqueue: 'x' } })).status, 400);
+});
+
+test('manual track sources are per account, strictly validated and never shared', async () => {
+	const alice = createClient();
+	const stranger = createClient();
+	const admin = createClient();
+	const store = app.locals.youplayerStore;
+	await store.createUser({ pseudo: 'source-alice', password: 'source-password123' });
+	await login(alice, 'source-alice', 'source-password123');
+	await login(admin, 'admin');
+	const spotifyId = 'A'.repeat(22);
+
+	const empty = await alice.request(`/playback/source/${spotifyId}`);
+	assert.equal(empty.status, 200);
+	assert.equal(empty.body.url, null);
+	assert.equal(empty.headers.get('cache-control'), 'no-store');
+	assert.equal((await stranger.request(`/playback/source/${spotifyId}`)).status, 401, 'anonymous sessions have no source map');
+	assert.equal((await admin.request(`/playback/source/${spotifyId}`)).status, 403, 'admin accounts never manage sources');
+
+	for (const url of [
+		'http://www.youtube.com/watch?v=abcdefghijk',
+		'https://evil.example/watch?v=abcdefghijk',
+		'https://youtube.com/watch?v=short',
+		'https://youtube.com/watch?v=twelvechars12',
+		'https://youtube.com/embed/abcdefghijk',
+		'https://youtu.be/abcdefghij',
+		'https://youtu.be/abcdefghijk/extra',
+		'https://user:pass@youtube.com/watch?v=abcdefghijk',
+		'https://youtube.com:8443/watch?v=abcdefghijk',
+		'watch?v=abcdefghijk'
+	]) {
+		const response = await alice.request(`/playback/source/${spotifyId}`, { method: 'PUT', body: { url } });
+		assert.equal(response.status, 400, url);
+	}
+
+	for (const payload of [
+		{ url: ['https://www.youtube.com/watch?v=abcdefghijk'] },
+		{ url: { href: 'https://www.youtube.com/watch?v=abcdefghijk' } },
+		{ url: null }
+	]) {
+		const response = await alice.request(`/playback/source/${spotifyId}`, { method: 'PUT', body: payload });
+		assert.equal(response.status, 400, JSON.stringify(payload));
+	}
+
+	const saved = await alice.request(`/playback/source/${spotifyId}`, {
+		method: 'PUT',
+		body: { url: 'https://www.youtube.com/watch?v=abcdefghijk' }
+	});
+	assert.equal(saved.status, 200);
+	assert.equal(saved.body.url, 'https://www.youtube.com/watch?v=abcdefghijk');
+	assert.equal(saved.headers.get('cache-control'), 'no-store');
+	assert.equal((await alice.request(`/playback/source/${spotifyId}`)).body.url, 'https://www.youtube.com/watch?v=abcdefghijk');
+
+	const bob = createClient();
+	await store.createUser({ pseudo: 'source-bob', password: 'source-password123' });
+	await login(bob, 'source-bob', 'source-password123');
+	assert.equal((await bob.request(`/playback/source/${spotifyId}`)).body.url, null, 'another account never sees the entry');
+
+	const replaced = await alice.request(`/playback/source/${spotifyId}`, {
+		method: 'PUT',
+		body: { url: 'https://music.youtube.com/watch?v=klmnopqrs12' }
+	});
+	assert.equal(replaced.body.url, 'https://www.youtube.com/watch?v=klmnopqrs12');
+
+	const cleared = await alice.request(`/playback/source/${spotifyId}`, { method: 'DELETE', body: {} });
+	assert.equal(cleared.status, 200);
+	assert.deepEqual(cleared.body, { url: null });
+	assert.equal((await alice.request(`/playback/source/${spotifyId}`)).body.url, null);
+
+	const noop = await alice.request(`/playback/source/${'C'.repeat(22)}`, { method: 'DELETE', body: {} });
+	assert.equal(noop.status, 200);
+	assert.deepEqual(noop.body, { url: null });
+
+	for (const badId of ['A'.repeat(21), 'A'.repeat(23), 'uuid-not-allowed']) {
+		const response = await alice.request(`/playback/source/${badId}`);
+		assert.equal(response.status, 400, badId);
+		assert.equal(response.body.error, 'Morceau Spotify invalide');
+	}
+});
+
 before(async () => {
 	process.env.NODE_ENV = 'test';
 	console.error = () => {};
@@ -373,7 +493,6 @@ before(async () => {
 	process.env.YOUPLAYER_SPOTIFY_CLIENT_ID = 'test-client-id';
 	process.env.YOUPLAYER_SPOTIFY_CLIENT_SECRET = 'test-client-secret';
 	process.env.YOUPLAYER_SPOTIFY_REDIRECT_URI = 'https://localhost/auth/spotify/callback';
-	process.env.YOUPLAYER_SPOTIFY_TOKEN_SECRET = 'test-spotify-token-secret';
 	globalThis.fetch = async (url) => {
 		const target = String(url);
 		if (target === 'https://accounts.spotify.com/api/token') {
@@ -434,7 +553,6 @@ after(async () => {
 	delete process.env.YOUPLAYER_SPOTIFY_CLIENT_ID;
 	delete process.env.YOUPLAYER_SPOTIFY_CLIENT_SECRET;
 	delete process.env.YOUPLAYER_SPOTIFY_REDIRECT_URI;
-	delete process.env.YOUPLAYER_SPOTIFY_TOKEN_SECRET;
 });
 
 test('strict origin mode rejects mutating requests without Origin or Referer', async () => {
@@ -597,14 +715,14 @@ test('POST /auth/login authenticates a user and stores user_id plus role in the 
 	assert.equal(me.body.user.pseudo, 'user');
 });
 
-test('GET /auth/providers reports configured minimal Spotify scopes without requiring a session', async () => {
+test('GET /auth/providers disables personal Spotify OAuth even when configured', async () => {
 	const client = createClient();
 	const response = await client.request('/auth/providers');
 
 	assert.equal(response.status, 200);
 	assert.equal(response.body.authEnabled, true);
-	assert.equal(response.body.spotify.enabled, true);
-	assert.ok(response.body.spotify.scopes.includes('playlist-read-private'));
+	assert.equal(response.body.spotify.enabled, false);
+	assert.deepEqual(response.body.spotify.scopes, []);
 	assert.equal(response.body.spotify.scopes.includes('user-read-email'), false);
 });
 
@@ -616,51 +734,21 @@ test('GET /auth/spotify/start requires a logged-in account', async () => {
 	assert.equal(response.body.error, 'Authentification requise');
 });
 
-test('Spotify OAuth binds one stable account with PKCE and rejects callback replay or duplicate linking', async () => {
-	const client = createClient();
-	await login(client, 'user');
-	const start = await client.request('/auth/spotify/start');
-	assert.equal(start.status, 302);
-	const authorization = new URL(start.headers.get('location'));
-	assert.equal(authorization.hostname, 'accounts.spotify.com');
-	assert.equal(authorization.searchParams.get('code_challenge_method'), 'S256');
-	assert.ok(authorization.searchParams.get('code_challenge'));
-	assert.equal(authorization.searchParams.has('code_verifier'), false);
-	const state = authorization.searchParams.get('state');
-
-	const callback = await client.request(`/auth/spotify/callback?code=test-code&state=${encodeURIComponent(state)}`);
-	assert.equal(callback.status, 302);
-	assert.match(callback.headers.get('location'), /spotify_connected=1/);
-	const me = await client.request('/auth/me');
-	assert.equal(me.body.user.spotify.connected, true);
-	assert.equal(me.body.user.spotify.displayName, 'Spotify Test');
-	assert.equal(me.text.includes('spotify-stable-account'), false);
-	assert.equal(me.text.includes('spotify-access'), false);
-	const search = await client.request('/spotify_test', {
-		method: 'POST',
-		body: { action: 'search', query: 'OAuth Track', limit: 16 }
-	});
-	assert.equal(search.status, 200);
-	assert.equal(search.body.data.tracks.items[0].id, 'oauth-track');
-	assert.equal(spotifySearchRequests, 1);
-
-	const tokenRequestsAfterSuccess = spotifyTokenRequests;
-	const replay = await client.request(`/auth/spotify/callback?code=replayed&state=${encodeURIComponent(state)}`);
-	assert.match(replay.headers.get('location'), /spotify_error=state/);
-	assert.equal(spotifyTokenRequests, tokenRequestsAfterSuccess);
-
-	const otherClient = createClient();
-	await login(otherClient, 'second');
-	const otherStart = await otherClient.request('/auth/spotify/start');
-	const otherState = new URL(otherStart.headers.get('location')).searchParams.get('state');
-	const duplicate = await otherClient.request(`/auth/spotify/callback?code=other-code&state=${encodeURIComponent(otherState)}`);
-	assert.match(duplicate.headers.get('location'), /spotify_error=callback/);
-	const otherMe = await otherClient.request('/auth/me');
-	assert.equal(otherMe.body.user.spotify.connected, false);
-
-	const disconnected = await client.request('/auth/spotify/disconnect', { method: 'POST', body: {} });
-	assert.equal(disconnected.status, 200);
-	assert.equal(disconnected.body.user.spotify.connected, false);
+test('Spotify OAuth refuses every personal entry point without accessing or changing historical tokens', async () => {
+ const client = createClient(); const user = await login(client);
+ const store = app.locals.youplayerStore;
+ const storedUser = await store.findUserById(user.id);
+ const before = { accessTokenEncrypted: 'historical-access', refreshTokenEncrypted: 'historical-refresh' };
+ storedUser.spotifyConnection = { ...before };
+ const tokenRequests = spotifyTokenRequests;
+ for (const route of ['/auth/spotify/start', '/auth/spotify/callback?code=synthetic&state=synthetic']) {
+  assert.equal((await client.request(route)).status, 410);
+ }
+ assert.equal((await client.request('/auth/spotify/disconnect', { method: 'POST', body: {} })).status, 410);
+ assert.equal((await client.request('/spotify_test', { method: 'POST', body: { action: 'me_playlists' } })).status, 410);
+ assert.equal((await client.request('/auth/me')).body.user.spotify.connected, false);
+ assert.equal(spotifyTokenRequests, tokenRequests);
+ assert.deepEqual(storedUser.spotifyConnection, before);
 });
 
 test('POST /auth/logout destroys the current session and clears the session cookie', async () => {
@@ -814,6 +902,35 @@ test('previous history survives prefetched retries and enqueue-next leaves curre
 	assert.equal((await other.request('/previous_song', { method: 'POST' })).status, 401);
 	await login(other, 'second');
 	assert.equal((await other.request('/previous_song', { method: 'POST' })).status, 409);
+});
+
+test('two successive play-next inserts keep request order ahead of the planned queue', async () => {
+	const client = createClient();
+	await login(client);
+	const playlist = 'queue-order-inserts.json';
+	for (let i = 0; i < 4; i++) {
+		const url = `order-${i}.mp3`;
+		await writeFile(path.join(tempRoot, 'local_song', url), 'audio');
+		assert.equal((await client.request('/update_playlist', {
+			method: 'POST', body: { arg: { playlist, song: { type: 'local', title: `Track ${i}`, url } } }
+		})).status, 200);
+	}
+	await client.request('/playlist_used', { method: 'POST', body: { arg: [playlist], random: false } });
+	assert.equal((await client.request('/next_song')).body.currentId, 0, 'A plays');
+	// B (index 1) is already planned next.
+	const first = await client.request('/add_song_ecoute', { method: 'POST', body: { arg: 2, enqueue: true } });
+	assert.equal(first.status, 200);
+	assert.equal(first.body.currentId, 0, 'play-next must keep the current track playing');
+	const second = await client.request('/add_song_ecoute', { method: 'POST', body: { arg: 3, enqueue: true } });
+	assert.equal(second.status, 200);
+	assert.equal(second.body.currentId, 0);
+	const state = (await client.request('/playback_state')).body;
+	assert.equal(state.currentId, 0);
+	assert.deepEqual(state.queue.slice(0, 3).map(item => item.__sessionIndex), [2, 3, 1], 'queue must start A -> C -> D -> B');
+	assert.equal((await client.request('/next_song')).body.currentId, 2, 'C plays first');
+	assert.equal((await client.request('/next_song')).body.currentId, 3, 'then D');
+	assert.equal((await client.request('/next_song')).body.currentId, 1, 'then the planned B');
+	await client.request('/auth/logout', { method: 'POST' });
 });
 
 test('YouTube queue works without a playlist, preserves metadata and isolates sessions', async () => {
@@ -1667,4 +1784,35 @@ test('deleting the new first track from a preview does not delete stale active s
     assert.equal(state.current.title, 'Original');
     assert.equal(state.currentId, 0);
     assert.deepEqual(state.queue, []);
+});
+
+
+test('changing and resetting passwords revoke old sessions while the current password change stays connected', async () => {
+ const store = app.locals.youplayerStore;
+ const account = await store.createUser({ pseudo: 'versioned-sessions', password: 'synthetic-password' });
+ const current = createClient(), old = createClient(), admin = createClient();
+ await login(current, 'versioned-sessions', 'synthetic-password');
+ await login(old, 'versioned-sessions', 'synthetic-password');
+ await login(admin, 'admin');
+ assert.equal((await current.request('/auth/password', { method: 'POST', body: { currentPassword: 'synthetic-password', newPassword: 'synthetic-password-two' } })).status, 200);
+ assert.equal((await current.request('/auth/me')).status, 200);
+ assert.equal((await old.request('/different_playlist')).status, 401);
+ assert.equal((await admin.request(`/admin/users/${account.id}/password`, { method: 'POST', body: { newPassword: 'synthetic-password-three' } })).status, 200);
+ assert.equal((await current.request('/different_playlist')).status, 401);
+});
+
+test('anonymous requests never allocate a long inactivity timer', async t => {
+ const originalMode = process.env.NODE_ENV;
+ const actualTimeout = globalThis.setTimeout;
+ const longTimers = [];
+ const timer = t.mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+  if (delay >= 3 * 24 * 60 * 60 * 1000) { longTimers.push(delay); return { unref() {} }; }
+  return actualTimeout(callback, delay, ...args);
+ });
+ try {
+  process.env.NODE_ENV = 'production';
+  const client = createClient();
+  for (let i = 0; i < 3; i++) assert.equal((await client.request('/auth/providers')).status, 200);
+  assert.equal(longTimers.length, 0);
+ } finally { timer.mock.restore(); process.env.NODE_ENV = originalMode; }
 });

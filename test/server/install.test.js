@@ -24,7 +24,12 @@ test('Bash entrypoint uses the bundled executable, prompts without env and prese
   assert.equal(await fs.readFile(calls, 'utf8'), 'check podman\n');
   await fs.writeFile(path.join(root, '.env'), 'synthetic', { mode: 0o600 });
   await fs.writeFile(calls, '');
-  await execute('bash', [path.join(root, 'install.sh'), 'docker'], options);
+  const { stderr } = await execute('bash', [path.join(root, 'install.sh'), 'docker'], {
+    ...options, env: { ...options.env, YOUPLAYER_INSTALL_DEBUG: '1' }
+  });
+  assert.match(stderr, /\[install\] Vérification des prérequis/);
+  assert.match(stderr, /\[install\] Démarrage avec la configuration existante/);
+  assert.doesNotMatch(stderr, /synthetic/);
   assert.equal(await fs.readFile(calls, 'utf8'), 'check docker\ninstall docker\n');
   assert.equal(await fs.readFile(path.join(root, '.env'), 'utf8'), 'synthetic');
   await fs.rm(bin, { recursive: true });

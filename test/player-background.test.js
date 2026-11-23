@@ -24,6 +24,21 @@ test('Nginx forwards account checkpoint and resume requests to the authenticated
 	}
 });
 
+test('Nginx forwards the unplayable report and manual track sources to the backend', () => {
+	const expression = nginxSource.match(/location ~ (\^\/\(auth\|[^\s]+) \{/)[1];
+	const apiRoutes = new RegExp(expression);
+	for (const route of [
+		'/playback/unplayable',
+		'/playback/source/ABCDEFGHIJKLMNOPQRSTUV',
+		'/playback/source'
+	]) {
+		assert.equal(apiRoutes.test(route), true, route);
+	}
+	for (const route of ['/playback/other', '/playback_sources', '/sources/other']) {
+		assert.equal(apiRoutes.test(route), false, route);
+	}
+});
+
 test('background advancement uses one native ended listener and no duration fallback timer', () => {
 	assert.equal((appSource.match(/audio\.addEventListener\('ended'/g) || []).length, 1);
 	assert.match(appSource, /addEventListener\('ended',[\s\S]*advanceToNextSong\('ended'\)/);

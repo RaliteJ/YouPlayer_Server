@@ -119,14 +119,8 @@ export function registerPlaylistRoutes(app, {
 			}
 
 			const normalizedPlaylist = normalizePlaylistName(playlist);
-			if (key !== undefined) {
-				const current = (await playlistItemsForRequest(req, normalizedPlaylist))[songIndex];
-				if (!current || key !== trackLikeKey(current)) {
-					throw new RequestValidationError('Le morceau a changé', 409);
-				}
-			}
 			if (req.session.playlists?.includes(normalizedPlaylist)) await refreshSessionTracks(req);
-			const removed = await deletePlaylistItemForRequest(req, normalizedPlaylist, songIndex);
+			const removed = await deletePlaylistItemForRequest(req, normalizedPlaylist, songIndex, key);
 			if (!removed) {
 				return res.status(404).json({ error: "Musique introuvable dans la playlist" });
 			}

@@ -33,6 +33,10 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 const archive = await this.apiFetch('/playlist/export');
                 if (this.currentUser?.id !== user) return '';
                 if (!archive) throw new Error('Export impossible. Réessaie dans un instant.');
+				if (window.YouPlayerAndroid?.exportPlaylists) {
+					await window.YouPlayerAndroid.exportPlaylists(archive);
+					return this.currentUser?.id === user ? `${archive.playlists.length} playlist(s) enregistrée(s).` : '';
+				}
                 const url = URL.createObjectURL(new Blob([JSON.stringify(archive)], { type: 'application/json' }));
                 const link = document.createElement('a');
                 link.href = url;
@@ -98,6 +102,14 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         renderAuthState() {
+            const account = this.currentUser?.id ?? null;
+            if (this.renderedAccountId !== account) {
+                this.renderedAccountId = account;
+                this.accountRevision = (this.accountRevision || 0) + 1;
+            }
+            window.YouPlayerAndroid?.setAccount?.(this.currentUser?.role === 'admin' ? null : account)?.catch?.(() => {
+                this.showNotice?.('Connexion Spotify locale indisponible. Réessaie depuis le bouton Spotify.', true);
+            });
             this.loadSponsorBlockPreference?.();
             const managementOnly = this.currentUser?.role === 'admin';
             if (!managementOnly) {
@@ -194,10 +206,12 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
         },
 
         showAuth(message = '') {
+            this.spotifyExplorer?.reset();
             document.getElementById('playlist-import-form')?.reset();
             const transferMessage = document.getElementById('playlist-transfer-message');
             if (transferMessage) transferMessage.hidden = true;
             this.resetLyrics?.();
+            this.closeSourceDialog?.();
             clearTimeout(this.releasePollTimer);
             this.releaseRequestId = null;
             this.releasePollUntil = null;
@@ -235,7 +249,7 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
                 const response = await fetchImpl(`${API_URL}/auth/providers`, { credentials: 'include' });
                 if (!response.ok) return;
                 const data = await response.json();
-                this.spotifyOAuthEnabled = data.spotify?.enabled === true;
+                this.spotifyOAuthEnabled = false;
                 this.renderAuthState();
             } catch (err) {
                 console.error('Erreur providers auth:', err);
@@ -294,15 +308,14 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
 
         connectSpotify() {
             if (this.currentUser?.role === 'admin') return;
-            window.location.href = `${API_URL}/auth/spotify/start`;
+            this.loadView('parametres');
+            this.showNotice('Connecte Spotify depuis le Bridge local affiché dans les paramètres.');
         },
 
         async disconnectSpotify() {
-            const result = await this.apiFetch('/auth/spotify/disconnect', 'POST', {});
-            if (!result) return;
-            this.currentUser = result.user;
-            this.renderAuthState();
-            this.showNotice('Compte Spotify deconnecte.');
+            if (this.currentUser?.role === 'admin') return;
+            this.loadView('parametres');
+            this.showNotice('Déconnecte Spotify depuis son écran intégré ou le popup du Bridge.');
         },
 
         handleSpotifyRedirectNotice() {
@@ -311,13 +324,7 @@ export function createAccountView({ apiUrl: API_URL, fetchImpl = (...args) => fe
             const error = params.get('spotify_error');
             const view = params.get('view');
             if (!connected && !error) return view;
-            if (connected) {
-                this.showNotice('OAuth Spotify connecte, mais les playlists personnelles utilisent l extension Firefox.');
-            } else if (error === 'reauth_required') {
-                this.showNotice('Reconnecte-toi a YouPlayer avant de remplacer le compte Spotify.', true);
-            } else {
-                this.showNotice('OAuth Spotify indisponible. Utilise la connexion WebPlayer affichee dans l onglet Spotify.', true);
-            }
+            this.showNotice('La connexion Spotify est gérée localement par le Bridge. Utilise les paramètres YouPlayer.');
             params.delete('spotify_connected');
             params.delete('spotify_error');
             params.delete('view');

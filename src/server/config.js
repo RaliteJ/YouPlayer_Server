@@ -62,15 +62,6 @@ function envList(env, name) {
 		.filter(Boolean);
 }
 
-function envSpaceList(env, name, fallback = []) {
-	const raw = String(env[name] || "").trim();
-	if (!raw) return fallback;
-	return raw
-		.split(/[\s,]+/)
-		.map((value) => value.trim())
-		.filter(Boolean);
-}
-
 function envSecret(env, ...names) {
 	for (const name of names) {
 		const value = String(env[name] || "").trim();
@@ -92,21 +83,15 @@ export function loadServerConfig(env = process.env) {
 	const spotifyClientId = envSecret(env, "YOUPLAYER_SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_ID");
 	const spotifyClientSecret = envSecret(env, "YOUPLAYER_SPOTIFY_CLIENT_SECRET", "SPOTIFY_CLIENT_SECRET");
 	const spotifyRedirectUri = envSecret(env, "YOUPLAYER_SPOTIFY_REDIRECT_URI", "SPOTIFY_REDIRECT_URI");
-	const configuredSpotifyTokenSecret = envSecret(env, "YOUPLAYER_SPOTIFY_TOKEN_SECRET", "SPOTIFY_TOKEN_SECRET");
 	const spotifyConfigured = Boolean(spotifyClientId && spotifyClientSecret && spotifyRedirectUri);
 	const weakSessionSecret = !sessionSecret
 		|| sessionSecret.length < 32
 		|| /replace|change|example|local-session|dev-session|^\$\{/i.test(sessionSecret);
-	const weakSpotifyTokenSecret = !configuredSpotifyTokenSecret
-		|| configuredSpotifyTokenSecret.length < 32
-		|| /replace|change|example|^\$\{/i.test(configuredSpotifyTokenSecret);
 
 	if (!isTest && spotifyConfigured && weakSessionSecret) {
 		throw new Error("YOUPLAYER_SESSION_SECRET fort est requis lorsque Spotify OAuth est configure");
 	}
-	if (!isTest && spotifyConfigured && weakSpotifyTokenSecret) {
-		throw new Error("YOUPLAYER_SPOTIFY_TOKEN_SECRET fort et dedie est requis lorsque Spotify OAuth est configure");
-	}
+
 
 	if (authEnabled && isProduction) {
 		if (weakSessionSecret) {
@@ -141,14 +126,6 @@ export function loadServerConfig(env = process.env) {
 		firstTrackStreamMaxDurationMs: envNumber(env, "FIRST_TRACK_STREAM_MAX_DURATION_MS", 2 * 60 * 60 * 1000),
 		spotifyClientId,
 		spotifyClientSecret,
-		spotifyRedirectUri,
-		spotifyScopes: envSpaceList(env, "YOUPLAYER_SPOTIFY_SCOPES", [
-			"user-read-private",
-			"playlist-read-private",
-			"playlist-read-collaborative"
-		]),
-		spotifyTokenSecret: configuredSpotifyTokenSecret
-			|| sessionSecret
-			|| "dev-spotify-token-secret-change-before-prod"
+		spotifyRedirectUri
 	};
 }

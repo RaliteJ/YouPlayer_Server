@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import {
 	getSpotifyAnonymousToken, clearSpotifyAnonymousToken,
-	captureSpotifyPathfinderJson, runSpotifyLoginSandboxProbe, browserLaunchOptions, spotifyLoginSandboxStatus
+	captureSpotifyPathfinderJson, runSpotifyLoginSandboxProbe, spotifyLoginSandboxStatus
 } from '../../src/server/spotify.js';
 import { cachedSpotifyAnonymousToken } from '../../src/server/spotify-web-player.js';
 
@@ -109,18 +109,22 @@ test('the import cache accessor returns no token after expiry or explicit cleari
 	});
 });
 
-test('sandbox probe reports a token summary and preserves visible persistent browser options', async () => {
-	await assert.rejects(runSpotifyLoginSandboxProbe({ mode: 'invalid' }), /inconnu/);
+test('sandbox probe reports a token summary and uses a temporary headless browser', async () => {
 	await fakeBrowser(emitToken, async ({ launches, closed }) => {
-		const result = await runSpotifyLoginSandboxProbe({ mode: 'manual-visible', source: 'search' });
+		for (const mode of ['invalid', 'credentials-headless', 'persistent-headless', 'manual-visible']) {
+			await assert.rejects(runSpotifyLoginSandboxProbe({ mode }), /diagnostic Spotify anonyme/);
+		}
+		assert.equal(launches.length, 0);
+		const result = await runSpotifyLoginSandboxProbe({ source: 'search' });
 		assert.equal(result.ok, true);
 		assert.equal(result.token.captured, true);
 		assert.equal(result.token.length, 'synthetic-token'.length);
 		assert.equal(result.token.sha256.length, 16);
-		assert.equal(cachedSpotifyAnonymousToken(), '', 'A persistent session must not populate the shared guest cache');
+		assert.equal(cachedSpotifyAnonymousToken(), 'synthetic-token');
+		clearSpotifyAnonymousToken();
 		assert.equal(JSON.stringify(result).includes('synthetic-token'), false);
-		assert.equal(launches[0].headless, false);
-		assert.equal(launches[0].userDataDir, browserLaunchOptions({ persistentProfile: true }).userDataDir);
+		assert.equal(launches[0].headless, true);
+		assert.equal(launches[0].userDataDir, undefined);
 		assert.equal(launches[0].args, undefined);
 		assert.equal(closed(), 1);
 	});
@@ -134,11 +138,9 @@ test('release disables all browser diagnostics before any launch', async () => {
 		const status = spotifyLoginSandboxStatus();
 		assert.equal(status.browserEnabled, false);
 		assert.match(status.disabledReason, /diagnostics Spotify.*desactives/);
-		for (const mode of ['anonymous', 'credentials-headless', 'persistent-headless', 'manual-visible']) {
-			const result = await runSpotifyLoginSandboxProbe({ mode });
-			assert.equal(result.ok, false);
-			assert.equal(result.error, status.disabledReason);
-		}
+		const result = await runSpotifyLoginSandboxProbe();
+		assert.equal(result.ok, false);
+		assert.equal(result.error, status.disabledReason);
 		await assert.rejects(captureSpotifyPathfinderJson('search', 'playlistV2'), { message: status.disabledReason });
 		assert.equal(launch.mock.callCount(), 0);
 	} finally {

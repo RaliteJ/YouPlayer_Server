@@ -162,7 +162,6 @@ func TestEnvironmentAndLogs(t *testing.T) {
 			t.Fatalf("Compose expanded password: %s", out)
 		}
 	}
-	must(t, prepareDirectories(root))
 	_, err = runCommand(root, "/bin/sh", []string{"-c", "echo synthetic-private >&2; exit 1"}, os.Environ())
 	if code(err) != "command-failed" {
 		t.Fatal(err)
