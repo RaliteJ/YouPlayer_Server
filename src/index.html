@@ -125,6 +125,12 @@
           <div class="spotify-topbar">
             <form class="spotify-search-form" data-spotify-search-form>
               <input data-spotify-search-input type="search" aria-label="Rechercher sur Spotify" placeholder="Artiste, titre, album ou playlist" autocomplete="off">
+              <select data-spotify-search-filter class="spotify-search-filter" aria-label="Type de recherche Spotify">
+                <option value="all" selected>Tout</option>
+                <option value="tracks">Titres</option>
+                <option value="artists">Artistes</option>
+                <option value="playlists">Playlists</option>
+              </select>
               <button type="submit" class="btn-primary">Rechercher</button>
             </form>
           </div>
@@ -170,6 +176,12 @@
             <label for="query_yt">Rechercher sur YouTube</label>
             <div class="youtube-search-field">
               <input type="search" id="query_yt" placeholder="Un artiste, un titre…" autocomplete="off" required>
+              <select id="youtube-search-filter" aria-label="Type de recherche YouTube">
+                <option value="all" selected>Tout</option>
+                <option value="video">Titres</option>
+                <option value="channel">Artistes / chaînes</option>
+                <option value="playlist">Playlists</option>
+              </select>
               <button type="submit" id="btn-search-yt" class="btn-primary">Rechercher</button>
             </div>
           </form>
@@ -244,12 +256,24 @@
               <span class="spotify-connect-kicker">Compte Spotify personnel</span>
               <h2 data-spotify-browser-title>Verification de l'extension</h2>
               <p data-spotify-browser-copy>La connexion passe par le WebPlayer. Le bearer Spotify reste dans l'extension et n'est pas envoye au serveur.</p>
-              <p class="muted">Installe YouPlayer Spotify Bridge dans Firefox, reviens sur cette page puis utilise « Associer cet onglet YouPlayer » dans son popup. Seul cet hote sera autorise.</p>
+              <p class="muted" data-spotify-extension-install>Installe YouPlayer Spotify Bridge dans Firefox ou Chrome sur ordinateur, reviens sur cette page HTTPS puis utilise « Associer cet onglet YouPlayer » dans son popup. Seul cet hôte sera autorisé. Chrome Android ne prend pas en charge cette installation.</p>
+              <details data-spotify-extension-install>
+                <summary>Installer sur Chrome gratuitement</summary>
+                <ol>
+                  <li>Télécharge le ZIP Chrome ci-dessous.</li>
+                  <li>Ouvre <code>chrome://extensions</code> dans un nouvel onglet et active le <strong>Mode développeur</strong>.</li>
+                  <li>Depuis ton gestionnaire de fichiers, glisse le ZIP téléchargé dans la page <code>chrome://extensions</code>. Chrome se charge de l’extraire.</li>
+                  <li>Reviens sur YouPlayer, associe cet onglet depuis le popup de l’extension puis ouvre Spotify.</li>
+                </ol>
+                <p class="muted">Si le glisser-déposer ne fonctionne pas, extrais le ZIP dans un dossier permanent, puis clique sur « Charger l’extension non empaquetée » et sélectionne le dossier contenant <code>manifest.json</code>. Avec cette méthode, mets à jour en remplaçant les fichiers du dossier puis en cliquant sur « Recharger ».</p>
+                <p class="muted">Aucun compte développeur payant n’est nécessaire pour cette installation manuelle sur ordinateur. Le mode développeur reste nécessaire.</p>
+              </details>
             </div>
             <div class="spotify-connect-state">
               <span data-spotify-browser-status class="spotify-connect-status">Verification...</span>
-              <span class="muted">Extension facultative à installer séparément.</span>
-              <a class="btn-primary" href="https://addons.mozilla.org/fr/firefox/addon/youplayer-spotify-bridge/" target="_blank" rel="noopener noreferrer">Ajouter l’extension</a>
+              <span class="muted" data-spotify-extension-install>Extension facultative à installer séparément.</span>
+              <a class="btn-primary" data-spotify-extension-install href="https://addons.mozilla.org/fr/firefox/addon/youplayer-spotify-bridge/" target="_blank" rel="noopener noreferrer">Ajouter à Firefox</a>
+              <a class="btn-primary" data-spotify-extension-install href="/downloads/youplayer-spotify-bridge-chromium.zip" download>Télécharger pour Chrome (ZIP)</a>
               <button type="button" data-spotify-browser-open class="btn-primary">Ouvrir Spotify</button>
             </div>
           </section>
@@ -352,9 +376,20 @@
           <span id="actual_artist">Artiste inconnu</span>
         </span>
       </div>
-      <button id="miniPlayPause" class="mini-play-pause" type="button" aria-label="Lecture">
-        <span aria-hidden="true">▶</span>
-      </button>
+      <div class="mini-controls" role="group" aria-label="Contrôles de lecture">
+        <button id="miniShuffle" class="mini-control" type="button" aria-pressed="false" aria-label="Lecture aléatoire" title="Activer la lecture aléatoire">
+          <span aria-hidden="true">⤨</span>
+        </button>
+        <button id="miniPrev" class="mini-control" type="button" aria-label="Morceau précédent ou retour au début" title="Avant 4 secondes : morceau précédent. Sinon : retour au début.">
+          <span aria-hidden="true">⏮</span>
+        </button>
+        <button id="miniPlayPause" class="mini-play-pause" type="button" aria-label="Lecture">
+          <span aria-hidden="true">▶</span>
+        </button>
+        <button id="miniNext" class="mini-control" type="button" aria-label="Titre suivant" title="Titre suivant">
+          <span aria-hidden="true">⏭</span>
+        </button>
+      </div>
       <audio id="lecteur" class="audio-engine" preload="auto"></audio>
     </footer>
 
@@ -485,6 +520,22 @@
       <button id="btn-modal-close" style="margin-top: 20px; background: none; color: white; border: 1px solid #666; padding: 10px; border-radius: 5px; cursor: pointer;">Annuler</button>
     </div>
   </div>
+
+  <dialog id="source-dialog" class="source-dialog" aria-labelledby="source-dialog-title">
+    <form method="dialog" class="source-dialog-form">
+      <h3 id="source-dialog-title">Changer la source</h3>
+      <p class="source-dialog-track" data-source-track-name></p>
+      <label for="source-url-input">Lien YouTube ou YouTube Music</label>
+      <input id="source-url-input" type="url" inputmode="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=…" maxlength="512">
+      <p class="source-dialog-status" role="status" data-source-status></p>
+      <div class="source-dialog-actions">
+        <a class="btn-small" data-source-test href="#" target="_blank" rel="noopener noreferrer">Tester sur YouTube</a>
+        <button type="button" class="btn-small" data-source-save>Enregistrer</button>
+        <button type="button" class="btn-small" data-source-reset hidden>Rétablir la recherche automatique</button>
+        <button type="submit" class="btn-small" value="cancel" formnovalidate>Fermer</button>
+      </div>
+    </form>
+  </dialog>
   </main>
 
   <script src="app.js?v=20261012-playback-resume" type="module"></script>

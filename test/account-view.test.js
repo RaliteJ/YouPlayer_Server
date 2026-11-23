@@ -223,7 +223,7 @@ test('provider and session refresh preserve cookie credentials and local authent
 		return ok(url.endsWith('/providers') ? { spotify: { enabled: true } } : { authEnabled: false, user: null });
 	});
 	await h.view.refreshAuthProviders();
-	assert.equal(h.view.spotifyOAuthEnabled, true);
+	assert.equal(h.view.spotifyOAuthEnabled, false);
 	assert.equal(await h.view.refreshAuth(), true);
 	assert.equal(h.view.authEnabled, false);
 	assert.equal(h.view.currentUser, null);
@@ -362,5 +362,45 @@ test('Spotify redirects clear only OAuth parameters and never display raw error 
 	assert.equal(h.history[0][2], '/player?keep=1#tab');
 	assert.ok(h.calls.every(call => typeof call === 'string' || !call.message.includes('SYNTHETIC_PRIVATE_DETAIL')));
 	h.view.connectSpotify();
-	assert.equal(h.window.location.href, 'https://player.test/auth/spotify/start');
+	assert.equal(h.window.location.href, undefined);
+	assert.ok(h.calls.includes('view:parametres'));
+});
+
+test('native account identity follows the user and blocks music for an admin or signed-out account', async () => {
+    const h = harness(), accounts = [];
+    h.window.YouPlayerAndroid = { setAccount: id => { accounts.push(id); return Promise.resolve(); } };
+    h.view.renderSpotifyConnectPanel = () => {};
+    for (const user of [{ id: 'alice', role: 'user' }, null, { id: 'bob', role: 'user' }, { id: 'admin', role: 'admin' }]) {
+        h.view.currentUser = user;
+        h.renderAuthState.call(h.view);
+    }
+    assert.deepEqual(accounts, ['alice', null, 'bob', null]);
+    assert.equal(h.view.accountRevision, 4);
+});
+
+test('native playlist export reports success only after saving and surfaces cancellation', async () => {
+    const h = harness();
+    const exportButton = {}, importForm = {}, message = element(), fileInput = {};
+    const controls = [exportButton, fileInput];
+    const panel = { querySelector: selector => ({ '#playlist-export': exportButton, '#playlist-import-form': importForm,
+        '#playlist-import-file': fileInput, '#playlist-transfer-message': message })[selector], querySelectorAll: () => controls };
+    h.document.getElementById = id => id === 'playlist-transfer-panel' ? panel : null;
+    const archive = { format: 'youplayer-playlists', version: 1, playlists: [{ name: 'Synthetic', items: [] }], skippedLocalTracks: 0 };
+    h.view.currentUser = { id: 'alice' };
+    h.view.apiFetch = async () => archive;
+    let finish, exported;
+    h.window.YouPlayerAndroid = { exportPlaylists: data => { exported = data; return new Promise(resolve => { finish = resolve; }); } };
+    h.view.bindPlaylistTransfer();
+    const saving = exportButton.onclick();
+    for (let turn = 0; turn < 10 && !finish; turn++) await Promise.resolve();
+    assert.equal(exported, archive);
+    assert.equal(exportButton.disabled, true);
+    assert.doesNotMatch(message.textContent, /enregistrée/);
+    finish(); await saving;
+    assert.match(message.textContent, /1 playlist\(s\) enregistrée/);
+    assert.equal(exportButton.disabled, false);
+    h.window.YouPlayerAndroid.exportPlaylists = async () => { throw new Error('Enregistrement annulé.'); };
+    await exportButton.onclick();
+    assert.equal(message.textContent, 'Enregistrement annulé.');
+    assert.equal(message.classList.contains('error-msg'), true);
 });

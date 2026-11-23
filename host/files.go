@@ -127,12 +127,8 @@ func prepareEnvironment(root, pseudo, password string) error {
 	if err != nil {
 		return err
 	}
-	spotify, err := randomSecret()
-	if err != nil {
-		return err
-	}
-	values := [][2]string{{"COMPOSE_PROJECT_NAME", project}, {"YOUPLAYER_ADMIN_PSEUDO", pseudo}, {"YOUPLAYER_ADMIN_PASSWORD", password}, {"YOUPLAYER_SESSION_SECRET", session}, {"YOUPLAYER_SPOTIFY_TOKEN_SECRET", spotify}, {"YOUPLAYER_LOG_LEVEL", "info"}, {"YOUPLAYER_SESSION_MAX_AGE_MS", "259200000"}, {"FIRST_TRACK_SPECIAL_STREAM", "true"}, {"FIRST_TRACK_SPECIAL_STREAM_NEXT", "true"}}
-	for _, name := range []string{"YOUPLAYER_YOUTUBE_API_KEY", "YOUPLAYER_SPOTIFY_CLIENT_ID", "YOUPLAYER_SPOTIFY_CLIENT_SECRET", "YOUPLAYER_SPOTIFY_REDIRECT_URI", "YOUPLAYER_SPOTIFY_SCOPES", "YOUPLAYER_SPOTIFY_WEB_USERNAME", "YOUPLAYER_SPOTIFY_WEB_PASSWORD"} {
+	values := [][2]string{{"COMPOSE_PROJECT_NAME", project}, {"YOUPLAYER_ADMIN_PSEUDO", pseudo}, {"YOUPLAYER_ADMIN_PASSWORD", password}, {"YOUPLAYER_SESSION_SECRET", session}, {"YOUPLAYER_LOG_LEVEL", "info"}, {"YOUPLAYER_SESSION_MAX_AGE_MS", "259200000"}, {"FIRST_TRACK_SPECIAL_STREAM", "true"}, {"FIRST_TRACK_SPECIAL_STREAM_NEXT", "true"}}
+	for _, name := range []string{"YOUPLAYER_YOUTUBE_API_KEY", "YOUPLAYER_SPOTIFY_CLIENT_ID", "YOUPLAYER_SPOTIFY_CLIENT_SECRET", "YOUPLAYER_SPOTIFY_REDIRECT_URI"} {
 		values = append(values, [2]string{name, ""})
 	}
 	var b strings.Builder
@@ -174,9 +170,6 @@ func composeEnvironment(root string, inherited []string) ([]string, error) {
 		return len(s) < 32 || regexp.MustCompile(`(?i)replace|change|example|local-session|dev-session|^\$\{`).MatchString(s)
 	}
 	if weak(local["YOUPLAYER_SESSION_SECRET"]) {
-		return nil, failure("environment-invalid")
-	}
-	if local["YOUPLAYER_SPOTIFY_CLIENT_ID"] != "" && local["YOUPLAYER_SPOTIFY_CLIENT_SECRET"] != "" && local["YOUPLAYER_SPOTIFY_REDIRECT_URI"] != "" && weak(local["YOUPLAYER_SPOTIFY_TOKEN_SECRET"]) {
 		return nil, failure("environment-invalid")
 	}
 	env := []string{}

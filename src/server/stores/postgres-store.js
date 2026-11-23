@@ -1,4 +1,4 @@
-import { LIKED_PLAYLIST } from '../../client-utils.js';
+import { LIKED_PLAYLIST, trackLikeKey } from '../../client-utils.js';
 import { updateLikedTracks } from '../liked-tracks.js';
 import path from "path";
 import { promises as fs } from "fs";
@@ -22,14 +22,7 @@ function mapUser(row) {
 		displayName: row.display_name || "",
 		role: row.role,
 		passwordHash: row.password_hash,
-		spotifyConnection: (row.spotify_account_id || row.spotify_access_token_encrypted || row.spotify_refresh_token_encrypted || row.spotify_scopes) ? {
-			accountId: row.spotify_account_id || "",
-			displayName: row.spotify_display_name || "",
-			scopes: Array.isArray(row.spotify_scopes) ? row.spotify_scopes : [],
-			expiresAt: row.spotify_expires_at || null,
-			accessTokenEncrypted: row.spotify_access_token_encrypted || "",
-			refreshTokenEncrypted: row.spotify_refresh_token_encrypted || ""
-		} : null,
+		authVersion: Number(row.auth_version) || 0,
 		createdAt: row.created_at
 	};
 }
@@ -79,6 +72,8 @@ export class PostgresYouplayerStore {
 
 			ALTER TABLE yp_users ADD COLUMN IF NOT EXISTS library_preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
 			ALTER TABLE yp_users ADD COLUMN IF NOT EXISTS playback_resume JSONB;
+			ALTER TABLE yp_users ADD COLUMN IF NOT EXISTS auth_version INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE yp_users ADD COLUMN IF NOT EXISTS spotify_sources JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 			CREATE TABLE IF NOT EXISTS yp_playlists (
 				id BIGSERIAL PRIMARY KEY,
@@ -121,30 +116,8 @@ export class PostgresYouplayerStore {
 				details JSONB NOT NULL DEFAULT '{}'::jsonb,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 			);
-
-			CREATE TABLE IF NOT EXISTS yp_spotify_connections (
-				user_id BIGINT PRIMARY KEY REFERENCES yp_users(id) ON DELETE CASCADE,
-				account_id TEXT NOT NULL DEFAULT '',
-				display_name TEXT NOT NULL DEFAULT '',
-				email TEXT NOT NULL DEFAULT '',
-				country TEXT NOT NULL DEFAULT '',
-				product TEXT NOT NULL DEFAULT '',
-				scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-				access_token_encrypted TEXT NOT NULL,
-				refresh_token_encrypted TEXT NOT NULL DEFAULT '',
-				expires_at TIMESTAMPTZ,
-				created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-				updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-			);
 		`);
 		await this.query(`
-			ALTER TABLE yp_spotify_connections
-			ADD COLUMN IF NOT EXISTS account_id TEXT NOT NULL DEFAULT '';
-
-			CREATE UNIQUE INDEX IF NOT EXISTS yp_spotify_connections_account_unique
-			ON yp_spotify_connections (account_id)
-			WHERE account_id <> '';
-
 				ALTER TABLE yp_users
 				ADD COLUMN IF NOT EXISTS pseudo TEXT;
 
@@ -214,6 +187,28 @@ export class PostgresYouplayerStore {
 		return libraryPreferences(result.rows[0].library_preferences);
 	}
 
+	async getUserSpotifySources(userId) {
+		const result = await this.query('SELECT spotify_sources FROM yp_users WHERE id = $1', [userId]);
+		if (!result.rows[0]) throw new Error("Utilisateur introuvable");
+		return result.rows[0].spotify_sources || {};
+	}
+
+	async setUserSpotifySource(userId, spotifyId, entry) {
+		// Atomic single-entry upsert: the other tracks of the account stay intact.
+		const result = await this.query(
+			`UPDATE yp_users
+				SET spotify_sources = jsonb_set(COALESCE(spotify_sources, '{}'::jsonb), ARRAY[$2], $3::jsonb)
+				WHERE id = $1
+				RETURNING spotify_sources -> $2 AS entry`,
+			[userId, spotifyId, JSON.stringify({
+				videoId: entry?.videoId ?? null,
+				revision: String(entry?.revision || "")
+			})]
+		);
+		if (!result.rows[0]) throw new Error("Utilisateur introuvable");
+		return result.rows[0].entry;
+	}
+
 	async saveAccountPlayback(userId, snapshot, owner, claim = false) {
 		const result = await this.query(`UPDATE yp_users SET playback_resume = $2::jsonb
 			WHERE id = $1 AND (playback_resume IS NULL OR playback_resume->>'owner' = $3 OR $4)
@@ -256,7 +251,7 @@ export class PostgresYouplayerStore {
 		const result = await this.query(`
 			INSERT INTO yp_users (pseudo, display_name, role, password_hash)
 			VALUES ($1, $2, $3, $4)
-			RETURNING id, pseudo, display_name, role, created_at
+			RETURNING id, pseudo, display_name, role, auth_version, created_at
 		`, [normalizedPseudo, displayName || normalizedPseudo, normalizeRole(role), passwordHash]);
 		return mapPublicUser(result.rows[0]);
 	}
@@ -269,15 +264,9 @@ export class PostgresYouplayerStore {
 				users.display_name,
 				users.role,
 				users.password_hash,
-				users.created_at,
-				spotify.account_id AS spotify_account_id,
-				spotify.display_name AS spotify_display_name,
-				spotify.scopes AS spotify_scopes,
-				spotify.access_token_encrypted AS spotify_access_token_encrypted,
-				spotify.refresh_token_encrypted AS spotify_refresh_token_encrypted,
-				spotify.expires_at AS spotify_expires_at
+				users.auth_version,
+				users.created_at
 			FROM yp_users users
-			LEFT JOIN yp_spotify_connections spotify ON spotify.user_id = users.id
 			WHERE users.pseudo = $1
 		`, [normalizePseudo(pseudo)]);
 		return mapUser(result.rows[0]);
@@ -291,15 +280,9 @@ export class PostgresYouplayerStore {
 				users.display_name,
 				users.role,
 				users.password_hash,
-				users.created_at,
-				spotify.account_id AS spotify_account_id,
-				spotify.display_name AS spotify_display_name,
-				spotify.scopes AS spotify_scopes,
-				spotify.access_token_encrypted AS spotify_access_token_encrypted,
-				spotify.refresh_token_encrypted AS spotify_refresh_token_encrypted,
-				spotify.expires_at AS spotify_expires_at
+				users.auth_version,
+				users.created_at
 			FROM yp_users users
-			LEFT JOIN yp_spotify_connections spotify ON spotify.user_id = users.id
 			WHERE users.id = $1
 		`, [userId]);
 		return mapUser(result.rows[0]);
@@ -324,9 +307,9 @@ export class PostgresYouplayerStore {
 		const passwordHash = await hashPassword(newPassword);
 		const result = await this.query(`
 			UPDATE yp_users
-			SET password_hash = $2, updated_at = now()
+			SET password_hash = $2, auth_version = auth_version + 1, updated_at = now()
 			WHERE id = $1
-			RETURNING id, pseudo, display_name, role, created_at
+			RETURNING id, pseudo, display_name, role, auth_version, created_at
 		`, [userId, passwordHash]);
 		return mapPublicUser(result.rows[0]);
 	}
@@ -339,134 +322,20 @@ export class PostgresYouplayerStore {
 		const passwordHash = await hashPassword(newPassword);
 		const result = await this.query(`
 			UPDATE yp_users
-			SET password_hash = $2, updated_at = now()
+			SET password_hash = $2, auth_version = auth_version + 1, updated_at = now()
 			WHERE id = $1
-			RETURNING id, pseudo, display_name, role, created_at
+			RETURNING id, pseudo, display_name, role, auth_version, created_at
 		`, [userId, passwordHash]);
 		return mapPublicUser(result.rows[0]);
 	}
 
 	async listUsers() {
 		const result = await this.query(`
-			SELECT id, pseudo, display_name, role, created_at
+			SELECT id, pseudo, display_name, role, auth_version, created_at
 			FROM yp_users
 			ORDER BY pseudo ASC
 		`);
 		return result.rows.map(mapPublicUser);
-	}
-
-	async attachSpotifyConnection(userId, connection) {
-		const user = await this.findUserById(userId);
-		if (!user) {
-			throw new Error("Utilisateur introuvable");
-		}
-		if (!connection.accountId) {
-			throw new Error("Identifiant Spotify requis");
-		}
-		try {
-			await this.query(`
-			INSERT INTO yp_spotify_connections (
-				user_id,
-				account_id,
-				display_name,
-				scopes,
-				access_token_encrypted,
-				refresh_token_encrypted,
-				expires_at
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-			ON CONFLICT (user_id)
-			DO UPDATE SET
-				account_id = EXCLUDED.account_id,
-				display_name = EXCLUDED.display_name,
-				scopes = EXCLUDED.scopes,
-				access_token_encrypted = EXCLUDED.access_token_encrypted,
-				refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
-				expires_at = EXCLUDED.expires_at,
-				updated_at = now()
-		`, [
-			userId,
-			connection.accountId,
-			connection.displayName || "",
-			Array.isArray(connection.scopes) ? connection.scopes : [],
-			connection.accessTokenEncrypted || "",
-			connection.refreshTokenEncrypted || "",
-			connection.expiresAt || null
-			]);
-		} catch (err) {
-			if (err?.code === "23505" && err?.constraint === "yp_spotify_connections_account_unique") {
-				const conflict = new Error("Ce compte Spotify est deja lie a un autre compte YouPlayer");
-				conflict.statusCode = 409;
-				throw conflict;
-			}
-			throw err;
-		}
-
-		return publicUser(await this.findUserById(userId));
-	}
-
-	async updateSpotifyTokens(userId, tokenUpdate) {
-		const existing = await this.getSpotifyConnection(userId, { includeTokens: true });
-		if (!existing) {
-			throw new Error("Connexion Spotify introuvable");
-		}
-		await this.query(`
-			UPDATE yp_spotify_connections
-			SET
-				access_token_encrypted = $2,
-				refresh_token_encrypted = $3,
-				expires_at = $4,
-				scopes = $5,
-				updated_at = now()
-			WHERE user_id = $1
-		`, [
-			userId,
-			tokenUpdate.accessTokenEncrypted || existing.accessTokenEncrypted,
-			tokenUpdate.refreshTokenEncrypted || existing.refreshTokenEncrypted,
-			tokenUpdate.expiresAt || existing.expiresAt,
-			Array.isArray(tokenUpdate.scopes) && tokenUpdate.scopes.length > 0
-				? tokenUpdate.scopes
-				: existing.scopes
-		]);
-		return publicUser(await this.findUserById(userId));
-	}
-
-	async getSpotifyConnection(userId, { includeTokens = false } = {}) {
-		const result = await this.query(`
-			SELECT
-				account_id,
-				display_name,
-				scopes,
-				access_token_encrypted,
-				refresh_token_encrypted,
-				expires_at,
-				updated_at
-			FROM yp_spotify_connections
-			WHERE user_id = $1
-		`, [userId]);
-		const row = result.rows[0];
-		if (!row) return null;
-		const connection = {
-			accountId: row.account_id || "",
-			displayName: row.display_name || "",
-			scopes: Array.isArray(row.scopes) ? row.scopes : [],
-			expiresAt: row.expires_at || null,
-			updatedAt: row.updated_at
-		};
-		if (includeTokens) {
-			connection.accessTokenEncrypted = row.access_token_encrypted || "";
-			connection.refreshTokenEncrypted = row.refresh_token_encrypted || "";
-		}
-		return connection;
-	}
-
-	async removeSpotifyConnection(userId) {
-		const user = await this.findUserById(userId);
-		if (!user) {
-			throw new Error("Utilisateur introuvable");
-		}
-		await this.query("DELETE FROM yp_spotify_connections WHERE user_id = $1", [userId]);
-		return publicUser(await this.findUserById(userId));
 	}
 
 	async mergeUserInto(sourceUserId, targetUserId) {
@@ -756,7 +625,7 @@ export class PostgresYouplayerStore {
 		return result.rowCount > 0;
 	}
 
-	async deletePlaylistItem(userId, playlistName, index) {
+	async deletePlaylistItem(userId, playlistName, index, expectedKey) {
 		const client = await this.pool.connect();
 		try {
 			await client.query("BEGIN");
@@ -770,6 +639,12 @@ export class PostgresYouplayerStore {
 				throw new Error("Playlist introuvable");
 			}
 			const playlistId = playlistResult.rows[0].id;
+			if (expectedKey !== undefined) {
+				const current = await client.query('SELECT data FROM yp_playlist_items WHERE playlist_id = $1 AND position = $2', [playlistId, index]);
+				if (!current.rows[0] || expectedKey !== trackLikeKey(current.rows[0].data)) {
+					throw Object.assign(new Error('Le morceau a changé'), { statusCode: 409 });
+				}
+			}
 			const itemResult = await client.query(`
 				DELETE FROM yp_playlist_items
 				WHERE playlist_id = $1 AND position = $2

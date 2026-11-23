@@ -185,12 +185,13 @@ export function createFirstTrackStreamManager({
 			error.statusCode = 403;
 			throw error;
 		}
-		if (record.response || record.state !== FIRST_TRACK_STREAM_STATES.STARTING) {
+		if (record.response || record.opening || record.state !== FIRST_TRACK_STREAM_STATES.STARTING) {
 			const error = new Error("Ce flux est déjà utilisé");
 			error.statusCode = 409;
 			throw error;
 		}
 
+		record.opening = true;
 		let source = "";
 		try {
 			source = String(await resolveSource(record.track) || "").trim();
@@ -213,8 +214,6 @@ export function createFirstTrackStreamManager({
 		}
 		record.source = source;
 
-		clearTimer(record.startTimer);
-		record.startTimer = null;
 		const commonOptions = {
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"]
@@ -315,7 +314,11 @@ export function createFirstTrackStreamManager({
 			fail("ffmpeg", new Error(`sortie ${code ?? signal ?? "inconnue"}`));
 		});
 		ffmpeg.stdout.once("data", () => {
-			if (streams.has(streamId)) transition(record, FIRST_TRACK_STREAM_STATES.PLAYING, "audio_started");
+			if (streams.has(streamId)) {
+				clearTimer(record.startTimer);
+				record.startTimer = null;
+				transition(record, FIRST_TRACK_STREAM_STATES.PLAYING, "audio_started");
+			}
 		});
 
 		response.once("close", () => {

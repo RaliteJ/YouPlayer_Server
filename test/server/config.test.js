@@ -14,8 +14,6 @@ test('loadServerConfig allows tests without production secrets', () => {
 	assert.equal(config.sessionMaxAgeMs, 3 * 24 * 60 * 60 * 1000);
 	assert.equal(config.firstTrackSpecialStream, true);
 	assert.equal(config.firstTrackSpecialNext, true);
-	assert.equal(config.spotifyScopes.includes('user-read-email'), false);
-	assert.equal(config.spotifyScopes.includes('user-read-private'), true);
 });
 
 test('loadServerConfig accepts a custom session duration', () => {
@@ -63,26 +61,12 @@ test('loadServerConfig rejects production auth without Redis sessions', () => {
 	}), /REDIS_URL/);
 });
 
-test('loadServerConfig requires a strong dedicated Spotify token secret', () => {
-	assert.throws(() => loadServerConfig({
-		NODE_ENV: 'production',
-		YOUPLAYER_AUTH_ENABLED: 'true',
-		YOUPLAYER_SESSION_SECRET: 'a-real-production-session-secret-value',
-		YOUPLAYER_REDIS_URL: 'redis://localhost:6379',
-		YOUPLAYER_SPOTIFY_CLIENT_ID: 'client-id',
-		YOUPLAYER_SPOTIFY_CLIENT_SECRET: 'client-secret',
-		YOUPLAYER_SPOTIFY_REDIRECT_URI: 'https://youplayer.example/auth/spotify/callback'
-	}), /YOUPLAYER_SPOTIFY_TOKEN_SECRET/);
-	assert.throws(() => loadServerConfig({
-		NODE_ENV: 'production',
-		YOUPLAYER_AUTH_ENABLED: 'true',
-		YOUPLAYER_SESSION_SECRET: 'a-real-production-session-secret-value',
-		YOUPLAYER_REDIS_URL: 'redis://localhost:6379',
-		YOUPLAYER_SPOTIFY_CLIENT_ID: 'client-id',
-		YOUPLAYER_SPOTIFY_CLIENT_SECRET: 'client-secret',
-		YOUPLAYER_SPOTIFY_REDIRECT_URI: 'https://youplayer.example/auth/spotify/callback',
-		YOUPLAYER_SPOTIFY_TOKEN_SECRET: 'replace-with-a-secret-that-is-long-enough'
-	}), /YOUPLAYER_SPOTIFY_TOKEN_SECRET/);
+test('loadServerConfig no longer requires a personal Spotify token encryption secret', () => {
+ const config = loadServerConfig({ NODE_ENV: 'production', YOUPLAYER_AUTH_ENABLED: 'true',
+  YOUPLAYER_SESSION_SECRET: 'a-real-production-session-secret-value', YOUPLAYER_REDIS_URL: 'redis://localhost:6379',
+  YOUPLAYER_SPOTIFY_CLIENT_ID: 'client-id', YOUPLAYER_SPOTIFY_CLIENT_SECRET: 'client-secret',
+  YOUPLAYER_SPOTIFY_REDIRECT_URI: 'https://youplayer.example/auth/spotify/callback' });
+ assert.equal(config.spotifyClientId, 'client-id');
 });
 
 test('loadServerConfig requires a strong session secret whenever Spotify OAuth is configured', () => {

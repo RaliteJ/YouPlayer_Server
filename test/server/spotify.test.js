@@ -59,18 +59,9 @@ test('playlist import falls back from legacy and capture paths to the public pag
 	assert.equal(imported.tracks.length, 1);
 });
 import {
-	createSpotifyAuthorizationUrl,
-	createSpotifyOAuthState,
-	createSpotifyPkce,
-	decryptSpotifyToken,
-	encryptSpotifyToken,
-	exchangeSpotifyAuthorizationCode,
 	fetchSpotifyAlbum,
 	fetchSpotifyCatalogSearch,
-	fetchSpotifyClientCredentialsToken,
-	fetchSpotifyCurrentUserProfile,
-	fetchSpotifyCurrentUserPlaylists,
-	spotifyConnectionFromOAuth
+	fetchSpotifyClientCredentialsToken
 } from '../../src/server/spotify-oauth.js';
 
 function trackData(index) {
@@ -181,57 +172,9 @@ test('the primary playlist import rejects a missing or truncated later page', as
 	}
 });
 
-test('spotify OAuth token encryption round-trips without storing plaintext', () => {
-	const secret = 'test-spotify-token-secret';
-	const encrypted = encryptSpotifyToken('access-token-value', secret);
-
-	assert.notEqual(encrypted, 'access-token-value');
-	assert.equal(decryptSpotifyToken(encrypted, secret), 'access-token-value');
-	assert.throws(() => decryptSpotifyToken(encrypted, 'different-secret-value'));
-});
-
-test('Spotify OAuth uses PKCE and exchanges the verifier without exposing it in the callback URL', async () => {
-	const config = {
-		spotifyClientId: 'client-id',
-		spotifyClientSecret: 'client-secret',
-		spotifyRedirectUri: 'https://youplayer.example/auth/spotify/callback',
-		spotifyScopes: ['user-read-private']
-	};
-	const state = createSpotifyOAuthState();
-	const pkce = createSpotifyPkce();
-	const authorization = new URL(createSpotifyAuthorizationUrl(config, state, { codeChallenge: pkce.challenge }));
-
-	assert.equal(authorization.searchParams.get('state'), state);
-	assert.equal(authorization.searchParams.get('code_challenge_method'), 'S256');
-	assert.equal(authorization.searchParams.get('code_challenge'), pkce.challenge);
-	assert.equal(authorization.searchParams.has('code_verifier'), false);
-
-	let requestBody;
-	await exchangeSpotifyAuthorizationCode(config, 'authorization-code', {
-		codeVerifier: pkce.verifier,
-		fetchImpl: async (_url, options) => {
-			requestBody = new URLSearchParams(options.body);
-			return responseJson({ access_token: 'access-token' });
-		}
-	});
-	assert.equal(requestBody.get('code_verifier'), pkce.verifier);
-});
-
-test('fetchSpotifyCurrentUserProfile requires the stable account_id', async () => {
-	const profile = await fetchSpotifyCurrentUserProfile('access-token', async () => responseJson({
-		account_id: 'stable-account-id',
-		display_name: 'Compte test'
-	}));
-	assert.equal(profile.account_id, 'stable-account-id');
-	await assert.rejects(
-		() => fetchSpotifyCurrentUserProfile('access-token', async () => responseJson({ id: 'legacy-id' })),
-		/Identifiant stable/
-	);
-});
-
-test('fetchSpotifyCatalogSearch uses the connected user token and normalizes sections', async () => {
+test('fetchSpotifyCatalogSearch uses an application token and normalizes sections', async () => {
 	let request;
-	const result = await fetchSpotifyCatalogSearch('user-access-token', 'Miles Davis', {
+	const result = await fetchSpotifyCatalogSearch('application-token', 'Miles Davis', {
 		limit: 16,
 		offset: 4,
 		fetchImpl: async (url, options) => {
@@ -250,7 +193,7 @@ test('fetchSpotifyCatalogSearch uses the connected user token and normalizes sec
 	assert.equal(request.url.searchParams.get('type'), 'track,playlist,album,artist');
 	assert.equal(request.url.searchParams.get('limit'), '10');
 	assert.equal(request.url.searchParams.get('offset'), '4');
-	assert.equal(request.options.headers.Authorization, 'Bearer user-access-token');
+	assert.equal(request.options.headers.Authorization, 'Bearer application-token');
 	assert.equal(result.playlists.items.length, 1);
 	assert.equal(result.tracks.items[0].id, 'track-1');
 });
@@ -275,69 +218,6 @@ test('Spotify application tokens and album details use official API calls', asyn
 	assert.equal(album.id, 'album-123');
 	assert.equal(albumRequest.url, 'https://api.spotify.com/v1/albums/album-123');
 	assert.equal(albumRequest.options.headers.Authorization, 'Bearer application-token');
-});
-
-test('spotifyConnectionFromOAuth stores encrypted tokens and stable account identity', () => {
-	const config = {
-		spotifyScopes: ['playlist-read-private'],
-		spotifyTokenSecret: 'test-spotify-token-secret'
-	};
-	const connection = spotifyConnectionFromOAuth({
-		access_token: 'access-token',
-		refresh_token: 'refresh-token',
-		scope: 'playlist-read-private user-read-email',
-		expires_in: 3600
-	}, { account_id: 'stable-account-id', display_name: 'Compte test' }, config);
-
-	assert.equal(connection.accountId, 'stable-account-id');
-	assert.equal(connection.displayName, 'Compte test');
-	assert.deepEqual(connection.scopes, ['playlist-read-private', 'user-read-email']);
-	assert.notEqual(connection.accessTokenEncrypted, 'access-token');
-	assert.equal(decryptSpotifyToken(connection.refreshTokenEncrypted, config.spotifyTokenSecret), 'refresh-token');
-});
-
-test('fetchSpotifyCurrentUserPlaylists returns every Spotify playlist page', async () => {
-	const playlists = Array.from({ length: 75 }, (_, index) => ({
-		id: `playlist-${index}`,
-		name: `Playlist ${index}`
-	}));
-	const calls = [];
-	const fetchImpl = async (url, options) => {
-		const offset = Number(url.searchParams.get('offset'));
-		const limit = Number(url.searchParams.get('limit'));
-		calls.push({ offset, limit, authorization: options.headers.Authorization });
-		const items = playlists.slice(offset, offset + limit);
-		const nextOffset = offset + items.length;
-		return responseJson({
-			href: 'https://api.spotify.com/v1/me/playlists',
-			items,
-			limit,
-			offset,
-			total: playlists.length,
-			next: nextOffset < playlists.length
-				? `https://api.spotify.com/v1/me/playlists?offset=${nextOffset}&limit=${limit}`
-				: null
-		});
-	};
-
-	const result = await fetchSpotifyCurrentUserPlaylists('oauth-access-token', { fetchImpl });
-
-	assert.equal(result.items.length, 75);
-	assert.equal(result.total, 75);
-	assert.equal(result.next, null);
-	assert.deepEqual(calls, [
-		{ offset: 0, limit: 50, authorization: 'Bearer oauth-access-token' },
-		{ offset: 50, limit: 50, authorization: 'Bearer oauth-access-token' }
-	]);
-});
-
-test('fetchSpotifyCurrentUserPlaylists exposes a useful error for a non-allowlisted user', async () => {
-	const fetchImpl = async () => ({ ok: false, status: 403 });
-
-	await assert.rejects(
-		fetchSpotifyCurrentUserPlaylists('oauth-access-token', { fetchImpl }),
-		(error) => error.statusCode === 403 && /non autorise/.test(error.message)
-	);
 });
 
 test('spotifyWebApiTrackToStoredTrack keeps enough metadata for Youplayer imports', () => {

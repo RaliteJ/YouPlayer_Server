@@ -335,9 +335,11 @@ test('static backend allowlist does not expose server files or raw playlists', a
 	const client = createClient();
 	const serverFile = await client.request('/server/token.txt');
 	const rawPlaylist = await client.request('/playlists/playlist.json');
+	const otherDownload = await client.request('/downloads/private.zip');
 
 	assert.equal(serverFile.status, 404);
 	assert.equal(rawPlaylist.status, 404);
+	assert.equal(otherDownload.status, 404);
 });
 
 test('GET /playlist_preview returns playlist contents without selecting playback session', async () => {

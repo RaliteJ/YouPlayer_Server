@@ -12,7 +12,6 @@ if (action === 'init') {
         YOUPLAYER_ADMIN_PSEUDO: 'ci-admin',
         YOUPLAYER_ADMIN_PASSWORD: randomBytes(24).toString('hex'),
         YOUPLAYER_SESSION_SECRET: randomBytes(48).toString('hex'),
-        YOUPLAYER_SPOTIFY_TOKEN_SECRET: randomBytes(48).toString('hex')
     };
     await writeFile(envPath, Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join(''), { mode: 0o600, flag: 'wx' });
     console.log('Configuration temporaire generee pour la stack de test.');

@@ -112,12 +112,14 @@ func runCommand(root, program string, args, env []string) (string, error) {
 		raw = raw[len(raw)-1024*1024:]
 	}
 	file := filepath.Join(root, ".updates/host/last-command.log")
-	fd, e := syscall.Open(file, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
-	if e == nil {
-		f := os.NewFile(uintptr(fd), file)
-		_ = f.Chmod(0600)
-		_, _ = fmt.Fprintf(f, "%s (%s)\n%s", program, c, raw)
-		f.Close()
+	if os.MkdirAll(filepath.Dir(file), 0700) == nil {
+		fd, e := syscall.Open(file, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
+		if e == nil {
+			f := os.NewFile(uintptr(fd), file)
+			_ = f.Chmod(0600)
+			_, _ = fmt.Fprintf(f, "%s (%s)\n%s", program, c, raw)
+			f.Close()
+		}
 	}
 	return "", failure(c)
 }

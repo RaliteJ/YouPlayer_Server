@@ -10,6 +10,7 @@ function harness(playlist, pages = [], callbacks = {}) {
 	const elements = new Map();
 	const requests = [];
 	const root = {
+		defaultView: callbacks.clientWindow,
 		classList: { toggle() {} },
 		listeners: {},
 		addEventListener(type, handler) { this.listeners[type] = handler; },
@@ -28,10 +29,10 @@ function harness(playlist, pages = [], callbacks = {}) {
 		...callbacks,
 		root, escapeHtml: String, playlistEntries: () => [],
 		apiErrorMessage: () => 'Erreur simulee',
-		apiFetch: async (url, method, body) => {
+		apiFetch: callbacks.apiFetch || (async (url, method, body) => {
 			requests.push(body);
 			return body.action === 'playlist' ? { data: playlist } : pages.shift();
-		}
+		})
 	});
 	explorer.init();
 	const results = root.querySelector('[data-spotify-results]');
@@ -39,7 +40,18 @@ function harness(playlist, pages = [], callbacks = {}) {
 		requests, results,
 		openTrackArtist: artist => explorer.openTrackArtist(artist),
 		connect: () => explorer.refreshConnection(),
-		search: () => root.querySelector('[data-spotify-search-form]').listeners.submit({ preventDefault() {} }),
+		filter: value => { root.querySelector('[data-spotify-search-filter]').value = value; },
+		search: query => {
+			if (query !== undefined) root.querySelector('[data-spotify-search-input]').value = query;
+			return root.querySelector('[data-spotify-search-form]').listeners.submit({ preventDefault() {} });
+		},
+		me: () => root.querySelector('[data-spotify-me]').listeners.click(),
+		refreshAccount: () => explorer.refreshAccountState(),
+		reset: () => explorer.reset(),
+		browserTitle: root.querySelector('[data-spotify-browser-title]'),
+		browserCopy: root.querySelector('[data-spotify-browser-copy]'),
+		browserStatus: root.querySelector('[data-spotify-browser-status]'),
+		click: (selector, dataset = {}) => results.listeners.click({ target: { closest: value => value === selector ? { dataset } : null } }),
 		artist: id => results.listeners.click({ target: { closest: selector => selector === '[data-entity-type][data-entity-id]'
 			? { dataset: { entityType: 'artist', entityId: id } } : null } }),
 		status: root.querySelector('[data-spotify-status]'),
@@ -377,4 +389,162 @@ test('YouTube artist navigation finds Zamdane by name when the video title diffe
     assert.deepEqual(h.requests.map(request => request.action), ['search', 'search', 'artist']);
     assert.equal(h.requests[1].query, 'zamdane');
     assert.equal(h.requests[2].id, artist.id);
+});
+
+test('a late Spotify search cannot replace the newer results', async () => {
+    const pending = [];
+    const h = harness(null, [], { apiFetch: () => new Promise(resolve => pending.push(resolve)) });
+    const old = h.search('old');
+    const recent = h.search('recent');
+    pending[1]({ data: { tracks: { items: [{ id: 'new123456789', name: 'New result', artists: [] }] } } });
+    await recent;
+    pending[0]({ data: { tracks: { items: [{ id: 'old123456789', name: 'Old result', artists: [] }] } } });
+    await old;
+    assert.match(h.results.innerHTML, /New result/);
+    assert.doesNotMatch(h.results.innerHTML, /Old result/);
+});
+
+test('changing accounts clears personal Spotify data and ignores an in-flight response', async () => {
+    let user = { id: 'alice' }, resolve;
+    const h = harness(null, [], { getCurrentUser: () => user, browserBridge: {
+        status: async () => ({ installed: true, authenticated: true, tokenCaptured: true }),
+        getPlaylists: () => new Promise(done => { resolve = done; })
+    } });
+    const loading = h.me();
+    while (!resolve) await Promise.resolve();
+    user = null; h.refreshAccount();
+    user = { id: 'bob' }; h.refreshAccount();
+    resolve({ items: [{ id: 'private123456789', name: 'Private Alice playlist' }] });
+    await loading;
+    assert.equal(h.results.innerHTML, '');
+    assert.doesNotMatch(h.results.innerHTML, /Private Alice/);
+});
+
+test('an account reset invalidates requests even when the same user signs in again', async () => {
+    let resolve;
+    const h = harness(null, [], { getCurrentUser: () => ({ id: 'alice' }),
+        apiFetch: () => new Promise(done => { resolve = done; }) });
+    const loading = h.search('before logout');
+    h.reset();
+    resolve({ data: { tracks: { items: [{ id: 'old123456789', name: 'Old account request', artists: [] }] } } });
+    await loading;
+    assert.equal(h.results.innerHTML, '');
+});
+
+test('a batch import stops when the YouPlayer account changes', async () => {
+    let user = { id: 'alice' }, resolveBatch;
+    const writes = [];
+    const h = harness(null, [], { getCurrentUser: () => user, apiFetch: async (url, _method, body) => {
+        if (url === '/spotify_test') return { data: { id: 'album123456789', name: 'Album',
+            external_urls: { spotify: 'https://open.spotify.com/album/album123456789' },
+            tracks: { items: tracks(0, 101).map(item => item.track) } } };
+        if (url === '/spotify_import_browser_playlist') {
+            writes.push({ user: user.id, count: body.items.length });
+            return new Promise(done => { resolveBatch = done; });
+        }
+        return [];
+    } });
+    await h.click('[data-entity-type][data-entity-id]', { entityType: 'album', entityId: 'album123456789' });
+    const importing = h.click('[data-import-current]');
+    assert.equal(writes.length, 1);
+    user = { id: 'bob' }; h.refreshAccount();
+    resolveBatch({ playlist: 'album.json', count: 50 });
+    await importing;
+    assert.deepEqual(writes, [{ user: 'alice', count: 50 }]);
+    assert.equal(h.results.innerHTML, '');
+});
+
+test('a failed status check is unavailable rather than an absent extension', async () => {
+    const h = harness(null, [], { browserBridge: { status: async () => { throw new Error('timeout'); } } });
+    await h.connect();
+    assert.equal(h.browserStatus.textContent, 'Indisponible');
+    assert.match(h.browserCopy.textContent, /Réessaie/);
+    assert.doesNotMatch(h.browserTitle.textContent, /Installe/);
+});
+
+test('the Android client explains its embedded Spotify connection without an extension install', async () => {
+    const h = harness(null, [], { clientWindow: { YouPlayerAndroid: {} }, browserBridge: {
+        status: async () => ({ installed: true, authenticated: false, tokenCaptured: false })
+    } });
+    await h.connect();
+    assert.match(h.browserCopy.textContent, /écran Spotify intégré/);
+    assert.doesNotMatch(h.browserTitle.textContent, /Installe/);
+});
+
+const searchTracks = count => Array.from({ length: count }, (_, index) => ({
+	id: `searchtrack${index}`,
+	name: `Titre ${index + 1}`,
+	artists: []
+}));
+
+const searchPageFixture = { data: {
+	tracks: { items: searchTracks(12), total: 12 },
+	artists: { items: [{ id: 'artist11111', name: 'Un artiste' }] },
+	playlists: { items: [{ id: 'playlist1111', name: 'Une playlist' }] },
+	albums: { items: [{ id: 'album111111', name: 'Un album' }] }
+} };
+
+test('search keeps the full rendering by default and falls back to Tout on unknown filters', async () => {
+	const h = harness(null, [searchPageFixture, searchPageFixture]);
+	await h.search();
+	assert.match(h.results.innerHTML, /Meilleurs résultats/);
+	assert.match(h.results.innerHTML, /Albums/);
+	assert.match(h.results.innerHTML, /Une playlist/);
+	assert.deepEqual(h.requests[0], { action: 'search', query: 'playlist123456789', limit: 16 }, 'the request payload stays untouched');
+	h.filter('unexpected');
+	await h.search();
+	assert.match(h.results.innerHTML, /Meilleurs résultats/, 'unknown values fall back to the full rendering');
+});
+
+test('search categories render only their section with every fetched result', async () => {
+	const h = harness(null, [searchPageFixture, searchPageFixture, searchPageFixture]);
+	h.filter('tracks');
+	await h.search();
+	assert.equal(h.count(), 12, 'a track search shows every fetched track, not the mixed top 10');
+	assert.doesNotMatch(h.results.innerHTML, /Meilleurs résultats/);
+	assert.doesNotMatch(h.results.innerHTML, /Une playlist/);
+	h.filter('artists');
+	await h.search();
+	assert.match(h.results.innerHTML, /Un artiste/);
+	assert.doesNotMatch(h.results.innerHTML, /spotify-track-row/);
+	h.filter('playlists');
+	await h.search();
+	assert.match(h.results.innerHTML, /Une playlist/);
+	assert.doesNotMatch(h.results.innerHTML, /Un artiste/);
+	assert.equal(h.requests.length, 3);
+	for (const request of h.requests) {
+		assert.deepEqual(request, { action: 'search', query: 'playlist123456789', limit: 16 });
+	}
+});
+
+test('empty categories show a clear inline message', async () => {
+	const artistsOnly = { data: { artists: { items: [{ id: 'artist11111', name: 'Un artiste' }] } } };
+	const h = harness(null, [artistsOnly, artistsOnly]);
+	h.filter('tracks');
+	await h.search();
+	assert.match(h.results.innerHTML, /Aucun titre ne correspond/);
+	assert.doesNotMatch(h.results.innerHTML, /spotify-track-row/);
+	h.filter('playlists');
+	await h.search();
+	assert.match(h.results.innerHTML, /Aucune playlist ne correspond/);
+});
+
+test('openTrackArtist keeps its own unfiltered fallback rendering', async () => {
+    const artist = { id: 'A'.repeat(22), name: 'Artiste', images: [{ url: 'portrait.jpg' }] };
+    const ambiguousBoth = [
+        { data: { tracks: { items: [
+            { id: '1', name: 'Titre', artists: [artist] },
+            { id: '2', name: 'Titre', artists: [{ ...artist, id: 'B'.repeat(22) }] }
+        ] } } },
+        { data: { artists: { items: [artist, { ...artist, id: 'B'.repeat(22) }] } } }
+    ];
+    const h = harness(null, ambiguousBoth);
+    h.filter('tracks');
+    await h.openTrackArtist({ name: 'Artiste', title: 'Titre' });
+    assert.match(h.results.innerHTML, /Meilleurs résultats/, 'the fallback search ignores the selected filter');
+    assert.equal(h.status.textContent.includes('incertaine'), true);
+    for (const request of h.requests) {
+        assert.equal(request.limit, 20, 'the artist fallback keeps its own payload');
+        assert.equal(request.action, 'search');
+    }
 });

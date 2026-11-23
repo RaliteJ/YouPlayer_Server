@@ -112,9 +112,11 @@ export const playerView = {
     updateShuffleUi(enabled) {
         const checkbox = document.getElementById('shuffle-mode');
         if (checkbox) checkbox.checked = enabled;
-        const button = document.getElementById('overlayShuffle');
-        button?.setAttribute('aria-pressed', String(enabled));
-        button?.setAttribute('title', enabled ? 'Désactiver la lecture aléatoire' : 'Activer la lecture aléatoire');
+        for (const id of ['overlayShuffle', 'miniShuffle']) {
+            const button = document.getElementById(id);
+            button?.setAttribute('aria-pressed', String(enabled));
+            button?.setAttribute('title', enabled ? 'Désactiver la lecture aléatoire' : 'Activer la lecture aléatoire');
+        }
     },
 
     async setShuffleMode(enabled) {
@@ -123,7 +125,8 @@ export const playerView = {
             || this.lastPlaybackState?.currentId != null
             || (this.lastPlaybackState?.queue?.length || 0) > 0;
         if (!hasActiveQueue) return;
-        const controls = ['shuffle-mode', 'overlayShuffle'].map(id => document.getElementById(id)).filter(Boolean);
+        const controls = ['shuffle-mode', 'overlayShuffle', 'miniShuffle']
+            .map(id => document.getElementById(id)).filter(Boolean);
         controls.forEach(control => { control.disabled = true; });
         try {
             const state = await this.apiFetch('/random', 'POST', { enabled });
@@ -238,7 +241,7 @@ export const playerView = {
         const player = this.activeAudioPlayer();
         if (!player?.currentSrc) return;
         if (player.paused || player.ended) {
-            void this.playAudioWithDiagnostics(player, { trigger: 'play-pause-control' });
+            void this.playCurrentTrackWithReporting(player, { trigger: 'play-pause-control' });
         } else {
             this.pauseAudioWithDiagnostics(player, 'play-pause-control');
         }

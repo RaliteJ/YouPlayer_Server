@@ -123,15 +123,107 @@ export async function searchYoutubeVideos(query, { execFileImpl = execFileAsync 
 	};
 }
 
+// ytmusic-api 5.3.1 exposes constructRequest at runtime although its typings
+// mark it private. Only the album's own shelf rows are read from the raw
+// response below; nothing (cookies, raw payload) is stored or logged.
+function albumSongTitleRows(browsed) {
+	const titles = new Map();
+	const sections = [];
+	const twoColumn = browsed?.contents?.twoColumnBrowseResultsRenderer;
+	if (Array.isArray(twoColumn?.secondaryContents?.sectionListRenderer?.contents)) {
+		sections.push(...twoColumn.secondaryContents.sectionListRenderer.contents);
+	}
+	const tabs = browsed?.contents?.singleColumnBrowseResultsRenderer?.tabs;
+	if (Array.isArray(tabs)) {
+		for (const tab of tabs) {
+			if (Array.isArray(tab?.tabRenderer?.content?.sectionListRenderer?.contents)) {
+				sections.push(...tab.tabRenderer.content.sectionListRenderer.contents);
+			}
+		}
+	}
+	// Track shelves only: the recommendation carousels are never traversed.
+	for (const section of sections) {
+		const shelf = section.musicShelfRenderer || section.musicPlaylistShelfRenderer;
+		if (!Array.isArray(shelf?.contents)) continue;
+		for (const item of shelf.contents) {
+			const row = item?.musicResponsiveListItemRenderer;
+			const videoId = row?.playlistItemData?.videoId;
+			const runs = row?.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs;
+			const title = (Array.isArray(runs) ? runs : []).map(run => run?.text || '').join('').trim();
+			if (/^[\w-]{11}$/.test(videoId || '') && title) titles.set(videoId, title);
+		}
+	}
+	return titles;
+}
+
+// YouTube Music keeps some tracks only inside their album page. The album is
+// trusted only when its name and main artist match exactly, the detail is
+// rechecked before its songs are used, and an explicit song credit is never
+// overwritten by the inherited one.
+async function searchExactAlbumTrack(song, client, eligible) {
+	if (!String(song.artist || '').trim() || !String(song.album || '').trim()) return null;
+	if (typeof client?.searchAlbums !== 'function' || typeof client?.getAlbum !== 'function') return null;
+	const albumName = normalize(song.album);
+	const albumArtists = [...new Set([cleanArtist(song.artist), mainArtist(song.artist)])].filter(Boolean);
+	const albums = await client.searchAlbums(`${song.artist} ${song.album}`.trim());
+	const album = (Array.isArray(albums) ? albums : []).find(result =>
+		normalize(result?.name) === albumName
+		&& albumArtists.includes(cleanArtist(result?.artist?.name || '')));
+	if (!album?.albumId) return null;
+	const detail = await client.getAlbum(album.albumId);
+	if (normalize(detail?.name) !== albumName
+		|| !albumArtists.includes(cleanArtist(detail?.artist?.name || ''))) return null;
+	const inheritedArtist = String(detail.artist?.name || album.artist?.name || '').trim();
+	const songs = (detail?.songs || []).map(entry => {
+		const credit = String(entry?.artist?.name || '').trim()
+			? entry.artist
+			: (inheritedArtist ? { name: inheritedArtist } : null);
+		return credit ? { ...entry, artist: credit } : { ...entry };
+	});
+	const candidates = eligible(songs);
+	const match = selectMusicMatch(song, candidates);
+	if (match) return match;
+	// The locked 5.3.1 SongParser.parseAlbumSong keeps find(isTitle) without a
+	// fallback: rows without musicVideoType come back with an empty name. Only
+	// unnamed, non-excluded candidates with a valid id are refilled, once,
+	// strictly from the verified album's own shelf rows.
+	const unnamed = candidates.filter(entry => !String(entry?.name || '').trim()
+		&& /^[\w-]{11}$/.test(entry?.videoId || ''));
+	if (unnamed.length === 0 || typeof client?.constructRequest !== 'function') return null;
+	const browsed = await client.constructRequest('browse', { browseId: album.albumId });
+	const titles = albumSongTitleRows(browsed);
+	for (const entry of unnamed) {
+		const title = titles.get(entry.videoId);
+		if (title && !String(entry.name || '').trim()) entry.name = title;
+	}
+	return selectMusicMatch(song, eligible(songs));
+}
+
 export async function searchMusicTrack(song, { getMusicClient = musicClient, searchVideos = searchYoutubeVideos, excludeIds = [] } = {}) {
 	const query = [song.artist, song.title || song.name].filter(Boolean).join(' - ');
 	const eligible = results => results.filter(result => !excludeIds.includes(result.videoId));
+	let client;
 	try {
-		const client = await getMusicClient();
+		client = await getMusicClient();
 		const match = selectMusicMatch(song, eligible(await client.searchSongs(query)));
 		if (match) return match;
 	} catch {
-		// The fallback is subject to the same identity checks.
+		// The other search surfaces are subject to the same identity checks.
+	}
+	try {
+		// Catalog-only stubs without the video method keep working, and a
+		// failed initialization must never be retried inside the same lookup.
+		const videos = typeof client?.searchVideos === 'function' ? eligible(await client.searchVideos(query)) : [];
+		const videoMatch = selectMusicMatch(song, videos);
+		if (videoMatch) return videoMatch;
+	} catch {
+		// A video search failure keeps the general YouTube fallback available.
+	}
+	try {
+		const albumMatch = await searchExactAlbumTrack(song, client, eligible);
+		if (albumMatch) return albumMatch;
+	} catch {
+		// A missing or failing album surface keeps the general fallback available.
 	}
 	try {
 		return selectMusicMatch(song, eligible((await searchVideos(query)).videos || []));

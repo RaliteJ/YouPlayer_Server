@@ -1,6 +1,5 @@
 import * as spotify from './spotify.js';
 import { getSpotifyPathfinderJson as defaultPathfinderJson } from './spotify-pathfinder-http.js';
-import { fetchSpotifyCurrentUserPlaylists as defaultUserPlaylists } from './spotify-oauth.js';
 import { clampSpotifyLimit, getSpotifyResourceId, normalizePathfinderAlbumDetail,
 	normalizePathfinderArtistDetail, normalizePathfinderPlaylist, normalizePathfinderSearch } from './media-utils.js';
 import { logger as defaultLogger } from './logger.js';
@@ -16,11 +15,10 @@ export function registerSpotifyRoutes(app, {
 	clearSpotifyAnonymousToken = spotify.clearSpotifyAnonymousToken,
 	getSpotifyPlaylistTracksPage = spotify.getSpotifyPlaylistTracksPage,
 	getSpotifyPathfinderJson = defaultPathfinderJson,
-	fetchSpotifyCurrentUserPlaylists = defaultUserPlaylists,
 	runSpotifyLoginSandboxProbe = spotify.runSpotifyLoginSandboxProbe,
 	spotifyLoginSandboxStatus = spotify.spotifyLoginSandboxStatus
 }) {
-	const { spotifyAccessTokenForUser, spotifySearchForUser, spotifyAlbumForUser,
+	const { spotifySearchForUser, spotifyAlbumForUser,
 		spotifyAlbumFromAnonymousWebToken } = catalog;
 	async function spotifyPartnerJson(payload, tokenSource = "search") {
 		async function requestWithToken(token) {
@@ -150,14 +148,7 @@ export function registerSpotifyRoutes(app, {
 				};
 			}
 			else if (action === "me_playlists") {
-				let accessToken = await spotifyAccessTokenForUser(req.session?.userId);
-				try {
-					data = await fetchSpotifyCurrentUserPlaylists(accessToken);
-				} catch (err) {
-					if (err?.spotifyStatus !== 401) throw err;
-					accessToken = await spotifyAccessTokenForUser(req.session?.userId, { forceRefresh: true });
-					data = await fetchSpotifyCurrentUserPlaylists(accessToken);
-				}
+				return res.status(410).json({ error: "Playlists personnelles disponibles uniquement via le Bridge local" });
 			}
 			else if (action === "album") {
 				const albumId = getSpotifyResourceId(req.body.id || req.body.url, "album");

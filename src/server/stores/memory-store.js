@@ -1,4 +1,4 @@
-import { LIKED_PLAYLIST } from '../../client-utils.js';
+import { LIKED_PLAYLIST, trackLikeKey } from '../../client-utils.js';
 import { updateLikedTracks } from '../liked-tracks.js';
 import path from "path";
 import { promises as fs } from "fs";
@@ -16,7 +16,7 @@ import {
 } from "./store-utils.js";
 
 export class MemoryYouplayerStore {
-	constructor({ spotifyConnectionsFile = "" } = {}) {
+	constructor() {
 		this.users = new Map();
 		this.usersByPseudo = new Map();
 		this.playlists = new Map();
@@ -26,26 +26,9 @@ export class MemoryYouplayerStore {
 		this.nextPlaylistId = 1;
 		this.nextEventId = 1;
 		this.nextAuditId = 1;
-		this.spotifyConnectionsFile = spotifyConnectionsFile;
-		this.persistedSpotifyConnections = new Map();
 	}
 
-	async init() {
-		if (!this.spotifyConnectionsFile) return;
-		try {
-			const data = JSON.parse(await fs.readFile(this.spotifyConnectionsFile, "utf8"));
-			const accountIds = new Set();
-			for (const [pseudo, connection] of Object.entries(data?.accounts || {})) {
-				if (!connection?.accountId || accountIds.has(connection.accountId)) {
-					throw new Error("Registre des connexions Spotify invalide");
-				}
-				accountIds.add(connection.accountId);
-				this.persistedSpotifyConnections.set(normalizePseudo(pseudo), { ...connection });
-			}
-		} catch (err) {
-			if (err?.code !== "ENOENT") throw err;
-		}
-	}
+	async init() {}
 
 	async close() {}
 
@@ -64,26 +47,12 @@ export class MemoryYouplayerStore {
 			displayName: displayName || normalizedPseudo,
 			role: normalizeRole(role),
 			passwordHash: await hashPassword(password),
-			spotifyConnection: this.persistedSpotifyConnections.get(normalizedPseudo) || null,
+			authVersion: 0,
 			createdAt: new Date().toISOString()
 		};
 		this.users.set(user.id, user);
 		this.usersByPseudo.set(user.pseudo, user.id);
 		return publicUser(user);
-	}
-
-	async persistSpotifyConnections() {
-		if (!this.spotifyConnectionsFile) return;
-		const accounts = {};
-		for (const user of this.users.values()) {
-			if (user.spotifyConnection) accounts[user.pseudo] = user.spotifyConnection;
-		}
-		const dir = path.dirname(this.spotifyConnectionsFile);
-		const temporary = `${this.spotifyConnectionsFile}.tmp-${process.pid}`;
-		await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-		await fs.writeFile(temporary, JSON.stringify({ version: 1, accounts }, null, 2), { mode: 0o600 });
-		await fs.chmod(temporary, 0o600);
-		await fs.rename(temporary, this.spotifyConnectionsFile);
 	}
 
 	async findUserByPseudo(pseudo) {
@@ -98,8 +67,9 @@ export class MemoryYouplayerStore {
 	async authenticate(pseudo, password) {
 		const user = await this.findUserByPseudo(pseudo);
 		if (!user) return null;
+		const authVersion = user.authVersion || 0;
 		const ok = await verifyPassword(password, user.passwordHash);
-		return ok ? publicUser(user) : null;
+		return ok ? { ...publicUser(user), authVersion } : null;
 	}
 
 	async changePassword(userId, currentPassword, newPassword) {
@@ -112,6 +82,7 @@ export class MemoryYouplayerStore {
 			throw new Error("Mot de passe actuel invalide");
 		}
 		user.passwordHash = await hashPassword(newPassword);
+		user.authVersion = (user.authVersion || 0) + 1;
 		return publicUser(user);
 	}
 
@@ -121,6 +92,7 @@ export class MemoryYouplayerStore {
 			throw new Error("Utilisateur introuvable");
 		}
 		user.passwordHash = await hashPassword(newPassword);
+		user.authVersion = (user.authVersion || 0) + 1;
 		return publicUser(user);
 	}
 
@@ -160,90 +132,23 @@ export class MemoryYouplayerStore {
 		return libraryPreferences(user.libraryPreferences);
 	}
 
-	async attachSpotifyConnection(userId, connection) {
+	async getUserSpotifySources(userId) {
 		const user = await this.findUserById(userId);
-		if (!user) {
-			throw new Error("Utilisateur introuvable");
-		}
-		if (!connection.accountId) {
-			throw new Error("Identifiant Spotify requis");
-		}
-		for (const otherUser of this.users.values()) {
-			if (otherUser.id !== user.id && otherUser.spotifyConnection?.accountId === connection.accountId) {
-				const error = new Error("Ce compte Spotify est deja lie a un autre compte YouPlayer");
-				error.statusCode = 409;
-				throw error;
+		if (!user) throw new Error("Utilisateur introuvable");
+		return { ...(user.spotifySources || {}) };
+	}
+
+	async setUserSpotifySource(userId, spotifyId, entry) {
+		const user = await this.findUserById(userId);
+		if (!user) throw new Error("Utilisateur introuvable");
+		user.spotifySources = {
+			...(user.spotifySources || {}),
+			[spotifyId]: {
+				videoId: entry?.videoId ?? null,
+				revision: String(entry?.revision || "")
 			}
-		}
-		const previous = user.spotifyConnection;
-		user.spotifyConnection = {
-			accountId: connection.accountId,
-			displayName: connection.displayName || "",
-			scopes: Array.isArray(connection.scopes) ? connection.scopes : [],
-			accessTokenEncrypted: connection.accessTokenEncrypted || "",
-			refreshTokenEncrypted: connection.refreshTokenEncrypted || "",
-			expiresAt: connection.expiresAt || null,
-			updatedAt: new Date().toISOString()
 		};
-		try {
-			await this.persistSpotifyConnections();
-		} catch (err) {
-			user.spotifyConnection = previous;
-			throw err;
-		}
-		return publicUser(user);
-	}
-
-	async updateSpotifyTokens(userId, tokenUpdate) {
-		const user = await this.findUserById(userId);
-		if (!user?.spotifyConnection) {
-			throw new Error("Connexion Spotify introuvable");
-		}
-		const previous = user.spotifyConnection;
-		user.spotifyConnection = {
-			...user.spotifyConnection,
-			accessTokenEncrypted: tokenUpdate.accessTokenEncrypted || user.spotifyConnection.accessTokenEncrypted,
-			refreshTokenEncrypted: tokenUpdate.refreshTokenEncrypted || user.spotifyConnection.refreshTokenEncrypted,
-			expiresAt: tokenUpdate.expiresAt || user.spotifyConnection.expiresAt,
-			scopes: Array.isArray(tokenUpdate.scopes) && tokenUpdate.scopes.length > 0
-				? tokenUpdate.scopes
-				: user.spotifyConnection.scopes,
-			updatedAt: new Date().toISOString()
-		};
-		try {
-			await this.persistSpotifyConnections();
-		} catch (err) {
-			user.spotifyConnection = previous;
-			throw err;
-		}
-		return publicUser(user);
-	}
-
-	async getSpotifyConnection(userId, { includeTokens = false } = {}) {
-		const user = await this.findUserById(userId);
-		if (!user?.spotifyConnection) return null;
-		const connection = { ...user.spotifyConnection };
-		if (!includeTokens) {
-			delete connection.accessTokenEncrypted;
-			delete connection.refreshTokenEncrypted;
-		}
-		return connection;
-	}
-
-	async removeSpotifyConnection(userId) {
-		const user = await this.findUserById(userId);
-		if (!user) {
-			throw new Error("Utilisateur introuvable");
-		}
-		const previous = user.spotifyConnection;
-		user.spotifyConnection = null;
-		try {
-			await this.persistSpotifyConnections();
-		} catch (err) {
-			user.spotifyConnection = previous;
-			throw err;
-		}
-		return publicUser(user);
+		return structuredClone(user.spotifySources[spotifyId]);
 	}
 
 	async mergeUserInto(sourceUserId, targetUserId) {
@@ -404,14 +309,18 @@ export class MemoryYouplayerStore {
 		return this.playlists.delete(this.playlistKey(userId, playlistName));
 	}
 
-	async deletePlaylistItem(userId, playlistName, index) {
+	async deletePlaylistItem(userId, playlistName, index, expectedKey) {
 		const playlist = this.playlists.get(this.playlistKey(userId, playlistName));
 		if (!playlist) {
 			throw new Error("Playlist introuvable");
 		}
-		if (!Number.isInteger(index) || index < 0 || !playlist.items[index]) {
+		if (!Number.isInteger(index) || index < 0) {
 			return null;
 		}
+		if (expectedKey !== undefined && expectedKey !== trackLikeKey(playlist.items[index])) {
+			throw Object.assign(new Error('Le morceau a changé'), { statusCode: 409 });
+		}
+		if (!playlist.items[index]) return null;
 		const [removed] = playlist.items.splice(index, 1);
 		playlist.updatedAt = new Date().toISOString();
 		return removed;

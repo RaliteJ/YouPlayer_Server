@@ -54,16 +54,22 @@ export function registerImportRoutes(app, {
 	app.post("/spotify_import_playlist", requireAuth, async (req, res) => {
 		try {
 			const { url, playlist } = req.body;
-			if (!url || !String(url).includes("open.spotify.com/playlist/")) {
+			let spotifyUrl;
+			try {
+				const parsed = new URL(url);
+				const match = /^\/playlist\/([A-Za-z0-9]{8,})\/?$/.exec(parsed.pathname);
+				if (parsed.protocol !== "https:" || parsed.hostname !== "open.spotify.com" || !match || parsed.username || parsed.password) throw new Error();
+				spotifyUrl = `https://open.spotify.com/playlist/${match[1]}`;
+			} catch {
 				return res.status(400).json({ error: "Lien de playlist Spotify invalide" });
 			}
 
-			const importedPlaylist = await importPlaylist(url);
+			const importedPlaylist = await importPlaylist(spotifyUrl);
 			const targetPlaylist = normalizePlaylistName(playlist || safePlaylistFileName(importedPlaylist.name));
 
 			await appendPlaylistItemsForRequest(req, targetPlaylist, importedPlaylist.tracks);
 			await recordAction(req, "playlist.spotify_import", "playlist", targetPlaylist, {
-				source: url,
+				source: spotifyUrl,
 				count: importedPlaylist.tracks.length
 			});
 			res.json({

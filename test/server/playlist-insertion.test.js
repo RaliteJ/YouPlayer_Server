@@ -5,6 +5,45 @@ import path from 'node:path';
 import os from 'node:os';
 import { FileYouplayerStore } from '../../src/server/stores/file-store.js';
 import { PostgresYouplayerStore } from '../../src/server/stores/postgres-store.js';
+import { trackLikeKey } from '../../src/client-utils.js';
+
+test('ordinary PostgreSQL user lookups leave historical Spotify credentials unread', async () => {
+    const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });
+    store.query = async sql => {
+        assert.doesNotMatch(sql, /yp_spotify_connections|access_token_encrypted|refresh_token_encrypted/);
+        return { rows: [{ id: 1, pseudo: 'listener', role: 'user', password_hash: 'synthetic-hash', auth_version: 0 }] };
+    };
+    for (const user of [await store.findUserByPseudo('listener'), await store.findUserById(1)]) {
+        assert.equal(user.pseudo, 'listener');
+        assert.equal(user.spotifyConnection, undefined);
+    }
+});
+
+test('PostgreSQL checks the expected track under the playlist lock before deleting', async () => {
+    const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });
+    const statements = [];
+    store.pool = { connect: async () => ({ release() {}, async query(sql) {
+        statements.push(sql);
+        if (sql.includes('SELECT id')) return { rowCount: 1, rows: [{ id: 1 }] };
+        if (sql.includes('SELECT data')) return { rows: [{ data: { type: 'youtube', id: 'new-track' } }] };
+        return { rows: [] };
+    } }) };
+    await assert.rejects(store.deletePlaylistItem('owner', 'mix', 0, trackLikeKey({ type: 'youtube', id: 'old-track' })), { statusCode: 409 });
+    assert.ok(statements[1].includes('FOR UPDATE'));
+    assert.equal(statements.some(sql => sql.includes('DELETE FROM yp_playlist_items')), false);
+    assert.equal(statements.at(-1), 'ROLLBACK');
+});
+
+test('PostgreSQL password resets increment the authentication version atomically', async () => {
+    const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });
+    store.findUserById = async () => ({ id: 'owner' });
+    store.query = async sql => {
+        assert.match(sql, /auth_version = auth_version \+ 1/);
+        assert.match(sql, /RETURNING .*auth_version/);
+        return { rows: [{ id: 'owner', auth_version: 3 }] };
+    };
+    assert.equal((await store.setUserPassword('owner', 'synthetic-password')).authVersion, 3);
+});
 
 test('PostgreSQL filters and paginates failure logs in the database', async () => {
     const store = new PostgresYouplayerStore({ connectionString: 'synthetic' });

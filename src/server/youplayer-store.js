@@ -11,9 +11,7 @@ export async function createYouplayerStore() {
 	const store = !useMemory && process.env.YOUPLAYER_STORE === "file"
 		? new FileYouplayerStore({ filePath: process.env.YOUPLAYER_DATA_FILE || "/var/lib/youplayer/store.json" })
 		: useMemory
-		? new MemoryYouplayerStore({
-			spotifyConnectionsFile: process.env.YOUPLAYER_SPOTIFY_CONNECTIONS_FILE || ""
-		})
+		? new MemoryYouplayerStore()
 		: new PostgresYouplayerStore({ connectionString: process.env.DATABASE_URL });
 
 	await store.init();

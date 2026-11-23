@@ -25,14 +25,15 @@ function harness({ apiKey = 'synthetic-key', fetchImpl } = {}) {
 			res.status(error.statusCode || status).json({ error: error.message || fallback });
 		}
 	});
-	return async arg => {
+	return async (arg, type) => {
 		const res = {
 			statusCode: 200,
 			status(code) { this.statusCode = code; return this; },
 			send(body) { this.body = body; return this; },
 			json(body) { this.body = body; return this; }
 		};
-		await handler({ body: { arg } }, res);
+		const body = type === undefined ? { arg } : { arg, type };
+		await handler({ body }, res);
 		return res;
 	};
 }
@@ -87,6 +88,45 @@ test('YouTube search handles absent items and malformed JSON through its error r
 	const invalid = await harness({ fetchImpl: async () => ({ ok: true, json: async () => { throw new Error('Synthetic JSON error'); } }) })('Synthetic');
 	assert.equal(invalid.statusCode, 500);
 	assert.equal(invalid.body.items, undefined);
+});
+
+test('YouTube search filters are strict and rejected before any network call', async () => {
+	for (const type of ['album', 'Video', 'videos', null, {}, ['video'], '']) {
+		const res = await harness()('Synthetic', type);
+		assert.equal(res.statusCode, 400, JSON.stringify(type));
+		assert.deepEqual(res.body, { error: 'Type de recherche YouTube invalide' });
+	}
+});
+
+test('targeted YouTube filters perform a single search with the right type', async () => {
+	for (const type of ['video', 'playlist', 'channel']) {
+		const requests = [];
+		const res = await harness({ fetchImpl: async url => {
+			requests.push(new URL(url));
+			return { ok: true, json: async () => ({ items: [{ id: { kind: 'youtube#' + type } }] }) };
+		} })('Synthetic', type);
+		assert.equal(res.statusCode, 200);
+		assert.equal(requests.length, 1, type);
+		assert.equal(requests[0].searchParams.get('type'), type);
+		assert.equal(requests[0].searchParams.get('maxResults'), '8');
+		assert.deepEqual(res.body.items, [{ id: { kind: 'youtube#' + type } }]);
+	}
+});
+
+test('an explicit all filter runs one combined search ranked by relevance', async () => {
+	const requests = [];
+	const channel = { id: { kind: 'youtube#channel', channelId: 'UC' + 'a'.repeat(22) } };
+	const video = { id: { kind: 'youtube#video', videoId: 'synthetic01' } };
+	const res = await harness({ fetchImpl: async url => {
+		requests.push(new URL(url));
+		return { ok: true, json: async () => ({ items: [video, channel] }) };
+	} })('Synthetic', 'all');
+	assert.equal(res.statusCode, 200);
+	assert.equal(requests.length, 1, 'one combined call for the same quota unit');
+	assert.equal(requests[0].searchParams.get('type'), 'video,playlist,channel');
+	assert.equal(requests[0].searchParams.get('maxResults'), '24');
+	assert.equal(requests[0].searchParams.get('q'), 'Synthetic');
+	assert.deepEqual(res.body.items, [video, channel]);
 });
 
 // SponsorBlock uses public hash buckets; no test contacts the external service.

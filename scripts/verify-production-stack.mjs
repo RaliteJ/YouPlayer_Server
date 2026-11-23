@@ -53,9 +53,9 @@ try {
   for (const d of ['playlists', 'local_song']) await fs.mkdir(path.join(folder, 'src', d), { recursive: true });
   const password = randomBytes(24).toString('hex');
   const env = { YOUPLAYER_ADMIN_PSEUDO: 'synthetic-admin', YOUPLAYER_ADMIN_PASSWORD: password,
-    YOUPLAYER_SESSION_SECRET: randomBytes(32).toString('hex'), YOUPLAYER_SPOTIFY_TOKEN_SECRET: randomBytes(32).toString('hex'),
-    YOUPLAYER_LOG_LEVEL: 'silent', YOUPLAYER_YOUTUBE_API_KEY: '', YOUPLAYER_SPOTIFY_WEB_USERNAME: '', YOUPLAYER_SPOTIFY_WEB_PASSWORD: '',
-    YOUPLAYER_SPOTIFY_CLIENT_ID: '', YOUPLAYER_SPOTIFY_CLIENT_SECRET: '', YOUPLAYER_SPOTIFY_REDIRECT_URI: '', YOUPLAYER_SPOTIFY_SCOPES: '' };
+    YOUPLAYER_SESSION_SECRET: randomBytes(32).toString('hex'),
+    YOUPLAYER_LOG_LEVEL: 'silent', YOUPLAYER_YOUTUBE_API_KEY: '',
+    YOUPLAYER_SPOTIFY_CLIENT_ID: '', YOUPLAYER_SPOTIFY_CLIENT_SECRET: '', YOUPLAYER_SPOTIFY_REDIRECT_URI: '' };
   await fs.writeFile(path.join(folder, '.env'), Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n'), { mode: 0o600 });
   const source = JSON.parse((await run('python3', ['-c', 'import yaml,json;print(json.dumps(yaml.safe_load(open("docker-compose.yml"))))'])).stdout);
   delete source.services.backend.build; delete source.services.frontend.build;

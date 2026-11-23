@@ -65,6 +65,7 @@ test('publicUser exposes only safe account fields and accepts postgres display_n
 		pseudo: 'user',
 		displayName: 'Display User',
 		role: 'admin',
+		authVersion: 0,
 		authLevel: 'local',
 		spotify: {
 			connected: false

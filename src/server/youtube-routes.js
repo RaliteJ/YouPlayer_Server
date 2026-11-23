@@ -1,6 +1,8 @@
 import { logger } from './logger.js';
 import { RequestValidationError, requireYoutubeApiKey } from './validation.js';
 
+const YOUTUBE_SEARCH_FILTERS = new Set(["all", "video", "playlist", "channel"]);
+
 export function registerYoutubeRoutes(app, {
 	requireAuth, sendJsonError, youtubeApiKey: API_KEY,
 	fetchImpl = (...args) => fetch(...args)
@@ -12,22 +14,41 @@ export function registerYoutubeRoutes(app, {
 			if (!query) {
 				return res.status(400).json({ error: "Recherche YouTube vide" });
 			}
+			// Optional strict filter, validated before any network call: absent
+			// keeps the exact legacy behaviour of two video+playlist searches.
+			const filter = req.body?.type;
+			if (filter !== undefined && !YOUTUBE_SEARCH_FILTERS.has(filter)) {
+				return res.status(400).json({ error: "Type de recherche YouTube invalide" });
+			}
 
 			logger.debug("Recherche Youtube:", query);
 			const baseUrl = "https://www.googleapis.com/youtube/v3/search";
-			const videoUrl = new URL(baseUrl);
-			videoUrl.searchParams.set("part", "snippet");
-			videoUrl.searchParams.set("type", "video");
-			videoUrl.searchParams.set("maxResults", "8");
-			videoUrl.searchParams.set("q", query);
-			videoUrl.searchParams.set("key", apiKey);
+			const searchUrl = (type, maxResults) => {
+				const url = new URL(baseUrl);
+				url.searchParams.set("part", "snippet");
+				url.searchParams.set("type", type);
+				url.searchParams.set("maxResults", String(maxResults));
+				url.searchParams.set("q", query);
+				url.searchParams.set("key", apiKey);
+				return url;
+			};
 
-			const playlistUrl = new URL(baseUrl);
-			playlistUrl.searchParams.set("part", "snippet");
-			playlistUrl.searchParams.set("type", "playlist");
-			playlistUrl.searchParams.set("maxResults", "8");
-			playlistUrl.searchParams.set("q", query);
-			playlistUrl.searchParams.set("key", apiKey);
+			if (filter !== undefined) {
+				// An explicit "all" performs a single combined request within
+				// the same quota unit; targeted filters stay one call each.
+				const targeted = filter === "all"
+					? { type: "video,playlist,channel", maxResults: 24 }
+					: { type: filter, maxResults: 8 };
+				const response = await fetchImpl(searchUrl(targeted.type, targeted.maxResults));
+				if (!response.ok) {
+					throw new RequestValidationError("Recherche YouTube impossible", 502);
+				}
+				const data = await response.json();
+				return res.status(200).send({ ...data, items: data.items || [] });
+			}
+
+			const videoUrl = searchUrl("video", 8);
+			const playlistUrl = searchUrl("playlist", 8);
 
 			const [videoResponse, playlistResponse] = await Promise.all([
 				fetchImpl(videoUrl),

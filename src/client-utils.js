@@ -124,3 +124,49 @@ export function trackLikeKey(track) {
     } catch {}
     return source ? `${track.type || 'youtube'}:${source}` : '';
 }
+
+// Manual source keys: a Spotify track is identified only by the exact id of
+// its canonical Spotify URL, never by a resolved YouTube id that may change.
+const SPOTIFY_TRACK_SOURCE_PATH = /^\/(?:intl-[a-z-]{2,7}\/)?track\/([A-Za-z0-9]{22})\/?$/;
+
+export function spotifyTrackIdForSource(track) {
+    if (!track || track.type !== 'spotify' || typeof track.url !== 'string') return null;
+    let url;
+    try {
+        url = new URL(track.url);
+    } catch {
+        return null;
+    }
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hostname !== 'open.spotify.com') {
+        return null;
+    }
+    const match = SPOTIFY_TRACK_SOURCE_PATH.exec(url.pathname);
+    return match ? match[1] : null;
+}
+
+const YOUTUBE_SOURCE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com']);
+const YOUTUBE_SOURCE_ID = /^[A-Za-z0-9_-]{11}$/;
+
+// Accepted manual sources: exact HTTPS YouTube or YouTube Music watch links,
+// or the short youtu.be form. Anything else is refused before any fetch.
+export function youtubeVideoIdForSource(value) {
+    if (typeof value !== 'string') return null;
+    const candidate = value.trim();
+    if (!candidate || candidate.length > 512) return null;
+    let url;
+    try {
+        url = new URL(candidate);
+    } catch {
+        return null;
+    }
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
+    if (url.hostname === 'youtu.be') {
+        const match = /^\/([A-Za-z0-9_-]{11})\/?$/.exec(url.pathname);
+        return match ? match[1] : null;
+    }
+    if (YOUTUBE_SOURCE_HOSTS.has(url.hostname) && url.pathname === '/watch') {
+        const id = url.searchParams.get('v') || '';
+        return YOUTUBE_SOURCE_ID.test(id) ? id : null;
+    }
+    return null;
+}

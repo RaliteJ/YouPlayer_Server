@@ -22,7 +22,13 @@ export function createSpotifyExplorer({
 	browserBridge = spotifyBrowserBridge
 }) {
 	const pageRoot = root.ownerDocument || root;
+	const androidClient = Boolean(pageRoot.defaultView?.YouPlayerAndroid || globalThis.window?.YouPlayerAndroid);
 	const state = {
+		accountId: getCurrentUser()?.id ?? null,
+		accountRevision: 0,
+		requestRevision: 0,
+		connectionRevision: 0,
+		pendingRequests: 0,
 		currentPlaylist: null,
 		currentCollectionType: null,
 		currentPlaylistTracks: [],
@@ -36,10 +42,18 @@ export function createSpotifyExplorer({
 		entities: new Map(),
 		initialized: false
 	};
+	function requestGuard(latest = false) {
+		const user = getCurrentUser()?.id ?? null;
+		const revision = state.accountRevision;
+		const request = latest ? ++state.requestRevision : state.requestRevision;
+		return () => revision === state.accountRevision && user === (getCurrentUser()?.id ?? null)
+			&& (!latest || request === state.requestRevision);
+	}
 
 	const els = {
 		searchForm: root.querySelector('[data-spotify-search-form]'),
 		searchInput: root.querySelector('[data-spotify-search-input]'),
+		searchFilter: root.querySelector('[data-spotify-search-filter]'),
 		playlistOpenForm: root.querySelector('[data-spotify-playlist-open-form]'),
 		playlistUrl: root.querySelector('[data-spotify-playlist-url]'),
 		targetPlaylist: root.querySelector('[data-spotify-target-playlist]'),
@@ -74,6 +88,8 @@ export function createSpotifyExplorer({
 	}
 
 	async function spotifyRequest(action, payload = {}) {
+		const isCurrent = requestGuard();
+		state.pendingRequests++;
 		setBusy(true);
 		try {
 			const response = await apiFetch("/spotify_test", "POST", { action, ...payload });
@@ -82,11 +98,13 @@ export function createSpotifyExplorer({
 			}
 			return response.data;
 		} finally {
-			setBusy(false);
+			if (isCurrent()) setBusy(--state.pendingRequests > 0);
 		}
 	}
 
 	async function browserSpotifyRequest(action, payload = {}) {
+		const isCurrent = requestGuard();
+		state.pendingRequests++;
 		setBusy(true);
 		try {
 			if (action === "search") return await browserBridge.search(payload.query, payload);
@@ -96,7 +114,7 @@ export function createSpotifyExplorer({
 			if (action === "playlist") return await browserBridge.getPlaylist(payload.id);
 			throw new Error("Action extension Spotify inconnue");
 		} finally {
-			setBusy(false);
+			if (isCurrent()) setBusy(--state.pendingRequests > 0);
 		}
 	}
 
@@ -275,7 +293,7 @@ export function createSpotifyExplorer({
 		`;
 	}
 
-	function renderSearch(data) {
+	function renderSearch(data, filter = "all") {
 		state.currentPlaylist = null;
 		state.currentCollectionType = null;
 		state.currentPlaylistTracks = [];
@@ -284,6 +302,27 @@ export function createSpotifyExplorer({
 		const playlists = (data.playlists?.items || []).filter(Boolean);
 		const albums = (data.albums?.items || []).filter(Boolean);
 		const artists = (data.artists?.items || []).filter(Boolean);
+
+		// A category view keeps the exact sections, rows and cards of the
+		// full rendering; only the displayed section changes.
+		const filterKey = ["tracks", "artists", "playlists"].includes(filter) ? filter : "all";
+		if (filterKey !== "all") {
+			const sections = {
+				tracks: tracks.length
+					? [renderSection("Titres", renderTrackRows(tracks), `${formatNumber(tracks.length)} titre(s)`)]
+					: ["<p class=\"muted\">Aucun titre ne correspond. Essaie « Tout » pour élargir la recherche.</p>"],
+				artists: artists.length
+					? [renderSection("Artistes", `<div class="spotify-entity-grid">${artists.map((item) => renderEntityCard("artist", item)).join("")}</div>`)]
+					: ["<p class=\"muted\">Aucun artiste ne correspond. Essaie « Tout » pour élargir la recherche.</p>"],
+				playlists: playlists.length
+					? [renderSection("Playlists", `<div class="spotify-entity-grid">${playlists.map((item) => renderEntityCard("playlist", item)).join("")}</div>`)]
+					: ["<p class=\"muted\">Aucune playlist ne correspond. Essaie « Tout » pour élargir la recherche.</p>"]
+			};
+			els.results.innerHTML = sections[filterKey].join("");
+			bindTrackRows();
+			return;
+		}
+
 		const topCards = [
 			...tracks.slice(0, 2).map((item) => ["track", item]),
 			...playlists.slice(0, 2).map((item) => ["playlist", item])
@@ -487,7 +526,7 @@ export function createSpotifyExplorer({
 	function updateAccountState() {
 		if (!els.meButton) return;
 		els.meButton.hidden = false;
-		els.meButton.title = state.browserBridgeStatus?.installed
+		els.meButton.title = androidClient ? 'Utilise ton compte Spotify dans cette application' : state.browserBridgeStatus?.installed
 			? "Utilise la session ouverte dans open.spotify.com"
 			: "Necessite l'extension YouPlayer Spotify Bridge";
 	}
@@ -495,17 +534,26 @@ export function createSpotifyExplorer({
 	function renderBrowserBridgeStatus(status = state.browserBridgeStatus) {
 		if (!els.browserPanel) return;
 		const ready = status?.installed && status?.tokenCaptured && status?.authenticated;
+		const unavailable = status?.unavailable === true;
+		const restoring = status?.restoring === true;
+		pageRoot.querySelectorAll?.('[data-spotify-extension-install]').forEach(element => { element.hidden = androidClient; });
 		els.browserPanel.classList.toggle("is-connected", Boolean(ready));
-		els.browserPanel.classList.toggle("is-disabled", !status?.installed);
+		els.browserPanel.classList.toggle("is-disabled", status?.installed === false);
 		if (els.browserTitle) {
-			els.browserTitle.textContent = ready
+			els.browserTitle.textContent = restoring ? 'Reconnexion Spotify en cours'
+				: unavailable ? 'Connexion Spotify indisponible'
+				: ready
 				? "WebPlayer Spotify connecte"
-				: status?.installed
+				: status?.installed || androidClient
 					? "Connecte-toi dans Spotify"
 					: "Installe l'extension YouPlayer";
 		}
 		if (els.browserCopy) {
-			els.browserCopy.textContent = ready
+			els.browserCopy.textContent = restoring ? 'Restauration de ta session locale. Patiente un instant puis réessaie.'
+				: unavailable ? 'La connexion ne répond pas pour le moment. Réessaie ; cela ne signifie pas que le Bridge est absent.'
+				: ready && androidClient ? 'Ton compte Spotify est prêt. Sa session reste uniquement dans cette application.'
+				: !ready && androidClient ? 'Connecte ton compte dans l’écran Spotify intégré. Aucune extension à installer.'
+				: ready
 				? "Recherches, albums et playlists utilisent ton compte Spotify dans ce navigateur. Le bearer ne quitte jamais l'extension."
 				: status?.anonymous
 					? "Spotify a fourni un jeton anonyme. Verifie que ton compte est connecte dans le WebPlayer, puis recharge Spotify."
@@ -516,7 +564,7 @@ export function createSpotifyExplorer({
 							: "Installe une extension compatible avec le pont YouPlayer, puis recharge cette page.";
 		}
 		if (els.browserStatus) {
-			els.browserStatus.textContent = ready
+			els.browserStatus.textContent = restoring ? 'Reconnexion…' : unavailable ? 'Indisponible' : ready
 				? "Pret"
 				: status?.anonymous
 					? "Anonyme"
@@ -525,23 +573,30 @@ export function createSpotifyExplorer({
 						: "Extension absente";
 		}
 		if (els.browserOpen) {
-			els.browserOpen.textContent = status?.installed ? "Ouvrir Spotify" : "Instructions";
+			els.browserOpen.textContent = unavailable ? 'Réessayer' : status?.installed || androidClient ? "Ouvrir Spotify" : "Instructions";
 		}
 	}
 
 	async function refreshBrowserBridgeStatus() {
+		const isCurrent = requestGuard();
+		const revision = ++state.connectionRevision;
+		let status;
 		try {
-			state.browserBridgeStatus = await browserBridge.status();
+			status = await browserBridge.status();
 		} catch {
-			state.browserBridgeStatus = { installed: false };
+			status = { installed: null, unavailable: true };
 		}
+		if (!isCurrent() || revision !== state.connectionRevision) return status;
+		state.browserBridgeStatus = status;
 		renderBrowserBridgeStatus();
 		updateAccountState();
 		return state.browserBridgeStatus;
 	}
 
 	async function loadExistingPlaylists() {
+		const isCurrent = requestGuard();
 		const playlists = await apiFetch("/playlist_summaries") || await apiFetch("/different_playlist");
+		if (!isCurrent()) return [];
 		const entries = playlistEntries(playlists || {}).filter(item => item.name !== LIKED_PLAYLIST);
 		const options = [`<option value="">Nouvelle playlist</option>`]
 			.concat(entries.map((playlist) =>
@@ -551,24 +606,29 @@ export function createSpotifyExplorer({
 		return playlists || {};
 	}
 
-	async function runSearch(query) {
+	async function runSearch(query, filter = "all") {
+		const isCurrent = requestGuard(true);
 		setStatus("Recherche...");
 		let data;
 		if (state.browserBridgeStatus?.authenticated && state.browserBridgeStatus?.tokenCaptured) {
 			try {
 				data = await browserSpotifyRequest("search", { query, limit: 16 });
+				if (!isCurrent()) return;
 				data = await completeArtistImages(data, "search", { query, limit: 16 });
 			} catch {
+				if (!isCurrent()) return;
 				data = await spotifyRequest("search", { query, limit: 16 });
 			}
 		} else {
 			data = await spotifyRequest("search", { query, limit: 16 });
 		}
-		renderSearch(data);
+		if (!isCurrent()) return;
+		renderSearch(data, filter);
 		setStatus("");
 	}
 
 	async function openPlaylist(idOrUrl) {
+		const isCurrent = requestGuard(true);
 		setStatus("Chargement de la playlist...");
 		const playlistId = String(idOrUrl || "").match(/[A-Za-z0-9]{10,64}/)?.[0] || "";
 		let data;
@@ -576,16 +636,19 @@ export function createSpotifyExplorer({
 			try {
 				data = await browserSpotifyRequest("playlist", { id: playlistId });
 			} catch {
+				if (!isCurrent()) return;
 				data = await spotifyRequest("playlist", { id: idOrUrl });
 			}
 		} else {
 			data = await spotifyRequest("playlist", { id: idOrUrl });
 		}
+		if (!isCurrent()) return;
 		renderPlaylist(data);
 		setStatus("");
 	}
 
 	async function openAlbum(id) {
+		const isCurrent = requestGuard(true);
 		setStatus("Chargement de l'album...");
 		const summary = state.entities.get(`album:${id}`) || {};
 		let album;
@@ -593,11 +656,13 @@ export function createSpotifyExplorer({
 			try {
 				album = await browserSpotifyRequest("album", { id });
 			} catch {
+				if (!isCurrent()) return;
 				album = await spotifyRequest("album", { id });
 			}
 		} else {
 			album = await spotifyRequest("album", { id });
 		}
+		if (!isCurrent()) return;
 		renderAlbum({
 			...summary,
 			...album,
@@ -609,20 +674,22 @@ export function createSpotifyExplorer({
 	}
 
 	async function openArtist(id) {
-		const userId = getCurrentUser()?.id;
+		const isCurrent = requestGuard(true);
 		setStatus("Chargement de l'artiste...");
 		let data;
 		if (state.browserBridgeStatus?.authenticated && state.browserBridgeStatus?.tokenCaptured) {
 			try {
 				data = await browserSpotifyRequest("artist", { id });
+				if (!isCurrent()) return;
 				data = await completeArtistImages(data, "artist", { id });
 			} catch {
+				if (!isCurrent()) return;
 				data = await spotifyRequest("artist", { id });
 			}
 		} else {
 			data = await spotifyRequest("artist", { id });
 		}
-		if (getCurrentUser()?.id !== userId) return;
+		if (!isCurrent()) return;
 		renderArtist(data);
 		setStatus("");
 	}
@@ -670,6 +737,7 @@ export function createSpotifyExplorer({
 	}
 
 	async function importCurrentPlaylist() {
+		const isCurrent = requestGuard();
 		const url = state.currentPlaylist?.external_urls?.spotify;
 		if (!url) return;
 
@@ -680,10 +748,12 @@ export function createSpotifyExplorer({
 			let targetPlaylist = els.targetPlaylist.value || state.currentPlaylist.name || "spotify-playlist";
 			let imported = 0;
 			for (let offset = 0; offset < tracks.length; offset += 50) {
+				if (!isCurrent()) return;
 				response = await apiFetch("/spotify_import_browser_playlist", "POST", {
 					playlist: targetPlaylist,
 					items: tracks.slice(offset, offset + 50)
 				});
+				if (!isCurrent()) return;
 				if (!response) break;
 				targetPlaylist = response.playlist;
 				imported += response.count;
@@ -698,6 +768,7 @@ export function createSpotifyExplorer({
 				url,
 				playlist: els.targetPlaylist.value || null
 			});
+			if (!isCurrent()) return;
 			if (!response) {
 				setStatus(apiErrorMessage("Import Spotify impossible"), true);
 				return;
@@ -709,8 +780,14 @@ export function createSpotifyExplorer({
 	}
 
 	async function loadMySpotifyPlaylists() {
+		const isCurrent = requestGuard(true);
 		setStatus("Chargement des playlists Spotify...");
 		const status = await refreshBrowserBridgeStatus();
+		if (!isCurrent()) return;
+		if (status.unavailable) {
+			setStatus('Connexion Spotify indisponible. Réessaie dans un instant.', true);
+			return;
+		}
 		if (!status.installed) {
 			setStatus("Installe le pont Spotify depuis les Paramètres pour retrouver tes playlists.", true);
 			return;
@@ -721,6 +798,7 @@ export function createSpotifyExplorer({
 			return;
 		}
 		const data = await browserSpotifyRequest("me_playlists");
+		if (!isCurrent()) return;
 		renderSpotifyUserPlaylists(data);
 	}
 
@@ -757,8 +835,9 @@ export function createSpotifyExplorer({
 			event.preventDefault();
 			const query = els.searchInput.value.trim();
 			if (!query) return;
+			const filter = els.searchFilter?.value || "all";
 			try {
-				await runSearch(query);
+				await runSearch(query, filter);
 			} catch (err) {
 				setStatus("Spotify est momentanément indisponible. Réessaie dans un instant.", true);
 			}
@@ -794,8 +873,11 @@ export function createSpotifyExplorer({
 
 		els.browserOpen?.addEventListener("click", async () => {
 			try {
-				if (!state.browserBridgeStatus?.installed) {
-					setStatus("Installe une extension compatible avec le pont YouPlayer", true);
+				if (state.browserBridgeStatus?.unavailable) await refreshBrowserBridgeStatus();
+				if (!state.browserBridgeStatus?.installed && !androidClient) {
+					setStatus(state.browserBridgeStatus?.unavailable
+						? 'Connexion Spotify indisponible. Réessaie dans un instant.'
+						: "Installe une extension compatible avec le pont YouPlayer", true);
 					return;
 				}
 				await browserBridge.openSpotify();
@@ -879,11 +961,34 @@ export function createSpotifyExplorer({
 	}
 
 	return {
+		reset() {
+			state.accountId = getCurrentUser()?.id ?? null;
+			state.accountRevision++;
+			state.requestRevision++;
+			state.connectionRevision++;
+			state.pendingRequests = 0;
+			state.currentPlaylist = null;
+			state.currentCollectionType = null;
+			state.currentPlaylistTracks = [];
+			state.currentPlaylistTotal = 0;
+			state.playlistNextOffset = null;
+			state.loadingPlaylistPage = false;
+			state.browserPlaylistIds.clear();
+			state.entities.clear();
+			state.browserBridgeStatus = null;
+			for (const element of [els.results, els.detailPanel, els.targetPlaylist]) {
+				if (element) element.innerHTML = '';
+			}
+			if (els.detailPanel) els.detailPanel.hidden = true;
+			setBusy(false);
+			setStatus('');
+			renderBrowserBridgeStatus();
+		},
 		async openTrackArtist(artist) {
 			this.init();
-			const userId = getCurrentUser()?.id;
+			const isCurrent = requestGuard(true);
 			await refreshBrowserBridgeStatus();
-			if (getCurrentUser()?.id !== userId) return;
+			if (!isCurrent()) return;
 			if (artist.id) return openArtist(artist.id);
 			let data;
 			let tracks;
@@ -891,9 +996,9 @@ export function createSpotifyExplorer({
 				const payload = { query, limit: 20 };
 				if (state.browserBridgeStatus?.authenticated && state.browserBridgeStatus?.tokenCaptured) {
 					try { data = await browserSpotifyRequest('search', payload); }
-					catch { data = await spotifyRequest('search', payload); }
+					catch { if (!isCurrent()) return; data = await spotifyRequest('search', payload); }
 				} else data = await spotifyRequest('search', payload);
-				if (getCurrentUser()?.id !== userId) return;
+				if (!isCurrent()) return;
 				tracks ||= data?.tracks?.items || [];
 				const match = matchSpotifyArtist(artist, tracks, data?.artists?.items || []);
 				if (match) return openArtist(match.id);
@@ -907,12 +1012,14 @@ export function createSpotifyExplorer({
 			bindEvents();
 
 			updateAccountState();
-			renderBrowserBridgeStatus({ installed: false });
+			renderBrowserBridgeStatus({ installed: androidClient ? true : null, restoring: androidClient });
 		},
 		async activate() {
 			this.init();
+			const isCurrent = requestGuard();
 			updateAccountState();
 			await loadExistingPlaylists();
+			if (!isCurrent()) return;
 			await refreshBrowserBridgeStatus();
 		},
 		async refreshConnection() {
@@ -920,6 +1027,7 @@ export function createSpotifyExplorer({
 			await refreshBrowserBridgeStatus();
 		},
 		refreshAccountState() {
+			if (state.accountId !== (getCurrentUser()?.id ?? null)) this.reset();
 			updateAccountState();
 		}
 	};

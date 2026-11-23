@@ -398,6 +398,42 @@ test('an automatically skipped broken audio file appears on the admin unplayable
     }
 });
 
+test('settings offer Firefox and a downloadable Chrome extension with installation steps', { timeout: 20000 }, async () => {
+    if (browserSetupError) throw browserSetupError;
+    const context = await browser.createBrowserContext();
+    const page = await context.newPage();
+    await app.locals.youplayerStore.createUser({ pseudo: 'browser-extension-download', password: 'password123' });
+    try {
+        await page.goto(baseUrl);
+        await page.evaluate(async () => {
+            const response = await fetch('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pseudo: 'browser-extension-download', password: 'password123' }) });
+            if (!response.ok) throw new Error('Fixture login failed');
+        });
+        await page.reload({ waitUntil: 'networkidle0' });
+        await page.click('.nav-link[data-view="parametres"]');
+        const panel = '#spotify-settings-panel';
+        assert.equal(await page.$eval(`${panel} a[target="_blank"]`, link => link.href),
+            'https://addons.mozilla.org/fr/firefox/addon/youplayer-spotify-bridge/');
+        await page.click(`${panel} summary`);
+        assert.match(await page.$eval(`${panel} details`, el => el.textContent), /chrome:\/\/extensions/);
+        assert.match(await page.$eval(`${panel} ol`, el => el.textContent), /glisse le ZIP/);
+        assert.match(await page.$eval(`${panel} details`, el => el.textContent), /Si le glisser-déposer ne fonctionne pas/);
+        for (const width of [320, 390, 768, 1280]) {
+            await page.setViewport({ width, height: 900 });
+            assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `settings fit at ${width}px`);
+        }
+        const downloaded = await page.$eval(`${panel} a[download]`, async link => {
+            const response = await fetch(link.href);
+            if (!response.ok) throw new Error(`Extension download failed: ${response.status}`);
+            return [...new Uint8Array(await response.arrayBuffer())];
+        });
+        assert.deepEqual(Buffer.from(downloaded), await readFile(new URL('../src/downloads/youplayer-spotify-bridge-chromium.zip', import.meta.url)));
+    } finally {
+        await context.close();
+    }
+});
+
 test('settings playlist file export and import round trip through the real user interface', { timeout: 30000 }, async t => {
     if (browserSetupError) throw browserSetupError;
     const context = await browser.createBrowserContext();
@@ -670,7 +706,40 @@ test('expanded player synchronizes shuffle and repeats audio until disabled', { 
 			App.updatePlaybackUi({ currentId: 0, current: { title: 'Test audio' }, queue: [], random: false });
 			window.nextCalls = 0;
 			App.nextSong = async () => { window.nextCalls++; };
+			window.miniPrevCalls = 0;
+			window.miniNextCalls = 0;
+			window.realAdvance = App.advanceToNextSong;
+			App.previousTrack = async () => { window.miniPrevCalls++; };
+			App.advanceToNextSong = async () => { window.miniNextCalls++; };
 		});
+		for (const width of [320, 390]) {
+			await page.setViewport({ width, height: 844 });
+			assert.equal(await page.evaluate(() => {
+				const bar = document.querySelector('.player-controls');
+				return document.documentElement.scrollWidth <= innerWidth
+					&& bar.scrollWidth <= bar.clientWidth
+					&& ['miniShuffle', 'miniPrev', 'miniPlayPause', 'miniNext'].every(id => {
+						const rect = document.getElementById(id).getBoundingClientRect();
+						return rect.width > 0 && rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight;
+					});
+			}), true, `Mini controls fit on a single line at ${width}px`);
+		}
+		await page.click('#miniNext');
+		await page.click('#miniPrev');
+		assert.deepEqual(await page.evaluate(() => ({
+			next: window.miniNextCalls,
+			prev: window.miniPrevCalls,
+			overlayHidden: document.getElementById('now-playing-overlay').hidden
+		})), { next: 1, prev: 1, overlayHidden: true }, 'mini skips reach the callbacks without opening the player');
+		await page.evaluate(() => { window.fixtureApp.advanceToNextSong = window.realAdvance; });
+		await page.evaluate(() => { window.shuffleFailure = true; });
+		await page.click('#miniShuffle');
+		assert.deepEqual(await page.evaluate(() => ({
+			pressed: document.getElementById('miniShuffle').getAttribute('aria-pressed'),
+			request: window.shuffleRequest
+		})), { pressed: 'false', request: { method: 'POST', enabled: true } },
+			'a failed mini shuffle request keeps the last server state');
+		await page.evaluate(() => { window.shuffleFailure = false; });
 		await page.click('#miniPlayerOpen');
 		for (const width of [320, 390, 1280]) {
 			await page.setViewport({ width, height: 844 });
@@ -688,6 +757,7 @@ test('expanded player synchronizes shuffle and repeats audio until disabled', { 
 			checked: document.getElementById('shuffle-mode').checked,
 			pressed: document.getElementById('overlayShuffle').getAttribute('aria-pressed')
 		})), { request: { method: 'POST', enabled: true }, checked: true, pressed: 'true' });
+		assert.equal(await page.$eval('#miniShuffle', el => el.getAttribute('aria-pressed')), 'true', 'the mini shuffle mirrors the expanded player');
 		await page.evaluate(() => { window.shuffleFailure = true; });
 		await page.click('#overlayShuffle');
 		assert.equal(await page.$eval('#overlayShuffle', el => el.getAttribute('aria-pressed')), 'true');
@@ -865,6 +935,8 @@ test('controlled playback persists per account and plays complete Spotify playli
 			assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `settings fit at ${width}px`);
 		}
 		await page.evaluate(() => document.querySelectorAll('.view').forEach(view => view.classList.toggle('active', view.id === 'view-add_spotify')));
+		await page.evaluate(() => document.querySelector('[data-spotify-playlist-open-form]').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+		await page.waitForSelector('.spotify-track-row[data-collection-index="7"]');
 		await page.$eval('.spotify-track-row[data-collection-index="7"]', row => row.click());
 		await page.waitForFunction(() => window.controlledStarts.length === 2);
 		requests = await page.evaluate(() => window.controlledRequests);

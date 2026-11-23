@@ -6,11 +6,14 @@ import {
 	gestion_ecoute,
 	getUpcomingQueue,
 	getPlaybackCacheEvictions,
+	insertListenNextTrack,
 	listen_after,
 	playbackState,
+	preserveListenNextOrder,
+	preloadUpcomingSongs,
+	refreshListenNextRange,
 	rememberCurrentTrack,
 	takePreviousTrack,
-	preloadUpcomingSongs,
 	removeSongFromSessionQueue,
 	sessionTrackKey,
 	shuffleArray,
@@ -283,4 +286,174 @@ test('stable selections keep playback IDs and deletion cannot shift another play
 	assert.deepEqual(req.session.list_order, []);
 	const reordered = stablePlaylistTracks([a, b], [b, a]);
 	assert.deepEqual(reordered.filter(item => !item.__retained).sort((x, y) => x.__selectionIndex - y.__selectionIndex).map(item => item.title), ['B', 'A']);
+});
+
+test('consecutive listen-next insertions play in arrival order before the normal queue', () => {
+	const session = {
+		items: [track('A', 'mix.json', 0), track('B', 'mix.json', 1), track('C', 'mix.json', 2), track('D', 'mix.json', 3)],
+		list_order: [3],
+		ecoute_actuelle: 0,
+		playback_history: [],
+		queue_initialized: true
+	};
+	const req = { session };
+	insertListenNextTrack(req, 1);
+	assert.deepEqual(session.list_order, [3, 1]);
+	assert.deepEqual(session.listen_next_range, { start: 1, count: 1 });
+	insertListenNextTrack(req, 2);
+	assert.deepEqual(session.list_order, [3, 2, 1]);
+	assert.deepEqual(session.listen_next_range, { start: 1, count: 2 });
+	assert.deepEqual(getUpcomingQueue(req).map(item => item.title), ['B', 'C', 'D']);
+	assert.equal(gestion_ecoute(req), 1);
+	assert.equal(gestion_ecoute(req), 2);
+	assert.equal(gestion_ecoute(req), 3);
+	assert.equal(session.listen_next_range, null);
+	assert.deepEqual(session.list_order, []);
+});
+
+test('listen-next occurrences are tracked by position, not by track id', () => {
+	const session = {
+		items: [track('A', 'mix.json', 0), track('D', 'mix.json', 1), track('B', 'mix.json', 2)],
+		list_order: [1],
+		queue_initialized: true
+	};
+	const req = { session };
+	insertListenNextTrack(req, 2);
+	assert.deepEqual(session.list_order, [1, 2]);
+	insertListenNextTrack(req, 2);
+	assert.deepEqual(session.list_order, [1, 2, 2]);
+	assert.deepEqual(session.listen_next_range, { start: 1, count: 2 });
+	assert.equal(gestion_ecoute(req), 2);
+	assert.deepEqual(session.listen_next_range, { start: 1, count: 1 });
+	assert.equal(gestion_ecoute(req), 2);
+	assert.equal(session.listen_next_range, null);
+	// The normal occurrence of the same track is untouched and still queued.
+	assert.deepEqual(session.list_order, [1]);
+	assert.equal(gestion_ecoute(req), 1);
+});
+
+test('a plain push stays ahead of pending listen-next occurrences without consuming the range', () => {
+	const session = {
+		items: [track('A', 'mix.json', 0), track('B', 'mix.json', 1), track('C', 'mix.json', 2), track('D', 'mix.json', 3)],
+		list_order: [3],
+		queue_initialized: true
+	};
+	const req = { session };
+	insertListenNextTrack(req, 1);
+	// "Lire maintenant" and the previous-song requeue keep the immediate slot.
+	req.session.list_order.push(2);
+	assert.deepEqual(session.list_order, [3, 1, 2]);
+	assert.equal(gestion_ecoute(req), 2);
+	assert.deepEqual(session.listen_next_range, { start: 1, count: 1 });
+	assert.equal(gestion_ecoute(req), 1);
+	assert.equal(session.listen_next_range, null);
+	assert.equal(gestion_ecoute(req), 3);
+	assert.deepEqual(session.list_order, []);
+});
+
+test('syncSessionQueue remaps listen-next positions and shifts the range for prepended tracks', () => {
+	const previous = [track('A', 'mix.json', 1), track('B', 'mix.json', 2), track('C', 'mix.json', 3)];
+	const session = {
+		items: previous,
+		list_order: [0, 2, 1],
+		listen_next_range: { start: 1, count: 2 },
+		ecoute_actuelle: 0,
+		playback_history: [],
+		queue_initialized: true,
+		random: false
+	};
+	const req = { session };
+	const tracks = [track('New', 'mix.json', 0), { ...previous[0] }, { ...previous[1] }, { ...previous[2] }];
+	syncSessionQueue(req, tracks);
+	assert.equal(session.ecoute_actuelle, 1);
+	assert.deepEqual(session.list_order, [0, 1, 3, 2]);
+	assert.deepEqual(session.listen_next_range, { start: 2, count: 2 });
+	assert.equal(gestion_ecoute(req), 2);
+	assert.equal(gestion_ecoute(req), 3);
+	assert.equal(gestion_ecoute(req), 1);
+	assert.equal(gestion_ecoute(req), 0);
+});
+
+test('dropped entries update the pending range by occurrence', () => {
+	const session = {
+		items: [track('A', 'mix.json', 0), track('B', 'mix.json', 1), track('C', 'mix.json', 2), track('D', 'mix.json', 3)],
+		list_order: [],
+		queue_initialized: true
+	};
+	const req = { session };
+	insertListenNextTrack(req, 2);
+	insertListenNextTrack(req, 1);
+	insertListenNextTrack(req, 2);
+	assert.deepEqual(session.list_order, [2, 1, 2]);
+	assert.deepEqual(session.listen_next_range, { start: 0, count: 3 });
+	refreshListenNextRange(req, id => id !== 2);
+	session.list_order = session.list_order.filter(id => id !== 2);
+	assert.deepEqual(session.list_order, [1]);
+	assert.deepEqual(session.listen_next_range, { start: 0, count: 1 });
+	assert.equal(gestion_ecoute(req), 1);
+	assert.equal(session.listen_next_range, null);
+});
+
+test('removeSongFromSessionQueue updates the pending range for stable and shifting indices', () => {
+	const items = [track('A', 'mix.json', 0), track('B', 'mix.json', 1), track('C', 'mix.json', 2)];
+	const stable = { session: {
+		items: [...items],
+		list_order: [0, 2, 1],
+		listen_next_range: { start: 1, count: 2 },
+		ecoute_actuelle: 0,
+		playback_history: [],
+		queue_initialized: true,
+		stable_playlist_indices: true
+	} };
+	removeSongFromSessionQueue(stable, 'mix.json', 1);
+	assert.deepEqual(stable.session.list_order, [0, 2]);
+	assert.deepEqual(stable.session.listen_next_range, { start: 1, count: 1 });
+
+	const shifting = { session: {
+		items: [...items],
+		list_order: [0, 2, 1],
+		listen_next_range: { start: 1, count: 2 },
+		ecoute_actuelle: 0,
+		playback_history: [],
+		queue_initialized: true,
+		stable_playlist_indices: false
+	} };
+	removeSongFromSessionQueue(shifting, 'mix.json', 1);
+	assert.deepEqual(shifting.session.items.map(item => item.title), ['A', 'C']);
+	assert.deepEqual(shifting.session.list_order, [0, 1]);
+	assert.deepEqual(shifting.session.listen_next_range, { start: 1, count: 1 });
+	assert.equal(gestion_ecoute(shifting), 1);
+	assert.equal(gestion_ecoute(shifting), 0);
+});
+
+test('reordering the normal queue keeps the listen-next block on top of the upcoming list', () => {
+	const session = {
+		items: [track('A', 'mix.json', 0), track('B', 'mix.json', 1), track('C', 'mix.json', 2), track('D', 'mix.json', 3), track('E', 'mix.json', 4)],
+		list_order: [4, 3, 2, 0, 1],
+		listen_next_range: { start: 1, count: 2 },
+		ecoute_actuelle: null,
+		playback_history: [],
+		queue_initialized: true,
+		random: true
+	};
+	const req = { session };
+	preserveListenNextOrder(req, rest => rest.toSorted((a, b) => b - a));
+	assert.deepEqual(session.list_order, [4, 1, 0, 3, 2]);
+	assert.deepEqual(session.listen_next_range, { start: 3, count: 2 });
+	assert.equal(gestion_ecoute(req), 2);
+	assert.equal(gestion_ecoute(req), 3);
+	assert.deepEqual(getUpcomingQueue(req).map(item => item.title), ['A', 'B', 'E']);
+});
+
+test('rebuilding the initial queue clears pending listen-next positions', () => {
+	const session = {
+		items: [track('A', 'mix.json', 0), track('B', 'mix.json', 1)],
+		list_order: [],
+		listen_next_range: { start: 0, count: 2 },
+		queue_initialized: false,
+		random: false
+	};
+	syncSessionQueue({ session }, session.items);
+	assert.deepEqual(session.list_order, [1, 0]);
+	assert.equal(session.listen_next_range, null);
 });

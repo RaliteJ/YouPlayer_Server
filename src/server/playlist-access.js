@@ -9,6 +9,12 @@ import { RequestValidationError } from './validation.js';
 
 export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLISTS_DIR }) {
 	const playlistPath = name => filePath(name, playlistsDir);
+	let localWrite = Promise.resolve();
+	function mutateLocal(task) {
+		const operation = localWrite.then(task);
+		localWrite = operation.catch(() => {});
+		return operation;
+	}
 	async function playlistFilesForRequest(req) {
 		if (authEnabled) {
 			return store.listPlaylistFiles(req.session.userId);
@@ -41,6 +47,7 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 		if (authEnabled) {
 			return store.appendPlaylistItems(req.session.userId, playlist, items);
 		}
+		return mutateLocal(async () => {
 		const filePath = playlistPath(playlist);
 		if (!fs.existsSync(filePath)) {
 			await fs_promises.writeFile(filePath, JSON.stringify({ items: [] }, null, 2), "utf8");
@@ -50,6 +57,7 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 			playlist,
 			added: Array.isArray(items) ? items.length : 1
 		};
+		});
 	}
 
 	async function renamePlaylistForRequest(req, playlist, title) {
@@ -59,6 +67,7 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 		if (authEnabled) {
 			if (!await store.setPlaylistTitle(req.session.userId, playlist, title)) throw new RequestValidationError('Playlist introuvable', 404);
 		} else {
+			await mutateLocal(async () => {
 			const target = playlistPath(playlist);
 			let data;
 			try { data = JSON.parse(await fs_promises.readFile(target, 'utf8')); }
@@ -69,6 +78,7 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 			data.title = title;
 			data.updatedAt = new Date().toISOString();
 			await fs_promises.writeFile(target, JSON.stringify(data, null, 2), 'utf8');
+			});
 		}
 		return { name: playlist, title };
 	}
@@ -78,16 +88,19 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 		if (authEnabled) {
 			return store.deletePlaylist(req.session.userId, playlist);
 		}
+		return mutateLocal(async () => {
 		await fs_promises.rm(playlistPath(playlist), { force: true });
 		return true;
+		});
 	}
 
-	async function deletePlaylistItemForRequest(req, playlist, index) {
+	async function deletePlaylistItemForRequest(req, playlist, index, expectedKey) {
 		if (normalizePlaylistName(playlist) === LIKED_PLAYLIST) throw new RequestValidationError('Utilise le bouton cœur pour modifier cette playlist', 400);
 		if (authEnabled) {
-			return store.deletePlaylistItem(req.session.userId, playlist, index);
+			return store.deletePlaylistItem(req.session.userId, playlist, index, expectedKey);
 		}
 
+		return mutateLocal(async () => {
 		const filePath = playlistPath(playlist);
 		const txt = await fs_promises.readFile(filePath, "utf8");
 		const obj = JSON.parse(txt);
@@ -95,10 +108,14 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 			return null;
 		}
 
+		if (expectedKey !== undefined && expectedKey !== trackLikeKey(obj.items[index])) {
+			throw new RequestValidationError('Le morceau a changé', 409);
+		}
 		const removed = obj.items.splice(index, 1)[0];
 		obj.updatedAt = new Date().toISOString();
 		await fs_promises.writeFile(filePath, JSON.stringify(obj, null, 2), "utf8");
 		return removed;
+		});
 	}
 
 	async function playlistTracksForRequest(req, playlist) {
@@ -112,18 +129,15 @@ export function createPlaylistAccess({ authEnabled, store, playlistsDir = PLAYLI
 	}
 
 	// Serialize local read/modify/write operations; a failed write must not block the next one.
-	let localLikeWrite = Promise.resolve();
 	async function setTrackLikedForRequest(req, track, liked) {
 		if (authEnabled) return store.setTrackLiked(req.session.userId, track, liked);
-		const operation = localLikeWrite.then(async () => {
+		return mutateLocal(async () => {
 			const value = updateLikedTracks(await playlistItemsForRequest(req, LIKED_PLAYLIST), track, liked);
 			const target = playlistPath(LIKED_PLAYLIST);
 			await fs_promises.writeFile(target + '.tmp', JSON.stringify({ items: value }), { mode: 0o600 });
 			await fs_promises.rename(target + '.tmp', target);
 			return value;
 		});
-		localLikeWrite = operation.catch(() => {});
-		return operation;
 	}
 	return { playlistFilesForRequest, playlistSummariesForRequest, playlistItemsForRequest,
 		appendPlaylistItemsForRequest, deletePlaylistForRequest, deletePlaylistItemForRequest,

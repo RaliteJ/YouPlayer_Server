@@ -1,4 +1,4 @@
-import { LIKED_PLAYLIST, publicErrorMessage, trackLikeKey } from './client-utils.js';
+import { LIKED_PLAYLIST, publicErrorMessage, trackLikeKey, spotifyTrackIdForSource, youtubeVideoIdForSource } from './client-utils.js';
 import { artistLinksMarkup } from './artist-view.js';
 
 export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => fetch(...args) }) {
@@ -16,6 +16,7 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
     openSongActionMenu(button, songData, { previewPlaylist = null, discovered = false, onPlay = null } = {}) {
         this.closeSongActionMenu();
 
+        const manualSourceId = this.currentUser?.role === 'user' ? spotifyTrackIdForSource(songData) : null;
         const menu = document.createElement('div');
         menu.className = 'song-action-menu';
         menu.innerHTML = `
@@ -23,6 +24,7 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
             <button type="button" data-action="next">Lire ensuite</button>
             <button type="button" data-action="add">Ajouter à une playlist</button>
             ${discovered && songData.type === 'spotify' ? '<button type="button" data-action="open">Ouvrir dans Spotify</button>' : ''}
+            ${manualSourceId ? '<button type="button" data-action="source">Changer la source</button>' : ''}
             ${!discovered && (previewPlaylist || !songData.__queueId) ? '<button type="button" data-action="delete" class="danger">Supprimer</button>' : ''}
         `;
 
@@ -45,6 +47,10 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
                 this.closeSongActionMenu();
                 this.openAddModal(songData);
             }
+            if (action === 'source') {
+                this.closeSongActionMenu();
+                this.openSourceDialog(songData, manualSourceId);
+            }
             if (action === 'delete') {
                 this.closeSongActionMenu();
                 if (previewPlaylist) await this.deletePreviewSong(previewPlaylist, songData);
@@ -62,6 +68,133 @@ export function createDiscoveryView({ apiUrl: API_URL, fetchImpl = (...args) => 
         menu.anchor = button;
         this.songActionMenu = menu;
         menu.querySelector('button')?.focus();
+    },
+
+    closeSourceDialog() {
+        const dialog = this.sourceDialog;
+        if (!dialog) return;
+        // Any in-flight callback becomes inert; the native close is never blocked.
+        this.sourceDialogState = null;
+        if (dialog.open) dialog.close();
+    },
+
+    setSourceDialogStatus(message = '') {
+        const status = this.sourceDialog?.querySelector('[data-source-status]');
+        if (status) status.textContent = message;
+    },
+
+    sourceOperationValid(state) {
+        const dialog = this.sourceDialog;
+        return Boolean(dialog?.open
+            && state
+            && this.sourceDialogState === state
+            && state.userId != null
+            && this.currentUser?.id === state.userId);
+    },
+
+    async openSourceDialog(songData, trackId) {
+        this.closeSourceDialog();
+        const dialog = document.getElementById('source-dialog');
+        if (!dialog) return;
+        this.sourceDialog = dialog;
+        const state = { trackId, userId: this.currentUser?.id ?? null };
+        this.sourceDialogState = state;
+        const name = dialog.querySelector('[data-source-track-name]');
+        if (name) name.textContent = songData?.title || songData?.name || 'Morceau Spotify';
+        const input = dialog.querySelector('#source-url-input');
+        if (input) input.value = '';
+        dialog.querySelector('[data-source-reset]').hidden = true;
+        const test = dialog.querySelector('[data-source-test]');
+        if (test) test.setAttribute('href', '#');
+        this.setSourceDialogStatus('Chargement de la source actuelle…');
+        this.bindSourceDialog(dialog);
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
+        state.pending = 'load';
+        const stored = await this.apiFetch(`/playback/source/${encodeURIComponent(trackId)}`);
+        state.pending = null;
+        if (!this.sourceOperationValid(state)) return;
+        if (stored === null) {
+            this.setSourceDialogStatus('Source actuelle indisponible. Réessaie dans un instant.');
+            return;
+        }
+        if (stored.url) {
+            if (input) input.value = stored.url;
+            dialog.querySelector('[data-source-reset]').hidden = false;
+            this.setSourceDialogStatus('Une source manuelle est enregistrée pour ce morceau.');
+        } else {
+            this.setSourceDialogStatus('Recherche automatique active pour ce morceau.');
+        }
+    },
+
+    bindSourceDialog(dialog) {
+        if (dialog.dataset.sourceBound === '1') return;
+        dialog.dataset.sourceBound = '1';
+        const input = dialog.querySelector('#source-url-input');
+        const resetButton = dialog.querySelector('[data-source-reset]');
+
+        dialog.querySelector('[data-source-test]').addEventListener('click', event => {
+            const videoId = youtubeVideoIdForSource(input?.value);
+            if (!videoId) {
+                event.preventDefault();
+                this.setSourceDialogStatus('Colle un lien YouTube ou YouTube Music exact (watch?v=… ou youtu.be/…).');
+                return;
+            }
+            // Only the canonical YouTube page opens in a new tab: nothing is
+            // saved and no YouPlayer playback is touched.
+            event.currentTarget.setAttribute('href', `https://www.youtube.com/watch?v=${videoId}`);
+        });
+
+        dialog.querySelector('[data-source-save]').addEventListener('click', async () => {
+            const state = this.sourceDialogState;
+            if (!this.sourceOperationValid(state) || state.pending) return;
+            const videoId = youtubeVideoIdForSource(input?.value);
+            if (!videoId) {
+                this.setSourceDialogStatus('Lien invalide : utilise un lien YouTube ou YouTube Music exact.');
+                return;
+            }
+            this.setSourceDialogStatus('Enregistrement…');
+            state.pending = 'save';
+            const response = await this.apiFetch(`/playback/source/${encodeURIComponent(state.trackId)}`, 'PUT', {
+                url: input.value.trim()
+            });
+            state.pending = null;
+            if (!this.sourceOperationValid(state)) return;
+            if (!response) {
+                this.setSourceDialogStatus('Enregistrement impossible. Réessaie dans un instant.');
+                return;
+            }
+            input.value = response.url;
+            resetButton.hidden = false;
+            this.setSourceDialogStatus('Source manuelle enregistrée pour ce morceau.');
+            this.clearNextTrackPrefetch();
+            void this.refreshPlaybackState();
+        });
+
+        resetButton.addEventListener('click', async () => {
+            const state = this.sourceDialogState;
+            if (!this.sourceOperationValid(state) || state.pending) return;
+            this.setSourceDialogStatus('Rétablissement…');
+            state.pending = 'reset';
+            const response = await this.apiFetch(`/playback/source/${encodeURIComponent(state.trackId)}`, 'DELETE', {});
+            state.pending = null;
+            if (!this.sourceOperationValid(state)) return;
+            if (!response) {
+                this.setSourceDialogStatus('Rétablissement impossible. Réessaie dans un instant.');
+                return;
+            }
+            input.value = '';
+            resetButton.hidden = true;
+            this.setSourceDialogStatus('Recherche automatique rétablie pour ce morceau.');
+            this.clearNextTrackPrefetch();
+            void this.refreshPlaybackState();
+        });
+
+        dialog.addEventListener('close', () => {
+            // In-flight callbacks become inert, but a dialog already reopened
+            // keeps its fresh state: only a really closed one lets it go.
+            if (!dialog.open) this.sourceDialogState = null;
+        });
     },
 
     closeSpotifyActionMenu() {
@@ -396,20 +529,42 @@ async confirmAddSong(playlistName) {
     async searchYoutube() {
         const query = document.getElementById('query_yt').value.trim();
         if (!query) return;
+        const filter = document.getElementById('youtube-search-filter')?.value || 'all';
 
         this.ytResults.innerHTML = '<p class="youtube-empty">Recherche en cours…</p>';
-        const data = await this.apiFetch('/send_search_youtube', 'POST', { arg: query });
+        const data = await this.apiFetch('/send_search_youtube', 'POST', { arg: query, type: filter });
         if (!data) {
             this.ytResults.innerHTML = '<p class="youtube-empty">La recherche a échoué. Réessaie dans un instant.</p>';
             return;
         }
 
-        const items = Array.isArray(data?.items) ? data.items : [];
+        const channelIdPattern = /^UC[\w-]{22}$/;
+        // Ignore null or incomplete entries once: both the rendering and the
+        // card bindings below work on the verified source list only.
+        const items = (Array.isArray(data?.items) ? data.items : [])
+            .filter(item => item?.id && item?.snippet);
         this.ytResults.innerHTML = items.map(item => {
-            const isPlaylist = item.id.kind === 'youtube#playlist';
-            const id = isPlaylist ? item.id.playlistId : item.id.videoId;
-            const thumbnail = item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url || '';
+            const kind = item.id?.kind;
+            const isPlaylist = kind === 'youtube#playlist';
+            const isChannel = kind === 'youtube#channel';
+            // Only a validated channel id produces a link; anything malformed
+            // is skipped rather than rendering an undefined card.
+            const channelId = isChannel ? (item.id.channelId || '') : '';
+            const id = isPlaylist ? item.id.playlistId : isChannel ? channelId : item.id?.videoId;
+            if (!id || (isChannel && !channelIdPattern.test(channelId))) return '';
+            const thumbnail = item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || '';
             const title = this.escapeHtml(item.snippet.title);
+
+            if (isChannel) {
+                return `
+                    <div class="video-card channel-result-card" data-id="${this.escapeHtml(channelId)}" data-kind="channel">
+                        <img src="${this.escapeHtml(thumbnail)}" alt="" loading="lazy">
+                        <span class="result-badge">Chaîne</span>
+                        <div class="youtube-card-copy"><p>${title}</p><span class="youtube-channel">${this.escapeHtml(item.snippet.channelTitle || 'YouTube')}</span></div>
+                        <a class="btn-small youtube-channel-link" href="https://www.youtube.com/channel/${channelId}" target="_blank" rel="noopener noreferrer">Ouvrir la chaîne</a>
+                    </div>
+                `;
+            }
 
             return `
                 <div class="video-card ${isPlaylist ? 'playlist-result-card' : ''}" data-id="${this.escapeHtml(id)}" data-kind="${isPlaylist ? 'playlist' : 'video'}">
@@ -422,7 +577,7 @@ async confirmAddSong(playlistName) {
         }).join('') || '<div class="youtube-empty"><h2>Aucun résultat</h2><p>Essaie un autre titre ou le nom de l’artiste.</p></div>';
 
         this.ytResults.querySelectorAll('.video-card').forEach(card => {
-            if (card.dataset.kind === 'playlist') return;
+            if (card.dataset.kind !== 'video') return;
             const result = items.find(item => item.id.videoId === card.dataset.id);
             const song = {
                 title: result?.snippet?.title || card.querySelector('p').innerText,

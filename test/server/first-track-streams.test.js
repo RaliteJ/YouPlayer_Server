@@ -252,6 +252,36 @@ test("yt-dlp and ffmpeg process errors invalidate the stream", async (t) => {
 	}
 });
 
+test('concurrent opens reserve the stream before source resolution', async () => {
+    let resolve;
+    const source = new Promise(done => { resolve = done; });
+    const { manager, children } = createHarness(() => source);
+    const owner = { userId: 'user-a', sessionId: 'concurrent' };
+    const stream = manager.createStream({ owner, track: { id: 'fixture' } });
+    try {
+        const opening = manager.openStream(stream.id, owner, new PassThrough());
+        await assert.rejects(manager.openStream(stream.id, owner, new PassThrough()), { statusCode: 409 });
+        resolve('youtube-id');
+        await opening;
+        assert.equal(children.length, 2);
+    } finally { manager.stopAll(); }
+});
+
+test('startup deadline protects opened streams until the first audio byte', async () => {
+    for (const produceAudio of [false, true]) {
+        const { manager, children } = createHarness(async () => 'youtube-id', { startTimeoutMs: 30 });
+        const owner = { userId: 'user-a', sessionId: 'silent' };
+        const stream = manager.createStream({ owner, track: { id: 'fixture' } });
+        try {
+            await manager.openStream(stream.id, owner, new PassThrough());
+            if (produceAudio) children[1].child.stdout.write('audio');
+            await new Promise(resolve => setTimeout(resolve, 50));
+            assert.equal(Boolean(manager.getStream(stream.id)), produceAudio);
+            assert.equal(stream.state, produceAudio ? 'playing' : 'stopped');
+        } finally { manager.stopAll(); }
+    }
+});
+
 test("an unopened stream expires and shutdown stops every active stream", async () => {
 	const timeoutHarness = createHarness(async () => "youtube-id", { startTimeoutMs: 5 });
 	const expiring = timeoutHarness.manager.createStream({
