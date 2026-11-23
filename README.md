@@ -100,13 +100,19 @@ et montages peuvent différer. Aucun étirement des paroles n’est appliqué.
 
 ![Gestion des comptes](images/comptes.png)
 
-### Sécurité des dépendances
-
-![Sécurité des dépendances](images/securite.png)
-
 </details>
 
 ## Installation
+
+### Dépendances
+
+Pour lancer l'installation de Youplayer il faudra installer:
+```bash
+podman
+podman-compose
+```
+
+### Install
 
 YouPlayer fonctionne sur Linux AMD64 ou ARM64 avec :
 
